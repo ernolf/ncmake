@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
+# SPDX-License-Identifier: MIT
+#
 # ncmake bootstrap - fetches and includes the shared Nextcloud app Makefile.
 # https://github.com/ernolf/ncmake
 #
