@@ -88,14 +88,14 @@ node_build_cmd ?= $(if $(need_npm),npm ci && npm run build)
 # The runtime is auto-detected
 # (podman preferred, then docker); if neither is installed, the container targets abort with
 # a hint to install podman. Override on the command line, e.g. 'make build RUNTIME=docker':
-#   podman-rootless  rootless podman
+#   podman           podman (rootless by design)
 #   docker           standard rootful docker (maps your uid to avoid root-owned files)
 #   docker-rootless  rootless docker
 #   bare             no container; composer and npm must be on PATH
 have_podman := $(shell command -v podman 2>/dev/null)
 have_docker := $(shell command -v docker 2>/dev/null)
 ifneq ($(have_podman),)
-  default_runtime := podman-rootless
+  default_runtime := podman
 else ifneq ($(have_docker),)
   default_runtime := docker
 else
@@ -116,14 +116,14 @@ ifeq ($(RUNTIME),bare)
 else ifeq ($(RUNTIME),none)
   php_run  = $(no_runtime)
   node_run = $(no_runtime)
-else ifeq ($(RUNTIME),podman-rootless)
+else ifeq ($(RUNTIME),podman)
   container = podman run --rm -v "$(CURDIR)":/app -w /app
 else ifeq ($(RUNTIME),docker-rootless)
   container = docker run --rm -v "$(CURDIR)":/app -w /app
 else ifeq ($(RUNTIME),docker)
   container = docker run --rm --user $(shell id -u):$(shell id -g) -v "$(CURDIR)":/app -w /app
 else
-  $(error Unknown RUNTIME '$(RUNTIME)'. Use: podman-rootless | docker | docker-rootless | bare)
+  $(error Unknown RUNTIME '$(RUNTIME)'. Use: podman | docker | docker-rootless | bare)
 endif
 
 ifeq ($(filter $(RUNTIME),bare none),)
@@ -149,7 +149,8 @@ check-app:
 
 # Open the next release (maintainer only - needs repo write access). Runs from main, explains
 # itself, prompts + validates the version (> latest tag, empty = abort), then branches off into
-# release/X.Y.Z and commits the bump there: info.xml/composer.json/package.json plus the
+# ncmake/release/X.Y.Z (branches created by ncmake carry the ncmake/ prefix) and commits the
+# bump there: info.xml/composer.json/package.json plus the
 # re-synced lockfiles (via RUNTIME). 'main' is protected, so the bump lands through that branch
 # and a PR, not a direct push. Fill the CHANGELOG on the branch; after the PR is merged, run
 # 'make tag' on main.
@@ -165,7 +166,7 @@ version: check-app
 	echo "$$new" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$$' || { echo "Not a X.Y.Z version: $$new" >&2; exit 1; }; \
 	high=$$(printf '%s\n%s\n' "$$latest" "$$new" | sort -V | tail -1); \
 	if [ "$$new" = "$$latest" ] || [ "$$high" != "$$new" ]; then echo "Version $$new must be greater than the latest tag $$latest" >&2; exit 1; fi; \
-	branch="release/$$new"; \
+	branch="ncmake/release/$$new"; \
 	git rev-parse --verify --quiet "refs/heads/$$branch" >/dev/null && { echo "Branch $$branch already exists - delete it or pick another version." >&2; exit 1; }; \
 	git checkout -b "$$branch" || exit 1; \
 	sed -i -E "s|<version>[0-9.]+</version>|<version>$$new</version>|" appinfo/info.xml; \
@@ -434,7 +435,7 @@ help:
 	@echo "  tag                  Tag the release commit on main, signed, and push it  [m]"
 	@echo ""
 	@echo "  Container runtime for 'version' (lockfile sync) and 'build': RUNTIME=... (now: $(RUNTIME))"
-	@echo "    podman-rootless | docker | docker-rootless | bare   (auto-detected, podman preferred)"
+	@echo "    podman | docker | docker-rootless | bare   (auto-detected, podman preferred)"
 	@echo ""
 	@echo "Build:"
 	@echo "  build                Build PHP deps + frontend (auto-detected from composer.json/package.json)"

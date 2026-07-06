@@ -94,13 +94,13 @@ The tarball and the deployed directory are always named after the **app id**, re
 
 ## The container runtime
 
-`composer` and `npm` never run on your host by default. Each invocation starts a throwaway container (`--rm`), does its work in your mounted checkout and disappears. Your host needs no PHP, no Node, no version juggling, and you can build against exactly the PHP the app declares as its minimum.
+`composer` and `npm` never run on your host by default. Each invocation starts a throwaway container (`--rm`), does its work in your bind-mounted checkout and disappears. Your host needs no PHP, no Node, no version juggling, and you can build against exactly the PHP the app declares as its minimum.
 
 The runtime is auto-detected (podman preferred, then docker) and can be chosen per call, for example `make build RUNTIME=docker`:
 
 | `RUNTIME=` | What it is | Notes |
 |---|---|---|
-| `podman-rootless` | rootless podman (default when podman exists) | daemonless, no idle cost, files owned by you |
+| `podman` | rootless podman (default when podman exists) | daemonless, no idle cost, files owned by you |
 | `docker` | standard rootful docker | ncmake maps your uid/gid into the container, so no root-owned files appear |
 | `docker-rootless` | rootless docker | |
 | `bare` | no container | composer and npm must be on the PATH |
@@ -173,14 +173,14 @@ The release flow assumes a protected `main` (required checks, no direct pushes),
 
 ```mermaid
 flowchart LR
-    A["make version<br>(on main)"] -- "branch release/X.Y.Z<br>bump + lockfile sync + commit" --> B["add CHANGELOG entry<br>## [X.Y.Z]"]
+    A["make version<br>(on main)"] -- "branch ncmake/release/X.Y.Z<br>bump + lockfile sync + commit" --> B["add CHANGELOG entry<br>## [X.Y.Z]"]
     B --> C[push, PR, merge]
     C --> D["git pull<br>make tag"]
     D -- "signed tag vX.Y.Z" --> E[GitHub release<br>+ tarball asset]
     E --> F["make publish<br>(App Store)"]
 ```
 
-**`make version`** (run on `main`) prompts for the new version, validates it against the latest tag (`sort -V`, must be greater), branches off into `release/X.Y.Z` and commits the bump there: `appinfo/info.xml`, plus `composer.json`/`package.json` when present, plus the re-synced lockfiles (synced inside the containers, so the bump commit is complete and CI-clean).
+**`make version`** (run on `main`) prompts for the new version, validates it against the latest tag (`sort -V`, must be greater), branches off into `ncmake/release/X.Y.Z` (branches created by ncmake always carry the `ncmake/` prefix, so they are immediately distinguishable from hand-made branches) and commits the bump there: `appinfo/info.xml`, plus `composer.json`/`package.json` when present, plus the re-synced lockfiles (synced inside the containers, so the bump commit is complete and CI-clean).
 
 **`make tag`** (back on `main`, after the merge) refuses to re-tag, warns when `CHANGELOG.md` has no `## [X.Y.Z]` section, shows a fat reminder that a tag freezes the current commit, then creates and pushes the **signed** `vX.Y.Z` tag after your confirmation.
 
@@ -235,7 +235,7 @@ Set on the command line (`make build RUNTIME=bare`), in the environment, or pers
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `RUNTIME` | auto (`podman-rootless`, else `docker`) | container runtime: `podman-rootless`, `docker`, `docker-rootless`, `bare` |
+| `RUNTIME` | auto (`podman`, else `docker`) | container runtime: `podman`, `docker`, `docker-rootless`, `bare` |
 | `TARGET` | (required by `make rsync`) | apps parent directory, local or `user@host:` |
 | `cert_dir` | `~/.nextcloud/certificates` | location of certificate, key and API token |
 | `php_image` | `ghcr.io/nextcloud/continuous-integration-php<min>` | PHP container image |
