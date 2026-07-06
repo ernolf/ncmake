@@ -1,31 +1,54 @@
 # ncmake
 
-The Swiss Army knife for Nextcloud app development.
+The Swiss Army knife for Nextcloud app development: one generic `Makefile` for building, packaging, deploying, versioning and App Store management of a Nextcloud app.
 
-A single generic `Makefile` that covers the day-to-day lifecycle of a Nextcloud app: building frontend and PHP dependencies in throwaway containers, packaging the distribution tarball, deploying to a test instance, versioning and tagging releases, and talking to the Nextcloud App Store (register, publish, list, delete, ratings).
+## Installation
 
-It started in [files_sharing_raw](https://github.com/ernolf/files_sharing_raw) and matured in [twofactor_oath](https://github.com/ernolf/twofactor_oath); this repository is its home as a standalone, app-independent tool.
+Copy the `Makefile` into the root of your app repository. That is all; there is nothing to configure for a standard app.
 
-## Status
+```sh
+curl -fLO https://raw.githubusercontent.com/ernolf/ncmake/main/Makefile
+```
 
-Imported as-is from twofactor_oath, where it is in productive use. The generalization work happens here; see the roadmap below.
+## Usage
 
-## How it works
+```sh
+make            # show all targets
+make build      # build PHP dependencies and frontend
+make dist       # build the distribution tarball
+make rsync TARGET=/var/www/nextcloud/apps/   # deploy to a test instance
+```
 
-Drop the `Makefile` into the root of a Nextcloud app repository. Everything is derived, nothing is configured twice:
+Everything is derived from the app itself:
 
-- the app id comes from the directory name
-- the version comes from `appinfo/info.xml`
-- build commands and the packaging exclude list come from `krankerl.toml` (`before_cmds`, `exclude`)
-- the PHP container image is derived from the app's minimum PHP version in `info.xml`, the Node image from `engines.node` in `package.json`
+- app id and version come from `appinfo/info.xml` (never from the directory name)
+- build commands are detected: `composer install --no-dev ...` when `composer.json` declares runtime requirements, `npm ci && npm run build` when `package.json` has a build script
+- the shipped file set is an allowlist of the standard app paths (`appinfo lib l10n templates img css js vendor LICENSES` plus changelog and license files), filtered by existence
+- the PHP container image is derived from the app's minimum PHP version, the Node image from `engines.node`
 
-`composer` and `npm` run in throwaway containers (podman preferred, docker supported), so the host needs no PHP or Node toolchain. `RUNTIME=bare` runs them on the host instead.
+`composer` and `npm` run in throwaway containers (podman preferred, docker supported), so the host needs no PHP or Node toolchain. Use `RUNTIME=bare` to run them on the host instead.
+
+## Per-app tuning (optional)
+
+Most apps need neither of these.
+
+**`.nextcloudignore`** excludes files from the shipped set (rsync exclude syntax, one pattern per line), for example generated source maps:
+
+```
+/js/*.map
+```
+
+**`ncmake.mk`** overrides single variables in plain make syntax when an app deviates from the conventions:
+
+```make
+keep_extra     = resources                # extra runtime paths to ship
+php_build_cmd  = composer install --no-dev && php bin/generate.php
+node_build_cmd =                          # empty = skip the npm build
+```
 
 ## Requirements
 
 GNU make, git, curl, openssl, rsync, xmllint (libxml2), python3. Optional: podman or docker for containerized builds.
-
-The App Store targets additionally expect the app certificate, key and API token under `~/.nextcloud/certificates/`. They only work for the app owner; everything else works for anyone.
 
 ## Targets
 
@@ -39,14 +62,7 @@ Run `make` (or `make help`) for the full annotated list.
 | App Store | `register`, `publish`, `list-releases`, `list-releases-full`, `list-for-author`, `delete-release`, `ratings` |
 | Utility | `clean`, `dist-clean`, `help` |
 
-Targets marked `[m]` in the help are maintainer-only (they need repository write access and/or the signing key).
-
-## Roadmap
-
-- Own configuration file as the primary source, with `krankerl.toml` still recognized as a fallback
-- A lightweight update mechanism so consuming apps always run the current Makefile
-- Changelog tooling and a fully documented release lifecycle
-- Documentation of every target in this repository
+Targets marked `[m]` in the help are maintainer-only. The App Store targets expect the app certificate, key and API token under `~/.nextcloud/certificates/`; they only work for the app owner, everything else works for anyone.
 
 ## License
 

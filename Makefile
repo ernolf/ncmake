@@ -2,25 +2,53 @@
 # SPDX-License-Identifier: MIT
 #
 # ncmake - the generic Makefile for Nextcloud app build, release and App Store management
+#
+# Everything is derived from the app itself (appinfo/info.xml, composer.json,
+# package.json); there is nothing to configure for a standard app. The optional
+# ncmake.mk (plain make syntax) overrides single variables where an app deviates
+# from the conventions, e.g.:
+#   keep_extra     = resources          # extra runtime paths to ship
+#   php_build_cmd  = composer install --no-dev && php bin/generate.php
+#   node_build_cmd =                    # empty = skip the npm build
+-include ncmake.mk
 
-app_name      = $(notdir $(CURDIR))
+# App id and version come from appinfo/info.xml - the checkout directory name is
+# NOT the app id (they often differ), so it is never used for anything.
+app_id        = $(shell xmllint --xpath 'string(/info/id)' appinfo/info.xml 2>/dev/null)
+version       = $(shell xmllint --xpath 'string(/info/version)' appinfo/info.xml 2>/dev/null)
 dist_dir      = $(CURDIR)/build/artifacts/dist
+stage_dir     = $(CURDIR)/build/stage
 cache_dir     = $(CURDIR)/build/cache
 apps_cache    = $(cache_dir)/apps.json
 apps_etag     = $(cache_dir)/apps.etag
-cert_dir      = $(HOME)/.nextcloud/certificates
+cert_dir     ?= $(HOME)/.nextcloud/certificates
 # Make a missing cert dir obvious: cert_dir_note is appended wherever cert_dir is shown,
 # require_cert_dir aborts the maintainer targets that need it with a clear message.
 cert_dir_note = $(if $(wildcard $(cert_dir)),, [NOT FOUND])
 require_cert_dir = @test -d "$(cert_dir)" || { echo "cert dir not found: $(cert_dir) - create it and add the App Store cert/key/token." >&2; exit 1; }
-version       = $(shell xmllint --xpath 'string(//version)' appinfo/info.xml)
-tarball       = $(dist_dir)/$(app_name)-$(version).tar.gz
+tarball       = $(dist_dir)/$(app_id)-$(version).tar.gz
 appstore_api  = https://apps.nextcloud.com/api/v1
 api_token     = $(shell cat $(cert_dir)/appstore_api-token 2>/dev/null | tr -d '[:space:]')
-# Parse exclude list from krankerl.toml and generate --exclude flags for tar
-exclude_flags = $(shell python3 -c 'c=open("krankerl.toml").read();s=c[c.index("[",c.index("exclude"))+1:c.index("]",c.index("exclude"))];items=[x.split(chr(34))[1] for x in s.split(chr(10)) if chr(34) in x];[print("--exclude=../$(app_name)/"+i) for i in items]')
-# Same exclude list, root-anchored as rsync --exclude flags (used by 'make rsync')
-rsync_excludes = $(shell python3 -c 'c=open("krankerl.toml").read();s=c[c.index("[",c.index("exclude"))+1:c.index("]",c.index("exclude"))];items=[x.split(chr(34))[1] for x in s.split(chr(10)) if chr(34) in x];[print("--exclude=/"+i) for i in items]')
+
+# == Shipped file set (keep model) ==
+# The runtime file set is an allowlist, not an exclude list: ship these paths when
+# they exist, nothing else. A forgotten exclude can never leak into the tarball,
+# and a missing runtime directory fails loudly. keep_extra (ncmake.mk) extends it.
+keep_dirs     = appinfo lib l10n templates img css js vendor LICENSES
+keep_files    = CHANGELOG.md AUTHORS.md REUSE.toml COPYING COPYING.md LICENSE LICENSE.md
+keep_existing = $(wildcard $(keep_dirs) $(keep_files) $(keep_extra))
+# Optional excludes WITHIN the shipped set come from .nextcloudignore (the
+# ecosystem convention; rsync exclude syntax: anchored /path, dir/, wildcards).
+stage_excludes = $(if $(wildcard .nextcloudignore),--exclude-from=.nextcloudignore)
+
+# == Build heuristics ==
+# composer runs when composer.json declares real runtime requirements (anything
+# besides php/ext-*); npm runs when package.json has a build script. Both are
+# overridable in ncmake.mk (set to empty to skip).
+need_composer = $(shell python3 -c 'import json;d=json.load(open("composer.json"));print(1 if [k for k in d.get("require",{}) if k!="php" and not k.startswith("ext-")] else "")' 2>/dev/null)
+need_npm      = $(shell python3 -c 'import json;d=json.load(open("package.json"));print(1 if "build" in d.get("scripts",{}) else "")' 2>/dev/null)
+php_build_cmd  ?= $(if $(need_composer),composer install --no-dev --no-scripts --prefer-dist --no-progress)
+node_build_cmd ?= $(if $(need_npm),npm ci && npm run build)
 
 # == Container runtime (used by 'make version' and 'make build') ==
 # composer/npm run in throwaway containers, so the host needs no PHP/Node toolchain.
@@ -70,7 +98,7 @@ ifeq ($(filter $(RUNTIME),bare none),)
   node_run = $(container) $(node_image) sh -lc
 endif
 
-.PHONY: all version tag build check-build dist sign release rsync \
+.PHONY: all version tag build check-app check-build stage dist sign release rsync \
         fetch-apps \
         register publish list-releases list-releases-full list-for-author delete-release ratings \
         clean dist-clean help
@@ -80,6 +108,10 @@ endif
 
 all: dist
 
+# Every functional target needs the app id; help stays runnable anywhere.
+check-app:
+	@test -n "$(app_id)" || { echo "ERROR: no <id> found in appinfo/info.xml - run make from a Nextcloud app root." >&2; exit 1; }
+
 # == Release versioning (maintainer only) ==
 
 # Open the next release (maintainer only - needs repo write access). Runs from main, explains
@@ -88,7 +120,7 @@ all: dist
 # re-synced lockfiles (via RUNTIME). 'main' is protected, so the bump lands through that branch
 # and a PR, not a direct push. Fill the CHANGELOG on the branch; after the PR is merged, run
 # 'make tag' on main.
-version:
+version: check-app
 	@cur=$$(git rev-parse --abbrev-ref HEAD 2>/dev/null); \
 	if [ "$$cur" != "main" ]; then echo "make version must run on 'main' (you are on '$$cur')." >&2; exit 1; fi; \
 	echo "Maintainer target: opens a release branch with the version bump for a PR"; \
@@ -119,8 +151,8 @@ version:
 
 # Freeze the current HEAD as a signed release tag. Everything that belongs in the
 # release must already be committed (CHANGELOG and all content). Refuses to re-tag.
-tag:
-	@ver=$$(xmllint --xpath 'string(//version)' appinfo/info.xml); \
+tag: check-app
+	@ver="$(version)"; \
 	latest=$$(git tag --list 'v*' --sort=-v:refname | head -1 | sed 's/^v//'); \
 	latest=$${latest:-0.0.0}; \
 	high=$$(printf '%s\n%s\n' "$$latest" "$$ver" | sort -V | tail -1); \
@@ -143,62 +175,64 @@ tag:
 
 # == Build ==
 
-# Run the per-app build commands (before_cmds in krankerl.toml: composer, npm, etc.),
-# each routed to its container via RUNTIME (see top of file) so the host needs no toolchain.
-build:
+# Build the app's dependencies and frontend. What runs is auto-detected (see the
+# build heuristics at the top) and routed to its container via RUNTIME.
+build: check-app
 	@echo "==> Building via RUNTIME=$(RUNTIME)"
-	@python3 -c 'c=open("krankerl.toml").read();s=c[c.index("[",c.index("before_cmds"))+1:c.index("]",c.index("before_cmds"))];[print(x.split(chr(34))[1]) for x in s.split(chr(10)) if chr(34) in x]' \
-		| while read -r cmd; do \
-			echo "+ $$cmd"; \
-			case "$$cmd" in \
-				composer*) $(php_run) "$$cmd" ;; \
-				npm*)      $(node_run) "$$cmd" ;; \
-				*)         sh -lc "$$cmd" ;; \
-			esac || exit 1; \
-		done
+	@if [ -n "$(php_build_cmd)" ]; then \
+		echo "+ $(php_build_cmd)"; $(php_run) '$(php_build_cmd)' || exit 1; \
+	else echo "(composer: nothing to build)"; fi
+	@if [ -n "$(node_build_cmd)" ]; then \
+		echo "+ $(node_build_cmd)"; $(node_run) '$(node_build_cmd)' || exit 1; \
+	else echo "(npm: nothing to build)"; fi
 
-# Abort (do not build a broken tarball) when the build outputs are missing
+# Abort (do not ship a broken file set) when the build outputs are missing
 check-build:
-	@if [ -f package.json ] && { [ ! -d js ] || [ -z "$$(ls -A js 2>/dev/null)" ]; }; then \
+	@if [ -n "$(need_npm)" ] && { [ ! -d js ] || [ -z "$$(ls -A js 2>/dev/null)" ]; }; then \
 		echo "ERROR: js/ is missing or empty - run 'make build' first." >&2; exit 1; \
 	fi
-	@if grep -q '"require"' composer.json 2>/dev/null && [ ! -f vendor/autoload.php ]; then \
+	@if [ -n "$(need_composer)" ] && [ ! -f vendor/autoload.php ]; then \
 		echo "ERROR: vendor/autoload.php is missing - run 'make build' first." >&2; exit 1; \
 	fi
 
-# Build the distribution tarball (warns via check-build if js/ or vendor/ look unbuilt)
-dist: check-build appinfo/info.xml
-	rm -rf $(dist_dir)
-	mkdir -p $(dist_dir)
-	tar czf $(tarball) \
-		--exclude-vcs \
-		$(exclude_flags) \
-		../$(app_name)
+# Materialize the shipped runtime file set once, under the APP ID (the checkout
+# directory name may differ). dist tars this staging tree, rsync deploys it - one
+# mechanism, one source of truth.
+stage: check-app check-build
+	@rm -rf "$(stage_dir)"
+	@mkdir -p "$(stage_dir)/$(app_id)"
+	rsync -a --relative $(stage_excludes) $(addprefix ./,$(keep_existing)) "$(stage_dir)/$(app_id)/"
+
+# Build the distribution tarball from the staged file set
+dist: stage
+	@rm -rf "$(dist_dir)"
+	@mkdir -p "$(dist_dir)"
+	tar czf "$(tarball)" -C "$(stage_dir)" "$(app_id)"
 	@echo "Built: $(tarball)"
 
 # Sign the tarball — output is the base64 signature to paste into GitHub Release
-sign: $(tarball)
+sign: check-app $(tarball)
 	$(require_cert_dir)
 	@echo "Signing $(tarball)..."
-	openssl dgst -sha512 -sign $(cert_dir)/$(app_name).key $(tarball) | openssl base64
+	openssl dgst -sha512 -sign $(cert_dir)/$(app_id).key $(tarball) | openssl base64
 
 # Build tarball and sign in one step
 release: dist sign
 
 # == Local deploy ==
 
-# Deploy the runtime file set straight into an apps/ directory via rsync — the same
-# files as the dist tarball (krankerl.toml exclude list), but without packing and
-# unpacking. Works locally and over SSH. TARGET is the apps/ PARENT directory; the
-# app subdir is appended automatically. Run 'make build' first so vendor/ (no dev)
-# and js/ are production-ready. The occ disable/enable + chown around it is the
-# caller's job (same-host only), e.g.:
+# Deploy the staged runtime file set straight into an apps/ directory via rsync -
+# the same files as the dist tarball, without packing and unpacking. Works locally
+# and over SSH. TARGET is the apps/ PARENT directory; the app subdir is appended
+# automatically. Run 'make build' first so vendor/ (no dev) and js/ are
+# production-ready. The occ disable/enable + chown around it is the caller's job
+# (same-host only), e.g.:
 #   occ app:disable APP && make build && make rsync TARGET=/var/www/nextcloud/apps/ && chown -R www-data:www-data /var/www/nextcloud/apps/APP && occ app:enable APP
-rsync: check-build
+rsync: stage
 	@test -n "$(TARGET)" || { echo "Usage: make rsync TARGET=<apps-dir | user@host:apps-dir>" >&2; exit 1; }
-	@t="$(TARGET)"; dest="$${t%/}/$(app_name)/"; \
+	@t="$(TARGET)"; dest="$${t%/}/$(app_id)/"; \
 	echo "rsync -> $$dest"; \
-	rsync -a --delete --delete-excluded $(rsync_excludes) "$(CURDIR)/" "$$dest"
+	rsync -a --delete "$(stage_dir)/$(app_id)/" "$$dest"
 
 # == App Store cache ==
 
@@ -212,21 +246,21 @@ fetch-apps:
 	_etag=""; \
 	test -f "$(apps_etag)" && _etag=$$(cat "$(apps_etag)"); \
 	if [ -n "$$_etag" ] && [ -f "$(apps_cache)" ]; then \
-		_http=$$(curl -sL --compressed -D /tmp/.fsr_hdrs -o /tmp/.fsr_apps_new -w "%{http_code}" \
+		_http=$$(curl -sL --compressed -D /tmp/.ncmake_hdrs -o /tmp/.ncmake_apps_new -w "%{http_code}" \
 			-H "If-None-Match: $$_etag" "$(appstore_api)/apps.json"); \
 	else \
-		_http=$$(curl -sL --compressed -D /tmp/.fsr_hdrs -o /tmp/.fsr_apps_new -w "%{http_code}" \
+		_http=$$(curl -sL --compressed -D /tmp/.ncmake_hdrs -o /tmp/.ncmake_apps_new -w "%{http_code}" \
 			"$(appstore_api)/apps.json"); \
 	fi; \
 	case "$$_http" in \
-		304) rm -f /tmp/.fsr_apps_new; \
+		304) rm -f /tmp/.ncmake_apps_new; \
 			echo "(apps.json not modified — using cache)";; \
-		200) mv /tmp/.fsr_apps_new "$(apps_cache)"; \
-			_new_etag=$$(grep -i '^etag:' /tmp/.fsr_hdrs | head -1 \
+		200) mv /tmp/.ncmake_apps_new "$(apps_cache)"; \
+			_new_etag=$$(grep -i '^etag:' /tmp/.ncmake_hdrs | head -1 \
 				| sed 's/^[Ee][Tt][Aa][Gg]:[[:space:]]*//' | tr -d '\r\n'); \
 			[ -n "$$_new_etag" ] && printf '%s' "$$_new_etag" > "$(apps_etag)"; \
 			echo "(apps.json updated)";; \
-		*)  rm -f /tmp/.fsr_apps_new; \
+		*)  rm -f /tmp/.ncmake_apps_new; \
 			if [ -f "$(apps_cache)" ]; then \
 				echo "(apps.json fetch failed HTTP $$_http — using stale cache)"; \
 			else \
@@ -237,67 +271,67 @@ fetch-apps:
 # == App Store ==
 
 # Register the app on the App Store (one-time setup).
-# Requires: $(cert_dir)/$(app_name).cert  $(cert_dir)/$(app_name).key
-register:
+# Requires: $(cert_dir)/$(app_id).cert  $(cert_dir)/$(app_id).key
+register: check-app
 	$(require_cert_dir)
 	@set -e; \
-	test -f "$(cert_dir)/$(app_name).cert" || { echo "Certificate not found: $(cert_dir)/$(app_name).cert"; exit 1; }; \
-	test -f "$(cert_dir)/$(app_name).key"  || { echo "Key not found: $(cert_dir)/$(app_name).key"; exit 1; }; \
-	echo "Computing signature over app id '$(app_name)'..."; \
-	echo -n "$(app_name)" | openssl dgst -sha512 -sign "$(cert_dir)/$(app_name).key" | openssl base64 | tr -d '\n' > /tmp/.fsr_sig; \
-	python3 -c "import json;cert=open('$(cert_dir)/$(app_name).cert').read().strip().replace('\n','\r\n');sig=open('/tmp/.fsr_sig').read();print(json.dumps({'certificate':cert,'signature':sig}))" > /tmp/.fsr_body; \
-	echo "Registering $(app_name) on the App Store..."; \
-	http=$$(curl -s -o /tmp/.fsr_resp -w "%{http_code}" \
+	test -f "$(cert_dir)/$(app_id).cert" || { echo "Certificate not found: $(cert_dir)/$(app_id).cert"; exit 1; }; \
+	test -f "$(cert_dir)/$(app_id).key"  || { echo "Key not found: $(cert_dir)/$(app_id).key"; exit 1; }; \
+	echo "Computing signature over app id '$(app_id)'..."; \
+	echo -n "$(app_id)" | openssl dgst -sha512 -sign "$(cert_dir)/$(app_id).key" | openssl base64 | tr -d '\n' > /tmp/.ncmake_sig; \
+	python3 -c "import json;cert=open('$(cert_dir)/$(app_id).cert').read().strip().replace('\n','\r\n');sig=open('/tmp/.ncmake_sig').read();print(json.dumps({'certificate':cert,'signature':sig}))" > /tmp/.ncmake_body; \
+	echo "Registering $(app_id) on the App Store..."; \
+	http=$$(curl -s -o /tmp/.ncmake_resp -w "%{http_code}" \
 		-X POST \
 		-H "Authorization: Token $(api_token)" \
 		-H "Content-Type: application/json" \
-		--data-binary @/tmp/.fsr_body \
+		--data-binary @/tmp/.ncmake_body \
 		"$(appstore_api)/apps"); \
 	case "$$http" in \
 		201) echo "Success — app registered.";; \
 		204) echo "Success — registration updated (certificate changed).";; \
-		400) echo "HTTP 400 — invalid data or signature:"; cat /tmp/.fsr_resp; echo; exit 1;; \
+		400) echo "HTTP 400 — invalid data or signature:"; cat /tmp/.ncmake_resp; echo; exit 1;; \
 		401) echo "HTTP 401 — check $(cert_dir)/appstore_api-token"; exit 1;; \
 		403) echo "HTTP 403 — not authorized."; exit 1;; \
-		*)   echo "HTTP $$http:"; cat /tmp/.fsr_resp; echo; exit 1;; \
+		*)   echo "HTTP $$http:"; cat /tmp/.ncmake_resp; echo; exit 1;; \
 	esac
 
 # Publish a new release to the App Store.
 # Run 'make dist' first, upload the tarball to GitHub, then run this.
 # Prompts for the GitHub release download URL.
-publish:
+publish: check-app
 	$(require_cert_dir)
 	@test -f "$(tarball)" || { echo "ERROR: $(tarball) not found — run 'make dist' first."; exit 1; }
 	@read -p "GitHub release download URL (https://...): " url; \
 	test -n "$$url" || { echo "Aborted."; exit 0; }; \
 	echo "Computing signature..."; \
-	openssl dgst -sha512 -sign "$(cert_dir)/$(app_name).key" "$(tarball)" | openssl base64 | tr -d '\n' > /tmp/.fsr_sig; \
-	python3 -c "import sys,json;sig=open('/tmp/.fsr_sig').read();print(json.dumps({'download':sys.argv[1],'signature':sig}))" "$$url" > /tmp/.fsr_body; \
+	openssl dgst -sha512 -sign "$(cert_dir)/$(app_id).key" "$(tarball)" | openssl base64 | tr -d '\n' > /tmp/.ncmake_sig; \
+	python3 -c "import sys,json;sig=open('/tmp/.ncmake_sig').read();print(json.dumps({'download':sys.argv[1],'signature':sig}))" "$$url" > /tmp/.ncmake_body; \
 	echo "Publishing v$(version) to the App Store..."; \
-	http=$$(curl -s -o /tmp/.fsr_resp -w "%{http_code}" \
+	http=$$(curl -s -o /tmp/.ncmake_resp -w "%{http_code}" \
 		-X POST \
 		-H "Authorization: Token $(api_token)" \
 		-H "Content-Type: application/json" \
-		--data-binary @/tmp/.fsr_body \
+		--data-binary @/tmp/.ncmake_body \
 		"$(appstore_api)/apps/releases"); \
 	case "$$http" in \
 		200) echo "Release v$(version) updated on the App Store.";; \
 		201) echo "Release v$(version) published successfully!";; \
-		400) echo "HTTP 400 — invalid data, signature or URL not reachable:"; cat /tmp/.fsr_resp; echo; exit 1;; \
+		400) echo "HTTP 400 — invalid data, signature or URL not reachable:"; cat /tmp/.ncmake_resp; echo; exit 1;; \
 		401) echo "HTTP 401 — check $(cert_dir)/appstore_api-token"; exit 1;; \
 		403) echo "HTTP 403 — not authorized."; exit 1;; \
-		*)   echo "HTTP $$http:"; cat /tmp/.fsr_resp; echo; exit 1;; \
+		*)   echo "HTTP $$http:"; cat /tmp/.ncmake_resp; echo; exit 1;; \
 	esac
 
 # List published releases of this app (compact JSON)
-list-releases: fetch-apps
-	@python3 -c "import sys,json;apps=json.load(open('$(apps_cache)'));app=next((a for a in apps if a['id']=='$(app_name)'),None);sys.exit(1) if not app else print(json.dumps({'id':app['id'],'releases':[{'version':r['version'],'created':r['created'],'download':r['download']} for r in app['releases']]},indent=2))" 2>/dev/null \
-	|| echo "($(app_name) not found in App Store)"
+list-releases: check-app fetch-apps
+	@python3 -c "import sys,json;apps=json.load(open('$(apps_cache)'));app=next((a for a in apps if a['id']=='$(app_id)'),None);sys.exit(1) if not app else print(json.dumps({'id':app['id'],'releases':[{'version':r['version'],'created':r['created'],'download':r['download']} for r in app['releases']]},indent=2))" 2>/dev/null \
+	|| echo "($(app_id) not found in App Store)"
 
 # Full App Store entry as JSON
-list-releases-full: fetch-apps
-	@python3 -c "import sys,json;apps=json.load(open('$(apps_cache)'));app=next((a for a in apps if a['id']=='$(app_name)'),None);sys.exit(1) if not app else print(json.dumps(app,indent=2))" 2>/dev/null \
-	|| echo "($(app_name) not found in App Store)"
+list-releases-full: check-app fetch-apps
+	@python3 -c "import sys,json;apps=json.load(open('$(apps_cache)'));app=next((a for a in apps if a['id']=='$(app_id)'),None);sys.exit(1) if not app else print(json.dumps(app,indent=2))" 2>/dev/null \
+	|| echo "($(app_id) not found in App Store)"
 
 # Find all apps by author name (prompts for search string)
 list-for-author: fetch-apps
@@ -307,10 +341,10 @@ list-for-author: fetch-apps
 	|| echo "Failed to search app list."
 
 # Delete a specific release from the App Store (interactive)
-delete-release: fetch-apps
+delete-release: check-app fetch-apps
 	$(require_cert_dir)
 	@set -e; \
-	releases=$$(python3 -c "import sys,json;apps=json.load(open('$(apps_cache)'));app=next((a for a in apps if a['id']=='$(app_name)'),None);[print(r['version']) for r in (app or {}).get('releases',[])]" 2>/dev/null || true); \
+	releases=$$(python3 -c "import sys,json;apps=json.load(open('$(apps_cache)'));app=next((a for a in apps if a['id']=='$(app_id)'),None);[print(r['version']) for r in (app or {}).get('releases',[])]" 2>/dev/null || true); \
 	if [ -n "$$releases" ]; then \
 		echo "Published releases:"; \
 		echo "$$releases" | sed 's/^/  /'; \
@@ -319,12 +353,12 @@ delete-release: fetch-apps
 	fi; \
 	read -p "Version to delete (empty = abort): " ver; \
 	test -n "$$ver" || { echo "Aborted."; exit 0; }; \
-	read -p "Delete $(app_name) v$$ver from the App Store? [y/N] " confirm; \
+	read -p "Delete $(app_id) v$$ver from the App Store? [y/N] " confirm; \
 	[ "$$confirm" = "y" ] || [ "$$confirm" = "Y" ] || { echo "Aborted."; exit 0; }; \
 	http=$$(curl -s -o /dev/null -w "%{http_code}" \
 		-X DELETE \
 		-H "Authorization: Token $(api_token)" \
-		"$(appstore_api)/apps/$(app_name)/releases/$$ver"); \
+		"$(appstore_api)/apps/$(app_id)/releases/$$ver"); \
 	case "$$http" in \
 		204) echo "Release $$ver deleted successfully.";; \
 		401) echo "HTTP 401 — check $(cert_dir)/appstore_api-token"; exit 1;; \
@@ -334,14 +368,14 @@ delete-release: fetch-apps
 	esac
 
 # Show ratings for this app from the App Store
-ratings:
+ratings: check-app
 	@curl -sf "$(appstore_api)/ratings.json" 2>/dev/null \
-	| python3 -c "import sys,json;d=json.load(sys.stdin);own=[r for r in d if r.get('app')=='$(app_name)'];avg=round(sum(r['rating'] for r in own)/len(own)*5,2) if own else None;print(json.dumps({'app':'$(app_name)','count':len(own),'avgRating':avg,'ratings':[{'rating':round(r['rating']*5,1),'ratedAt':r['ratedAt'],'comment':next(iter(r.get('translations',{}).values()),{}).get('comment','')} for r in sorted(own,key=lambda r:r['ratedAt'],reverse=True)]},indent=2))" 2>/dev/null \
+	| python3 -c "import sys,json;d=json.load(sys.stdin);own=[r for r in d if r.get('app')=='$(app_id)'];avg=round(sum(r['rating'] for r in own)/len(own)*5,2) if own else None;print(json.dumps({'app':'$(app_id)','count':len(own),'avgRating':avg,'ratings':[{'rating':round(r['rating']*5,1),'ratedAt':r['ratedAt'],'comment':next(iter(r.get('translations',{}).values()),{}).get('comment','')} for r in sorted(own,key=lambda r:r['ratedAt'],reverse=True)]},indent=2))" 2>/dev/null \
 	|| echo "Failed to fetch ratings."
 
 # == Utility ==
 
-# Remove all build artifacts (including cache)
+# Remove all build artifacts (including stage and cache)
 clean:
 	rm -rf build
 
@@ -364,20 +398,23 @@ help:
 	@echo "    podman-rootless | docker | docker-rootless | bare   (auto-detected, podman preferred)"
 	@echo ""
 	@echo "Build:"
-	@echo "  build                Build frontend + PHP deps (composer/npm from krankerl.toml)"
-	@echo "  dist                 Build the distribution tarball (run 'make build' first)"
+	@echo "  build                Build PHP deps + frontend (auto-detected from composer.json/package.json)"
+	@echo "  dist                 Build the distribution tarball from the shipped file set"
 	@echo "                       → $(tarball)"
 	@echo "  sign                 Sign the tarball (base64 signature for publish / App Store)  [m]"
 	@echo "  release              dist + sign in one step  [m]"
 	@echo ""
 	@echo "Local deploy:"
-	@echo "  rsync                Deploy the runtime set into an apps/ dir via rsync (no tarball)."
+	@echo "  rsync                Deploy the shipped file set into an apps/ dir via rsync (no tarball)."
 	@echo "                       Needs TARGET=<apps-dir|user@host:apps-dir>; run 'make build' first."
+	@echo ""
+	@echo "  Shipped file set: allowlist of standard app paths, existence-filtered."
+	@echo "  Optional per-app tuning: .nextcloudignore (excludes), ncmake.mk (variable overrides)."
 	@echo ""
 	@echo "App Store  (cert dir: $(cert_dir)$(cert_dir_note))"
 	@echo "           token: $(cert_dir)/appstore_api-token"
-	@echo "           cert:  $(cert_dir)/$(app_name).cert"
-	@echo "           key:   $(cert_dir)/$(app_name).key"
+	@echo "           cert:  $(cert_dir)/$(app_id).cert"
+	@echo "           key:   $(cert_dir)/$(app_id).key"
 	@echo ""
 	@echo "  register             Register app on the App Store (one-time).  [m]"
 	@echo "                       Needs .cert and .key."
@@ -394,11 +431,10 @@ help:
 	@echo "           (ETag: $(apps_etag))"
 	@echo ""
 	@echo "Utility:"
-	@echo "  clean                Remove build/ directory (incl. cache)"
+	@echo "  clean                Remove build/ directory (incl. stage and cache)"
 	@echo "  dist-clean           Remove ALL git-ignored build outputs (vendor, node_modules, js, …)"
 	@echo "  help                 Show this help"
 	@echo ""
 	@echo "  [m] = maintainer only (needs repo write access and/or the signing key/cert)"
 	@echo ""
-	@echo "Current: $(app_name) v$(version)"
-
+	@echo "Current: $(if $(app_id),$(app_id) v$(version),(not inside a Nextcloud app))"
