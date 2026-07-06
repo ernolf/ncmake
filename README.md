@@ -244,7 +244,7 @@ Set on the command line (`make build RUNTIME=bare`), in the environment, or pers
 | `php_build_cmd` | auto-detected | PHP-side build command, empty skips |
 | `node_build_cmd` | auto-detected | frontend build command, empty skips |
 | `NCMAKE_REF` | `main` | branch or tag the stub fetches |
-| `NCMAKE_DIR` | `~/.cache/ncmake` | cache location of the shared Makefile |
+| `NCMAKE_DIR` | `$XDG_CACHE_HOME/ncmake`, else `~/.cache/ncmake` | cache location of the shared Makefile |
 | `NCMAKE_TTL_MIN` | `1440` | minutes between upstream freshness checks |
 
 ## Target reference

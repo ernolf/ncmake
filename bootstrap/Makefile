@@ -9,7 +9,7 @@
 # all apps) and keeps itself up to date. Pin a fixed version by setting NCMAKE_REF
 # to a tag instead of main.
 NCMAKE_REF ?= main
-NCMAKE_DIR ?= $(HOME)/.cache/ncmake
+NCMAKE_DIR ?= $(if $(XDG_CACHE_HOME),$(XDG_CACHE_HOME),$(HOME)/.cache)/ncmake
 NCMAKE     ?= $(NCMAKE_DIR)/Makefile-$(NCMAKE_REF)
 $(if $(wildcard $(NCMAKE)),,$(shell mkdir -p "$(NCMAKE_DIR)" && curl -fsSL "https://raw.githubusercontent.com/ernolf/ncmake/$(NCMAKE_REF)/core/Makefile" -o "$(NCMAKE)"))
 ifeq ($(wildcard $(NCMAKE)),)
