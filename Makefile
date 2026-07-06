@@ -10,6 +10,23 @@
 #   keep_extra     = resources          # extra runtime paths to ship
 #   php_build_cmd  = composer install --no-dev && php bin/generate.php
 #   node_build_cmd =                    # empty = skip the npm build
+
+# == Self-update ==
+# this_ncmake is this very file: the per-machine cache when included via the
+# bootstrap stub (NCMAKE set there), or the committed copy in the app repo.
+# In stub mode the cache refreshes itself at most once per TTL via a conditional
+# GET (ETag); offline or unchanged keeps the cache. A committed copy never
+# modifies itself; use 'make self-update' explicitly.
+this_ncmake    := $(abspath $(lastword $(MAKEFILE_LIST)))
+ncmake_url      = https://raw.githubusercontent.com/ernolf/ncmake/$(or $(NCMAKE_REF),main)/Makefile
+NCMAKE_TTL_MIN ?= 1440
+ifneq ($(NCMAKE),)
+  ifneq ($(shell find "$(NCMAKE)" -mmin +$(NCMAKE_TTL_MIN) 2>/dev/null),)
+    $(shell curl -fsSL --etag-compare "$(NCMAKE).etag" --etag-save "$(NCMAKE).etag" "$(ncmake_url)" -o "$(NCMAKE).new" 2>/dev/null; \
+      if [ -s "$(NCMAKE).new" ]; then mv "$(NCMAKE).new" "$(NCMAKE)"; else rm -f "$(NCMAKE).new"; fi; touch "$(NCMAKE)")
+  endif
+endif
+
 -include ncmake.mk
 
 # App id and version come from appinfo/info.xml - the checkout directory name is
@@ -29,6 +46,14 @@ require_cert_dir = @test -d "$(cert_dir)" || { echo "cert dir not found: $(cert_
 tarball       = $(dist_dir)/$(app_id)-$(version).tar.gz
 appstore_api  = https://apps.nextcloud.com/api/v1
 api_token     = $(shell cat $(cert_dir)/appstore_api-token 2>/dev/null | tr -d '[:space:]')
+# The App Store issues the certificate as .crt; some setups store it as .cert.
+# Both are accepted; when neither exists, .crt is shown as the expected name.
+cert_file     = $(firstword $(wildcard $(cert_dir)/$(app_id).crt $(cert_dir)/$(app_id).cert))
+cert_display  = $(or $(cert_file),$(cert_dir)/$(app_id).crt)
+key_file      = $(cert_dir)/$(app_id).key
+token_file    = $(cert_dir)/appstore_api-token
+# Green check / red cross for the help listing, depending on file existence.
+mark          = $(if $(wildcard $(1)),\033[32m✓\033[0m,\033[31m✗\033[0m)
 
 # == Shipped file set (keep model) ==
 # The runtime file set is an allowlist, not an exclude list: ship these paths when
@@ -47,6 +72,14 @@ stage_excludes = $(if $(wildcard .nextcloudignore),--exclude-from=.nextcloudigno
 # overridable in ncmake.mk (set to empty to skip).
 need_composer = $(shell python3 -c 'import json;d=json.load(open("composer.json"));print(1 if [k for k in d.get("require",{}) if k!="php" and not k.startswith("ext-")] else "")' 2>/dev/null)
 need_npm      = $(shell python3 -c 'import json;d=json.load(open("package.json"));print(1 if "build" in d.get("scripts",{}) else "")' 2>/dev/null)
+# .gitignore classifies the outputs: an ignored js/ or vendor/ is a build
+# artifact that must be built before shipping; a committed one (apps that ship
+# built js/ in git) makes a fresh checkout dist-ready. git check-ignore applies
+# the full .gitignore semantics.
+# The trailing slash matters: it makes directory-only patterns like "/js/" match
+# even while the directory does not exist yet (fresh checkout before the build).
+js_ignored     = $(shell git check-ignore -q js/ 2>/dev/null && echo 1)
+vendor_ignored = $(shell git check-ignore -q vendor/ 2>/dev/null && echo 1)
 php_build_cmd  ?= $(if $(need_composer),composer install --no-dev --no-scripts --prefer-dist --no-progress)
 node_build_cmd ?= $(if $(need_npm),npm ci && npm run build)
 
@@ -101,7 +134,7 @@ endif
 .PHONY: all version tag build check-app check-build stage dist sign release rsync \
         fetch-apps \
         register publish list-releases list-releases-full list-for-author delete-release ratings \
-        clean dist-clean help
+        clean dist-clean self-update help
 
 # `make` with no target shows the help instead of building anything.
 .DEFAULT_GOAL := help
@@ -186,12 +219,13 @@ build: check-app
 		echo "+ $(node_build_cmd)"; $(node_run) '$(node_build_cmd)' || exit 1; \
 	else echo "(npm: nothing to build)"; fi
 
-# Abort (do not ship a broken file set) when the build outputs are missing
+# Abort (do not ship a broken file set) when a build output is missing. Only
+# gitignored outputs are demanded: a committed js/ or vendor/ ships as-is.
 check-build:
-	@if [ -n "$(need_npm)" ] && { [ ! -d js ] || [ -z "$$(ls -A js 2>/dev/null)" ]; }; then \
+	@if [ -n "$(need_npm)" ] && [ -n "$(js_ignored)" ] && { [ ! -d js ] || [ -z "$$(ls -A js 2>/dev/null)" ]; }; then \
 		echo "ERROR: js/ is missing or empty - run 'make build' first." >&2; exit 1; \
 	fi
-	@if [ -n "$(need_composer)" ] && [ ! -f vendor/autoload.php ]; then \
+	@if [ -n "$(need_composer)" ] && [ -n "$(vendor_ignored)" ] && [ ! -f vendor/autoload.php ]; then \
 		echo "ERROR: vendor/autoload.php is missing - run 'make build' first." >&2; exit 1; \
 	fi
 
@@ -214,7 +248,7 @@ dist: stage
 sign: check-app $(tarball)
 	$(require_cert_dir)
 	@echo "Signing $(tarball)..."
-	openssl dgst -sha512 -sign $(cert_dir)/$(app_id).key $(tarball) | openssl base64
+	openssl dgst -sha512 -sign "$(key_file)" $(tarball) | openssl base64
 
 # Build tarball and sign in one step
 release: dist sign
@@ -271,15 +305,15 @@ fetch-apps:
 # == App Store ==
 
 # Register the app on the App Store (one-time setup).
-# Requires: $(cert_dir)/$(app_id).cert  $(cert_dir)/$(app_id).key
+# Requires the app certificate (.crt or .cert) and .key in $(cert_dir).
 register: check-app
 	$(require_cert_dir)
 	@set -e; \
-	test -f "$(cert_dir)/$(app_id).cert" || { echo "Certificate not found: $(cert_dir)/$(app_id).cert"; exit 1; }; \
-	test -f "$(cert_dir)/$(app_id).key"  || { echo "Key not found: $(cert_dir)/$(app_id).key"; exit 1; }; \
+	test -n "$(cert_file)" || { echo "Certificate not found: $(cert_dir)/$(app_id).crt (or .cert)"; exit 1; }; \
+	test -f "$(key_file)"  || { echo "Key not found: $(key_file)"; exit 1; }; \
 	echo "Computing signature over app id '$(app_id)'..."; \
-	echo -n "$(app_id)" | openssl dgst -sha512 -sign "$(cert_dir)/$(app_id).key" | openssl base64 | tr -d '\n' > /tmp/.ncmake_sig; \
-	python3 -c "import json;cert=open('$(cert_dir)/$(app_id).cert').read().strip().replace('\n','\r\n');sig=open('/tmp/.ncmake_sig').read();print(json.dumps({'certificate':cert,'signature':sig}))" > /tmp/.ncmake_body; \
+	echo -n "$(app_id)" | openssl dgst -sha512 -sign "$(key_file)" | openssl base64 | tr -d '\n' > /tmp/.ncmake_sig; \
+	python3 -c "import json;cert=open('$(cert_file)').read().strip().replace('\n','\r\n');sig=open('/tmp/.ncmake_sig').read();print(json.dumps({'certificate':cert,'signature':sig}))" > /tmp/.ncmake_body; \
 	echo "Registering $(app_id) on the App Store..."; \
 	http=$$(curl -s -o /tmp/.ncmake_resp -w "%{http_code}" \
 		-X POST \
@@ -305,7 +339,7 @@ publish: check-app
 	@read -p "GitHub release download URL (https://...): " url; \
 	test -n "$$url" || { echo "Aborted."; exit 0; }; \
 	echo "Computing signature..."; \
-	openssl dgst -sha512 -sign "$(cert_dir)/$(app_id).key" "$(tarball)" | openssl base64 | tr -d '\n' > /tmp/.ncmake_sig; \
+	openssl dgst -sha512 -sign "$(key_file)" "$(tarball)" | openssl base64 | tr -d '\n' > /tmp/.ncmake_sig; \
 	python3 -c "import sys,json;sig=open('/tmp/.ncmake_sig').read();print(json.dumps({'download':sys.argv[1],'signature':sig}))" "$$url" > /tmp/.ncmake_body; \
 	echo "Publishing v$(version) to the App Store..."; \
 	http=$$(curl -s -o /tmp/.ncmake_resp -w "%{http_code}" \
@@ -386,6 +420,11 @@ clean:
 dist-clean: clean
 	git clean -dffX
 
+# Fetch the newest ncmake Makefile over this one (the per-machine cache in stub
+# mode, the committed copy otherwise).
+self-update:
+	@curl -fsSL "$(ncmake_url)" -o "$(this_ncmake)" && rm -f "$(this_ncmake).etag" && echo "ncmake updated: $(this_ncmake)"
+
 # Show available targets and required files
 help:
 	@echo "Usage: make <target>    (no target = this help)"
@@ -412,12 +451,12 @@ help:
 	@echo "  Optional per-app tuning: .nextcloudignore (excludes), ncmake.mk (variable overrides)."
 	@echo ""
 	@echo "App Store  (cert dir: $(cert_dir)$(cert_dir_note))"
-	@echo "           token: $(cert_dir)/appstore_api-token"
-	@echo "           cert:  $(cert_dir)/$(app_id).cert"
-	@echo "           key:   $(cert_dir)/$(app_id).key"
+	@printf "           %b token: %s\n" "$(call mark,$(token_file))" "$(token_file)"
+	@printf "           %b cert:  %s\n" "$(call mark,$(cert_file))" "$(cert_display)"
+	@printf "           %b key:   %s\n" "$(call mark,$(key_file))" "$(key_file)"
 	@echo ""
 	@echo "  register             Register app on the App Store (one-time).  [m]"
-	@echo "                       Needs .cert and .key."
+	@echo "                       Needs the certificate (.crt or .cert) and .key."
 	@echo "  publish              Publish a new release.  [m]"
 	@echo "                       Needs: tarball from 'make dist'."
 	@echo "                       Prompts for: GitHub release download URL."
@@ -433,8 +472,10 @@ help:
 	@echo "Utility:"
 	@echo "  clean                Remove build/ directory (incl. stage and cache)"
 	@echo "  dist-clean           Remove ALL git-ignored build outputs (vendor, node_modules, js, …)"
+	@echo "  self-update          Fetch the newest ncmake Makefile"
 	@echo "  help                 Show this help"
 	@echo ""
 	@echo "  [m] = maintainer only (needs repo write access and/or the signing key/cert)"
 	@echo ""
 	@echo "Current: $(if $(app_id),$(app_id) v$(version),(not inside a Nextcloud app))"
+	@echo "ncmake:  $(this_ncmake)"
