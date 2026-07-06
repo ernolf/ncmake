@@ -108,7 +108,7 @@ no_runtime   = sh -c 'echo "ERROR: no container runtime found (podman/docker). I
 php_min     = $(shell xmllint --xpath 'string(//dependencies/php/@min-version)' appinfo/info.xml 2>/dev/null)
 node_major  = $(shell python3 -c 'import json,re;print(re.search(r"[0-9]+", json.load(open("package.json"))["engines"]["node"]).group())' 2>/dev/null)
 php_image   ?= ghcr.io/nextcloud/continuous-integration-php$(php_min):latest
-node_image  ?= node:$(node_major)
+node_image  ?= node:$(or $(node_major),lts)
 
 ifeq ($(RUNTIME),bare)
   php_run  = sh -lc
@@ -131,10 +131,48 @@ ifeq ($(filter $(RUNTIME),bare none),)
   node_run = $(container) $(node_image) sh -lc
 endif
 
-.PHONY: all version tag build check-app check-build stage dist sign release rsync \
+.PHONY: all version changelog tag build check-app check-build stage dist sign release rsync \
         fetch-apps \
         register publish list-releases list-releases-full list-for-author delete-release ratings \
         clean dist-clean self-update help
+
+# == Changelog configuration (git-cliff) ==
+# Keep a Changelog sections from Conventional Commits, user-visible changes only:
+# feat -> Added, fix -> Fixed, perf -> Changed; build/ci/test/chore/docs/refactor/
+# style and merge commits are left out. The daily Transifex bot commits
+# (fix(l10n): Update translations...) are skipped too - they would produce piles
+# of identical bullets; describe translation updates by hand where they matter.
+# An app can ship its own cliff.toml to override all of this.
+define cliff_config
+[changelog]
+header = ""
+body = """
+## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group }}
+
+{% for commit in commits -%}
+- {% if commit.breaking %}**BREAKING** {% endif %}{{ commit.message | upper_first }}
+{% endfor %}
+{%- endfor %}
+"""
+trim = true
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+protect_breaking_commits = true
+tag_pattern = "v[0-9].*"
+sort_commits = "oldest"
+commit_parsers = [
+  { message = "^fix\\(l10n\\): Update translations", skip = true },
+  { message = "^feat", group = "Added" },
+  { message = "^fix", group = "Fixed" },
+  { message = "^perf", group = "Changed" },
+  { message = ".*", skip = true },
+]
+endef
+export cliff_config
 
 # `make` with no target shows the help instead of building anything.
 .DEFAULT_GOAL := help
@@ -180,8 +218,37 @@ version: check-app
 	git commit -s -m "build(release): bump version to $$new"; \
 	echo; \
 	echo "==> Bumped to $$new on branch $$branch and committed."; \
-	echo "==> Next: add a '## [$$new]' section to CHANGELOG.md, commit it on this branch,"; \
-	echo "    push the branch, open a PR and merge. Then on main: git pull && make tag"
+	echo "==> Next: run 'make changelog', review and extend the generated '## [$$new]' section,"; \
+	echo "    commit it on this branch, push, open a PR and merge. Then on main: git pull && make tag"
+
+# Generate the '## [X.Y.Z]' CHANGELOG section for the current info.xml version
+# from the conventional commits since the last tag (git-cliff via npx, in the
+# node container). The section is inserted above the previous release; the rest
+# of the file - header, preamble and hand-written or hand-extended sections - is
+# never touched, so generated entries can be freely edited before committing.
+# Refuses to duplicate an existing section; reports when there is nothing to
+# document. An app-provided cliff.toml overrides the built-in configuration.
+changelog: check-app
+	@ver="$(version)"; \
+	test -f CHANGELOG.md || { echo "ERROR: no CHANGELOG.md - create it once (Keep a Changelog header), then rerun." >&2; exit 1; }; \
+	if grep -q "^## \[$$ver\]" CHANGELOG.md; then \
+		echo "CHANGELOG.md already has a '## [$$ver]' section - nothing to do."; exit 0; \
+	fi; \
+	mkdir -p "$(cache_dir)"; \
+	if [ -f cliff.toml ]; then cfg="cliff.toml"; else cfg="build/cache/cliff.toml"; printf '%s\n' "$$cliff_config" > "$$cfg"; fi; \
+	echo "==> Generating changelog for $$ver from commits since the last tag ($(RUNTIME))..."; \
+	$(node_run) "git config --global --add safe.directory /app 2>/dev/null; npx --yes git-cliff@2 --config $$cfg --unreleased --tag v$$ver --strip all" > "$(cache_dir)/changelog_new.md" || { echo "git-cliff failed" >&2; exit 1; }; \
+	if ! grep -q '[^[:space:]]' "$(cache_dir)/changelog_new.md" || ! grep -q '^### ' "$(cache_dir)/changelog_new.md"; then \
+		echo "No undocumented user-visible changes since the last tag (only skipped commit types)."; \
+		echo "Add a hand-written '## [$$ver]' section if this release still warrants an entry (e.g. translation updates)."; \
+		exit 0; \
+	fi; \
+	awk -v new="$(cache_dir)/changelog_new.md" ' \
+		/^## \[/ && !done { while ((getline line < new) > 0) print line; print ""; done=1 } \
+		{ print } \
+		END { if (!done) { while ((getline line < new) > 0) print line } }' CHANGELOG.md > "$(cache_dir)/changelog_merged.md"; \
+	mv "$(cache_dir)/changelog_merged.md" CHANGELOG.md; \
+	echo "==> Inserted '## [$$ver]' into CHANGELOG.md - review, extend if needed, then commit."
 
 # Freeze the current HEAD as a signed release tag. Everything that belongs in the
 # release must already be committed (CHANGELOG and all content). Refuses to re-tag.
@@ -197,7 +264,7 @@ tag: check-app
 	echo "##  CHANGELOG.md (## [$$ver]) and all release content. A tag is frozen."; \
 	echo "############################################################################"; \
 	if [ -f CHANGELOG.md ] && ! grep -q "^## \[$$ver\]" CHANGELOG.md; then \
-		echo "WARNING: no '## [$$ver]' section found in CHANGELOG.md!" >&2; \
+		echo "ERROR: no '## [$$ver]' section in CHANGELOG.md - run 'make changelog' (and merge it) first." >&2; exit 1; \
 	fi; \
 	printf 'Create and push the signed tag v%s now? [y/N] ' "$$ver"; read yn; \
 	if [ "$$yn" = y ] || [ "$$yn" = Y ]; then \
@@ -432,6 +499,7 @@ help:
 	@echo ""
 	@echo "Release versioning (maintainer only):"
 	@echo "  version              Open a release branch with the version bump for a PR (prompts)  [m]"
+	@echo "  changelog            Generate the '## [version]' CHANGELOG section from the commits  [m]"
 	@echo "  tag                  Tag the release commit on main, signed, and push it  [m]"
 	@echo ""
 	@echo "  Container runtime for 'version' (lockfile sync) and 'build': RUNTIME=... (now: $(RUNTIME))"

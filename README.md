@@ -173,7 +173,7 @@ The release flow assumes a protected `main` (required checks, no direct pushes),
 
 ```mermaid
 flowchart LR
-    A["make version<br>(on main)"] -- "branch ncmake/release/X.Y.Z<br>bump + lockfile sync + commit" --> B["add CHANGELOG entry<br>## [X.Y.Z]"]
+    A["make version<br>(on main)"] -- "branch ncmake/release/X.Y.Z<br>bump + lockfile sync + commit" --> B["make changelog<br>review, extend, commit"]
     B --> C[push, PR, merge]
     C --> D["git pull<br>make tag"]
     D -- "signed tag vX.Y.Z" --> E[GitHub release<br>+ tarball asset]
@@ -182,7 +182,9 @@ flowchart LR
 
 **`make version`** (run on `main`) prompts for the new version, validates it against the latest tag (`sort -V`, must be greater), branches off into `ncmake/release/X.Y.Z` (branches created by ncmake always carry the `ncmake/` prefix, so they are immediately distinguishable from hand-made branches) and commits the bump there: `appinfo/info.xml`, plus `composer.json`/`package.json` when present, plus the re-synced lockfiles (synced inside the containers, so the bump commit is complete and CI-clean).
 
-**`make tag`** (back on `main`, after the merge) refuses to re-tag, warns when `CHANGELOG.md` has no `## [X.Y.Z]` section, shows a fat reminder that a tag freezes the current commit, then creates and pushes the **signed** `vX.Y.Z` tag after your confirmation.
+**`make changelog`** (on the release branch) generates the `## [X.Y.Z]` section for the version in `info.xml` from the conventional commits since the last tag, and inserts it above the previous release. Only user-visible changes make it in: `feat` becomes *Added*, `fix` becomes *Fixed*, `perf` becomes *Changed*; build, ci, test, chore, docs, refactor, style, merge commits and the daily Transifex bot commits are left out. The rest of the file is never touched, so the generated section can be freely edited and extended before committing, and hand-written history survives. Rerunning is safe: an existing section is not duplicated, and when nothing user-visible happened since the last tag it says so (add a hand-written section then, for example for translation updates). It runs `git-cliff` via `npx` in the node container; an app-provided `cliff.toml` overrides the built-in configuration.
+
+**`make tag`** (back on `main`, after the merge) refuses to re-tag, refuses when `CHANGELOG.md` has no `## [X.Y.Z]` section, shows a fat reminder that a tag freezes the current commit, then creates and pushes the **signed** `vX.Y.Z` tag after your confirmation.
 
 `make dist` builds the tarball to attach to the GitHub release, `make sign` prints its base64 signature, `make release` does both in one step.
 
@@ -253,7 +255,7 @@ Set on the command line (`make build RUNTIME=bare`), in the environment, or pers
 
 | Area | Targets |
 |---|---|
-| Release versioning | `version`, `tag` |
+| Release versioning | `version`, `changelog`, `tag` |
 | Build | `build`, `dist`, `sign`, `release` |
 | Local deploy | `rsync TARGET=...` |
 | App Store | `register`, `publish`, `list-releases`, `list-releases-full`, `list-for-author`, `delete-release`, `ratings` |
