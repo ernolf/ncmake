@@ -18,7 +18,7 @@
 # GET (ETag); offline or unchanged keeps the cache. A committed copy never
 # modifies itself; use 'make self-update' explicitly.
 this_ncmake    := $(abspath $(lastword $(MAKEFILE_LIST)))
-ncmake_url      = https://raw.githubusercontent.com/ernolf/ncmake/$(or $(NCMAKE_REF),main)/Makefile
+ncmake_url      = https://raw.githubusercontent.com/ernolf/ncmake/$(or $(NCMAKE_REF),main)/core/Makefile
 NCMAKE_TTL_MIN ?= 1440
 ifneq ($(NCMAKE),)
   ifneq ($(shell find "$(NCMAKE)" -mmin +$(NCMAKE_TTL_MIN) 2>/dev/null),)

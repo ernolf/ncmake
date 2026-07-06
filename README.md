@@ -50,7 +50,7 @@ NCMAKE_REF ?= v1.0.0
 If you prefer a repository without any fetch-at-build-time behavior, commit the full `Makefile` instead:
 
 ```sh
-curl -fLO https://raw.githubusercontent.com/ernolf/ncmake/main/Makefile
+curl -fLo Makefile https://raw.githubusercontent.com/ernolf/ncmake/main/core/Makefile
 ```
 
 A committed copy never modifies itself. `make self-update` downloads the newest version over it; review the diff and commit it like any other change.

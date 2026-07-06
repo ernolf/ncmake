@@ -11,7 +11,7 @@
 NCMAKE_REF ?= main
 NCMAKE_DIR ?= $(HOME)/.cache/ncmake
 NCMAKE     ?= $(NCMAKE_DIR)/Makefile-$(NCMAKE_REF)
-$(if $(wildcard $(NCMAKE)),,$(shell mkdir -p "$(NCMAKE_DIR)" && curl -fsSL "https://raw.githubusercontent.com/ernolf/ncmake/$(NCMAKE_REF)/Makefile" -o "$(NCMAKE)"))
+$(if $(wildcard $(NCMAKE)),,$(shell mkdir -p "$(NCMAKE_DIR)" && curl -fsSL "https://raw.githubusercontent.com/ernolf/ncmake/$(NCMAKE_REF)/core/Makefile" -o "$(NCMAKE)"))
 ifeq ($(wildcard $(NCMAKE)),)
 $(error ncmake: could not fetch the shared Makefile (check your network), see https://github.com/ernolf/ncmake)
 endif
