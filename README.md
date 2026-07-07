@@ -203,7 +203,7 @@ The maintainer targets talk directly to the [App Store REST API](https://nextclo
 | Target | What it does |
 |---|---|
 | `make register` | registers the app id and certificate, one time |
-| `make publish` | submits a release: prompts for the GitHub download URL of the tarball, signs and posts it |
+| `make publish` | submits a release: downloads the tarball from the given URL, signs exactly those bytes and posts it. Prompts for the URL (any host, `curl`; a GitHub release asset uses `gh` when installed, so private repos work); `GH=1` pre-fills the standard GitHub release URL to just confirm, `URL=` sets it directly |
 | `make list-releases` | your published releases, compact JSON |
 | `make list-releases-full` | the full App Store entry |
 | `make list-for-author` | all apps of an author (prompts for a name) |

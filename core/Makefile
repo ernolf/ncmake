@@ -44,6 +44,10 @@ cert_dir     ?= $(HOME)/.nextcloud/certificates
 cert_dir_note = $(if $(wildcard $(cert_dir)),, [NOT FOUND])
 require_cert_dir = @test -d "$(cert_dir)" || { echo "cert dir not found: $(cert_dir) - create it and add the App Store cert/key/token." >&2; exit 1; }
 tarball       = $(dist_dir)/$(app_id)-$(version).tar.gz
+# owner/repo from the origin remote (ssh or https), and the canonical download URL
+# of the release tarball asset - the default the 'make publish GH=1' prompt offers.
+gh_slug       = $(shell git remote get-url origin 2>/dev/null | sed -E 's#^git@github.com:##; s#^https://github.com/##; s#\.git$$##')
+release_url   = https://github.com/$(gh_slug)/releases/download/v$(version)/$(app_id)-$(version).tar.gz
 appstore_api  = https://apps.nextcloud.com/api/v1
 api_token     = $(shell cat $(cert_dir)/appstore_api-token 2>/dev/null | tr -d '[:space:]')
 # The App Store issues the certificate as .crt; some setups store it as .cert.
@@ -398,16 +402,43 @@ register: check-app
 		*)   echo "HTTP $$http:"; cat /tmp/.ncmake_resp; echo; exit 1;; \
 	esac
 
-# Publish a new release to the App Store.
-# Run 'make dist' first, upload the tarball to GitHub, then run this.
-# Prompts for the GitHub release download URL.
+# Publish a new release to the App Store. The download URL is ALWAYS required, and
+# the tarball is ALWAYS downloaded from it and signed - so the signature can never
+# be computed over other bytes than the App Store fetches. The asset may be hosted
+# anywhere (curl handles it, including your own server); only when the URL is a
+# GitHub release asset AND gh is installed does gh do the download (so private
+# repos work too). Two ways to give the URL:
+#   make publish              prompt for the download URL (any host)
+#   make publish GH=1         pre-fill the standard GitHub release URL for the
+#                             current version, so you only press Enter to confirm
+# URL=<download-url> sets it non-interactively in either case.
 publish: check-app
 	$(require_cert_dir)
-	@test -f "$(tarball)" || { echo "ERROR: $(tarball) not found — run 'make dist' first."; exit 1; }
-	@read -p "GitHub release download URL (https://...): " url; \
+	@set -e; \
+	url="$(URL)"; \
+	if [ -z "$$url" ]; then \
+		if [ -n "$(GH)" ]; then read -p "Download URL [$(release_url)]: " url; url="$${url:-$(release_url)}"; \
+		else read -p "Download URL: " url; fi; \
+	fi; \
 	test -n "$$url" || { echo "Aborted."; exit 0; }; \
-	echo "Computing signature..."; \
-	openssl dgst -sha512 -sign "$(key_file)" "$(tarball)" | openssl base64 | tr -d '\n' > /tmp/.ncmake_sig; \
+	tmpd=/tmp/.ncmake_publish; rm -rf "$$tmpd"; mkdir -p "$$tmpd"; \
+	file="$${url##*/}"; asset="$$tmpd/$$file"; \
+	rest="$${url#https://github.com/}"; gh_ok=; \
+	if [ "$$rest" != "$$url" ] && command -v gh >/dev/null 2>&1; then \
+		slug=$$(printf '%s' "$$rest" | cut -d/ -f1-2); \
+		s3=$$(printf '%s' "$$rest" | cut -d/ -f3); s4=$$(printf '%s' "$$rest" | cut -d/ -f4); \
+		tag=$$(printf '%s' "$$rest" | cut -d/ -f5); \
+		[ "$$s3" = releases ] && [ "$$s4" = download ] && [ -n "$$tag" ] && [ -n "$$file" ] && gh_ok=1; \
+	fi; \
+	echo "Downloading $$url ..."; \
+	if [ -n "$$gh_ok" ]; then \
+		gh release download "$$tag" -R "$$slug" -p "$$file" -D "$$tmpd" || { echo "gh release download failed" >&2; exit 1; }; \
+	else \
+		curl -fL "$$url" -o "$$asset" || { echo "download failed: $$url" >&2; exit 1; }; \
+	fi; \
+	test -s "$$asset" || { echo "ERROR: downloaded asset is empty or missing: $$asset" >&2; exit 1; }; \
+	echo "Computing signature over the downloaded asset..."; \
+	openssl dgst -sha512 -sign "$(key_file)" "$$asset" | openssl base64 | tr -d '\n' > /tmp/.ncmake_sig; \
 	python3 -c "import sys,json;sig=open('/tmp/.ncmake_sig').read();print(json.dumps({'download':sys.argv[1],'signature':sig}))" "$$url" > /tmp/.ncmake_body; \
 	echo "Publishing v$(version) to the App Store..."; \
 	http=$$(curl -s -o /tmp/.ncmake_resp -w "%{http_code}" \
@@ -526,9 +557,8 @@ help:
 	@echo ""
 	@echo "  register             Register app on the App Store (one-time).  [m]"
 	@echo "                       Needs the certificate (.crt or .cert) and .key."
-	@echo "  publish              Publish a new release.  [m]"
-	@echo "                       Needs: tarball from 'make dist'."
-	@echo "                       Prompts for: GitHub release download URL."
+	@echo "  publish              Publish a release: downloads the asset from the URL and signs it.  [m]"
+	@echo "                       Prompts for the URL; GH=1 pre-fills the standard GitHub URL to confirm."
 	@echo "  list-releases        List published releases (compact JSON)."
 	@echo "  list-releases-full   Full App Store entry as JSON."
 	@echo "  list-for-author      Find all apps by author (prompts for name)."
