@@ -155,30 +155,35 @@ flowchart LR
 
 ```sh
 make build
-make rsync TARGET=/var/www/nextcloud/apps/
+make rsync TARGET=/var/www/nextcloud/apps OCC=1
 ```
 
-`TARGET` is the `apps/` parent directory, locally or over SSH (`user@host:/var/www/nextcloud/apps/`); the app subdirectory is appended automatically and synced with `--delete`, so removed files disappear from the instance too.
+`TARGET` is the `apps/` parent directory, locally or over SSH (`user@host:/var/www/nextcloud/apps`); the app subdirectory is appended automatically and synced with `--delete`, so removed files disappear from the instance too.
 
-The `occ` calls and ownership around it are your job (they depend on your instance), typically:
+`OCC=1` wraps the sync into the full refresh cycle, so one short command replaces the chain you would otherwise have to remember and retype:
 
-```sh
-occ app:disable myapp && make rsync TARGET=/var/www/nextcloud/apps/ && chown -R www-data:www-data /var/www/nextcloud/apps/myapp && occ app:enable myapp
-```
+1. `occ app:disable <app>` — tolerated to fail on a first deploy
+2. the rsync itself
+3. `chown -R www-data: <apps-dir>/<app>`
+4. `occ app:enable <app>`
 
-The disable/enable cycle makes Nextcloud re-read `info.xml` and run pending migrations.
+The disable/enable cycle makes Nextcloud re-read `info.xml` and run pending migrations. `occ` is expected at `<apps-dir>/../occ` and runs as the web server user (`web_user`, default `www-data`; via `sudo` unless you already are that user). On a remote `TARGET` each step runs through `ssh`, so the ssh user needs the rights for `sudo` and `chown`. Without `OCC=1` only the rsync happens, and the finishing commands are printed ready for copy and paste.
 
 When the instance runs inside a container whose filesystem rsync cannot reach from outside — a setup like Nextcloud All-in-One — `make cp` deploys the same staged file set into the running container:
 
 ```sh
-make cp TARGET=nextcloud-aio-nextcloud:/var/www/html/custom_apps
+make cp TARGET=nextcloud-aio-nextcloud:/var/www/html/custom_apps OCC=1
 ```
 
-`TARGET` uses `docker cp` syntax (`<container>:<apps-dir>`); the app subdirectory is appended automatically and replaced as a whole, so removed files disappear too. `ENGINE=docker|podman` picks the container CLI — it is independent of `RUNTIME`, because builds may use podman while the instance runs under docker; that is why docker is preferred here when both are installed. Ownership and the `occ` calls remain your job, e.g.:
+`TARGET` uses `docker cp` syntax (`<container>:<apps-dir>`); the app subdirectory is appended automatically and replaced as a whole, so removed files disappear too. `ENGINE=docker|podman` picks the container CLI — it is independent of `RUNTIME`, because builds may use podman while the instance runs under docker; that is why docker is preferred here when both are installed.
+
+`OCC=1` runs the same four-step cycle as above, entirely inside the container. `occ` is invoked in the form the [All-in-One documentation](https://github.com/nextcloud/all-in-one#how-to-run-occ-commands) uses:
 
 ```sh
-docker exec nextcloud-aio-nextcloud chown -R www-data:www-data /var/www/html/custom_apps/myapp
+docker exec --user www-data -it nextcloud-aio-nextcloud php occ <command>
 ```
+
+One detail worth knowing: `-it` (keep stdin open, allocate a terminal) belongs in commands you type into an interactive terminal, and is required as soon as an `occ` command prompts for input. Non-interactive commands such as `chown` do not need it, and automated calls must not use it — without a terminal attached, `-t` fails with "the input device is not a TTY". That is why the copy-and-paste lines ncmake prints carry `-it` on the `occ` call, while the calls it executes itself do not.
 
 ## Releasing
 
@@ -252,6 +257,8 @@ Set on the command line (`make build RUNTIME=bare`), in the environment, or pers
 |---|---|---|
 | `RUNTIME` | auto (`podman`, else `docker`) | container runtime: `podman`, `docker`, `docker-rootless`, `bare` |
 | `TARGET` | (required by `make rsync`/`make cp`) | apps parent directory: local, `user@host:` (rsync) or `<container>:` (cp) |
+| `OCC` | (unset) | `OCC=1` wraps a deploy into occ app:disable → chown → occ app:enable |
+| `web_user` | `www-data` | web server user of the target instance (file owner, runs occ) |
 | `ENGINE` | auto (`docker`, else `podman`) | container CLI for `make cp` (independent of `RUNTIME`) |
 | `cert_dir` | `~/.nextcloud/certificates` | location of certificate, key and API token |
 | `php_image` | `ghcr.io/nextcloud/continuous-integration-php<min>` | PHP container image |

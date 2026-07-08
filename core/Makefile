@@ -331,18 +331,47 @@ release: dist sign
 
 # == Local deploy ==
 
+# The web server user of the target instance: owns the deployed files, and occ
+# runs as it. Override in ncmake.mk when your instance differs.
+web_user ?= www-data
+
 # Deploy the staged runtime file set straight into an apps/ directory via rsync -
 # the same files as the dist tarball, without packing and unpacking. Works locally
 # and over SSH. TARGET is the apps/ PARENT directory; the app subdir is appended
 # automatically. Run 'make build' first so vendor/ (no dev) and js/ are
-# production-ready. The occ disable/enable + chown around it is the caller's job
-# (same-host only), e.g.:
-#   occ app:disable APP && make build && make rsync TARGET=/var/www/nextcloud/apps/ && chown -R www-data:www-data /var/www/nextcloud/apps/APP && occ app:enable APP
+# production-ready.
+# OCC=1 runs the full refresh cycle around the sync: occ app:disable, rsync,
+# chown to $(web_user), occ app:enable. occ is expected at <apps-dir>/../occ and
+# runs as $(web_user) (via sudo unless you already are that user); on a remote
+# TARGET every step goes through ssh, so the ssh user needs the rights for sudo
+# and chown. Without OCC=1 only the rsync happens and the finishing commands are
+# printed ready for copy and paste.
 rsync: stage
-	@test -n "$(TARGET)" || { echo "Usage: make rsync TARGET=<apps-dir | user@host:apps-dir>" >&2; exit 1; }
-	@t="$(TARGET)"; dest="$${t%/}/$(app_id)/"; \
-	echo "rsync -> $$dest"; \
-	rsync -a --delete "$(stage_dir)/$(app_id)/" "$$dest"
+	@test -n "$(TARGET)" || { echo "Usage: make rsync TARGET=<apps-dir | user@host:apps-dir> [OCC=1]" >&2; exit 1; }
+	@t="$(TARGET)"; t="$${t%/}"; \
+	case "$$t" in \
+	  *:*) host="$${t%%:*}"; dir="$${t#*:}";; \
+	  *)   host="";          dir="$$t";; \
+	esac; \
+	app_dir="$$dir/$(app_id)"; \
+	if [ -z "$$host" ] && [ "$$(id -un)" = "$(web_user)" ]; then occ_run="php $${dir%/*}/occ"; \
+	else occ_run="sudo -u $(web_user) php $${dir%/*}/occ"; fi; \
+	run() { if [ -n "$$host" ]; then ssh "$$host" "$$1"; else eval "$$1"; fi; }; \
+	if [ -n "$(OCC)" ]; then \
+		echo "+ $$occ_run app:disable $(app_id)"; \
+		run "$$occ_run app:disable $(app_id)" || echo "(app:disable failed - continuing; first deploy?)"; \
+	fi; \
+	echo "rsync -> $$t/$(app_id)/"; \
+	rsync -a --delete "$(stage_dir)/$(app_id)/" "$$t/$(app_id)/" || exit 1; \
+	if [ -n "$(OCC)" ]; then \
+		echo "+ chown -R $(web_user): $$app_dir"; run "chown -R $(web_user): $$app_dir" || exit 1; \
+		echo "+ $$occ_run app:enable $(app_id)"; run "$$occ_run app:enable $(app_id)" || exit 1; \
+	else \
+		echo; \
+		echo "Deployed without the occ cycle. Finish$${host:+ on $$host} (copy & paste):"; \
+		echo "  chown -R $(web_user): $$app_dir && $$occ_run app:enable $(app_id)"; \
+		echo "Next time 'make rsync TARGET=$(TARGET) OCC=1' runs app:disable, rsync, chown and app:enable in one go."; \
+	fi
 
 # The container CLI used by 'make cp'. Deliberately independent of RUNTIME:
 # builds may prefer podman while the Nextcloud instance runs under docker
@@ -353,19 +382,39 @@ ENGINE ?= $(if $(have_docker),docker,$(if $(have_podman),podman,))
 # for instances whose filesystem rsync cannot reach from outside, e.g. Nextcloud
 # All-in-One. TARGET uses docker-cp syntax (<container>:<apps-dir>); the app
 # subdir is appended automatically and replaced as a whole, so removed files
-# disappear too. As with rsync, ownership and the occ disable/enable around it
-# are the caller's job, e.g.:
-#   docker exec <container> chown -R www-data:www-data <apps-dir>/<app_id>
+# disappear too.
+# OCC=1 runs the full refresh cycle inside the container: occ app:disable, copy,
+# chown to $(web_user), occ app:enable. occ is invoked in the form the All-in-One
+# documentation uses ('exec --user www-data ... php occ'), with occ resolved at
+# <apps-dir>/../occ. The printed copy-and-paste lines carry -it because they are
+# meant for an interactive terminal; the automated calls run without a TTY and
+# therefore without -it.
 cp: stage
 	@test -n "$(ENGINE)" || { echo "ERROR: no container CLI found (docker/podman)." >&2; exit 1; }
 	@t="$(TARGET)"; c="$${t%%:*}"; d="$${t#*:}"; \
 	if [ -z "$$t" ] || [ "$$c" = "$$t" ] || [ -z "$$c" ] || [ -z "$$d" ]; then \
-		echo "Usage: make cp TARGET=<container>:<apps-dir>" >&2; exit 1; \
+		echo "Usage: make cp TARGET=<container>:<apps-dir> [OCC=1]" >&2; exit 1; \
 	fi; \
-	d="$${d%/}"; \
-	echo "$(ENGINE) cp -> $$c:$$d/$(app_id)/"; \
-	$(ENGINE) exec "$$c" rm -rf "$$d/$(app_id)" && \
-	$(ENGINE) cp "$(stage_dir)/$(app_id)" "$$c:$$d/"
+	d="$${d%/}"; app_dir="$$d/$(app_id)"; occ="$${d%/*}/occ"; \
+	occ_run="$(ENGINE) exec --user $(web_user) $$c php $$occ"; \
+	if [ -n "$(OCC)" ]; then \
+		echo "+ $$occ_run app:disable $(app_id)"; \
+		$$occ_run app:disable $(app_id) || echo "(app:disable failed - continuing; first deploy?)"; \
+	fi; \
+	echo "$(ENGINE) cp -> $$c:$$app_dir/"; \
+	{ $(ENGINE) exec "$$c" rm -rf "$$app_dir" && \
+	  $(ENGINE) cp "$(stage_dir)/$(app_id)" "$$c:$$d/"; } || exit 1; \
+	if [ -n "$(OCC)" ]; then \
+		echo "+ $(ENGINE) exec $$c chown -R $(web_user): $$app_dir"; \
+		$(ENGINE) exec "$$c" chown -R "$(web_user):" "$$app_dir" || exit 1; \
+		echo "+ $$occ_run app:enable $(app_id)"; \
+		$$occ_run app:enable $(app_id) || exit 1; \
+	else \
+		echo; \
+		echo "Deployed without the occ cycle. Finish (copy & paste):"; \
+		echo "  $(ENGINE) exec $$c chown -R $(web_user): $$app_dir && $(ENGINE) exec --user $(web_user) -it $$c php $$occ app:enable $(app_id)"; \
+		echo "Next time 'make cp TARGET=$(TARGET) OCC=1' runs app:disable, copy, chown and app:enable in one go."; \
+	fi
 
 # == App Store cache ==
 
@@ -573,9 +622,10 @@ help:
 	@echo "Local deploy:"
 	@echo "  rsync                Deploy the shipped file set into an apps/ dir via rsync (no tarball)."
 	@echo "                       Needs TARGET=<apps-dir|user@host:apps-dir>; run 'make build' first."
+	@echo "                       OCC=1 adds occ app:disable -> chown -> occ app:enable around it."
 	@echo "  cp                   Deploy the shipped file set into a RUNNING container's apps/ dir"
 	@echo "                       (e.g. Nextcloud All-in-One). Needs TARGET=<container>:<apps-dir>;"
-	@echo "                       ENGINE=docker|podman overrides the container CLI (now: $(ENGINE))."
+	@echo "                       OCC=1 as above, inside the container; ENGINE=docker|podman (now: $(ENGINE))."
 	@echo ""
 	@echo "  Shipped file set: allowlist of standard app paths, existence-filtered."
 	@echo "  Optional per-app tuning: .nextcloudignore (excludes), ncmake.mk (variable overrides)."
