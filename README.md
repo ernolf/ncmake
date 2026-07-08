@@ -21,6 +21,7 @@ Everything is derived from the app itself, so there is nothing to configure for 
 - [Variables](#variables)
 - [Target reference](#target-reference)
 - [Requirements](#requirements)
+- [Show that your app uses ncmake](#show-that-your-app-uses-ncmake)
 
 ## Installation
 
@@ -287,6 +288,22 @@ Targets marked `[m]` in the help are maintainer-only: they need repository write
 ## Requirements
 
 GNU make, git, curl, openssl, rsync, xmllint (libxml2), python3. Optional: podman or docker for containerized builds (strongly recommended; without them use `RUNTIME=bare` and provide composer and npm yourself).
+
+## Show that your app uses ncmake
+
+If ncmake is useful to you, add a badge to your app's README:
+
+[![Built with ncmake](https://img.shields.io/badge/built%20with-ncmake-0082c9)](https://github.com/ernolf/ncmake)
+
+```markdown
+[![Built with ncmake](https://img.shields.io/badge/built%20with-ncmake-0082c9)](https://github.com/ernolf/ncmake)
+```
+
+The badge is served by shields.io and links here; it is purely cosmetic and reports nothing back. To actually find the apps that use ncmake, search GitHub for the fetch URL every stub carries — that signal does not depend on the badge:
+
+```sh
+gh search code 'raw.githubusercontent.com/ernolf/ncmake' --json repository --jq '.[].repository.full_name' | sort -u
+```
 
 ## License
 
