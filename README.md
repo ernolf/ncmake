@@ -299,7 +299,11 @@ If ncmake is useful to you, add a badge to your app's README:
 [![Built with ncmake](https://img.shields.io/badge/built%20with-ncmake-0082c9)](https://github.com/ernolf/ncmake)
 ```
 
-The badge is served by shields.io and links here; it is purely cosmetic and reports nothing back. To actually find the apps that use ncmake, search GitHub for the fetch URL every stub carries — that signal does not depend on the badge:
+The badge is served by shields.io and links here; it is purely cosmetic and reports nothing back. To actually find the apps that use ncmake, search GitHub's code search for the fetch URL every stub carries — that signal does not depend on the badge:
+
+<https://github.com/search?q=%22raw.githubusercontent.com%2Fernolf%2Fncmake%22&type=code>
+
+The same from the command line needs a recent `gh` (2.10 or newer, for the `search` command):
 
 ```sh
 gh search code 'raw.githubusercontent.com/ernolf/ncmake' --json repository --jq '.[].repository.full_name' | sort -u
