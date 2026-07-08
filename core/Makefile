@@ -135,7 +135,7 @@ ifeq ($(filter $(RUNTIME),bare none),)
   node_run = $(container) $(node_image) sh -lc
 endif
 
-.PHONY: all version changelog tag build check-app check-build stage dist sign release rsync \
+.PHONY: all version changelog tag build check-app check-build stage dist sign release rsync cp \
         fetch-apps \
         register publish list-releases list-releases-full list-for-author delete-release ratings \
         clean dist-clean self-update help
@@ -344,6 +344,29 @@ rsync: stage
 	echo "rsync -> $$dest"; \
 	rsync -a --delete "$(stage_dir)/$(app_id)/" "$$dest"
 
+# The container CLI used by 'make cp'. Deliberately independent of RUNTIME:
+# builds may prefer podman while the Nextcloud instance runs under docker
+# (e.g. All-in-One), so docker is preferred here.
+ENGINE ?= $(if $(have_docker),docker,$(if $(have_podman),podman,))
+
+# Deploy the staged runtime file set into a RUNNING container's apps/ directory -
+# for instances whose filesystem rsync cannot reach from outside, e.g. Nextcloud
+# All-in-One. TARGET uses docker-cp syntax (<container>:<apps-dir>); the app
+# subdir is appended automatically and replaced as a whole, so removed files
+# disappear too. As with rsync, ownership and the occ disable/enable around it
+# are the caller's job, e.g.:
+#   docker exec <container> chown -R www-data:www-data <apps-dir>/<app_id>
+cp: stage
+	@test -n "$(ENGINE)" || { echo "ERROR: no container CLI found (docker/podman)." >&2; exit 1; }
+	@t="$(TARGET)"; c="$${t%%:*}"; d="$${t#*:}"; \
+	if [ -z "$$t" ] || [ "$$c" = "$$t" ] || [ -z "$$c" ] || [ -z "$$d" ]; then \
+		echo "Usage: make cp TARGET=<container>:<apps-dir>" >&2; exit 1; \
+	fi; \
+	d="$${d%/}"; \
+	echo "$(ENGINE) cp -> $$c:$$d/$(app_id)/"; \
+	$(ENGINE) exec "$$c" rm -rf "$$d/$(app_id)" && \
+	$(ENGINE) cp "$(stage_dir)/$(app_id)" "$$c:$$d/"
+
 # == App Store cache ==
 
 # Fetch apps.json with ETag caching (always runs as prerequisite).
@@ -550,6 +573,9 @@ help:
 	@echo "Local deploy:"
 	@echo "  rsync                Deploy the shipped file set into an apps/ dir via rsync (no tarball)."
 	@echo "                       Needs TARGET=<apps-dir|user@host:apps-dir>; run 'make build' first."
+	@echo "  cp                   Deploy the shipped file set into a RUNNING container's apps/ dir"
+	@echo "                       (e.g. Nextcloud All-in-One). Needs TARGET=<container>:<apps-dir>;"
+	@echo "                       ENGINE=docker|podman overrides the container CLI (now: $(ENGINE))."
 	@echo ""
 	@echo "  Shipped file set: allowlist of standard app paths, existence-filtered."
 	@echo "  Optional per-app tuning: .nextcloudignore (excludes), ncmake.mk (variable overrides)."

@@ -146,9 +146,10 @@ flowchart LR
     A[working tree] -- "allowlist<br>+ .nextcloudignore" --> B["build/stage/&lt;app_id&gt;/"]
     B -- "tar (make dist)" --> C["build/artifacts/dist/<br>&lt;app_id&gt;-&lt;version&gt;.tar.gz"]
     B -- "rsync (make rsync)" --> D["&lt;apps-dir&gt;/&lt;app_id&gt;/"]
+    B -- "docker cp (make cp)" --> E["&lt;container&gt;:&lt;apps-dir&gt;/&lt;app_id&gt;/"]
 ```
 
-`make dist` materializes the file set once into a staging directory and packs it; `make rsync` deploys the very same staging directory. One mechanism, one source of truth: what you deploy for testing is byte-for-byte what a release ships.
+`make dist` materializes the file set once into a staging directory and packs it; `make rsync` and `make cp` deploy the very same staging directory. One mechanism, one source of truth: what you deploy for testing is byte-for-byte what a release ships.
 
 ## Deploying to a test instance
 
@@ -166,6 +167,18 @@ occ app:disable myapp && make rsync TARGET=/var/www/nextcloud/apps/ && chown -R 
 ```
 
 The disable/enable cycle makes Nextcloud re-read `info.xml` and run pending migrations.
+
+When the instance runs inside a container whose filesystem rsync cannot reach from outside — a setup like Nextcloud All-in-One — `make cp` deploys the same staged file set into the running container:
+
+```sh
+make cp TARGET=nextcloud-aio-nextcloud:/var/www/html/custom_apps
+```
+
+`TARGET` uses `docker cp` syntax (`<container>:<apps-dir>`); the app subdirectory is appended automatically and replaced as a whole, so removed files disappear too. `ENGINE=docker|podman` picks the container CLI — it is independent of `RUNTIME`, because builds may use podman while the instance runs under docker; that is why docker is preferred here when both are installed. Ownership and the `occ` calls remain your job, e.g.:
+
+```sh
+docker exec nextcloud-aio-nextcloud chown -R www-data:www-data /var/www/html/custom_apps/myapp
+```
 
 ## Releasing
 
@@ -238,7 +251,8 @@ Set on the command line (`make build RUNTIME=bare`), in the environment, or pers
 | Variable | Default | Purpose |
 |---|---|---|
 | `RUNTIME` | auto (`podman`, else `docker`) | container runtime: `podman`, `docker`, `docker-rootless`, `bare` |
-| `TARGET` | (required by `make rsync`) | apps parent directory, local or `user@host:` |
+| `TARGET` | (required by `make rsync`/`make cp`) | apps parent directory: local, `user@host:` (rsync) or `<container>:` (cp) |
+| `ENGINE` | auto (`docker`, else `podman`) | container CLI for `make cp` (independent of `RUNTIME`) |
 | `cert_dir` | `~/.nextcloud/certificates` | location of certificate, key and API token |
 | `php_image` | `ghcr.io/nextcloud/continuous-integration-php<min>` | PHP container image |
 | `node_image` | `node:<engines.node major>` | Node container image |
@@ -257,7 +271,7 @@ Set on the command line (`make build RUNTIME=bare`), in the environment, or pers
 |---|---|
 | Release versioning | `version`, `changelog`, `tag` |
 | Build | `build`, `dist`, `sign`, `release` |
-| Local deploy | `rsync TARGET=...` |
+| Local deploy | `rsync TARGET=...`, `cp TARGET=...` |
 | App Store | `register`, `publish`, `list-releases`, `list-releases-full`, `list-for-author`, `delete-release`, `ratings` |
 | Utility | `clean`, `dist-clean`, `self-update`, `help` |
 
