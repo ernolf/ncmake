@@ -227,8 +227,9 @@ version: check-app
 
 # Generate the '## [X.Y.Z]' CHANGELOG section for the current info.xml version
 # from the conventional commits since the last tag (git-cliff via npx, in the
-# node container). The section is inserted above the previous release; the rest
-# of the file - header, preamble and hand-written or hand-extended sections - is
+# node container). The section is inserted above the previous release, followed
+# by its '[X.Y.Z]:' link reference to the GitHub release tag; the rest of the
+# file - header, preamble and hand-written or hand-extended sections - is
 # never touched, so generated entries can be freely edited before committing.
 # Refuses to duplicate an existing section; reports when there is nothing to
 # document. An app-provided cliff.toml overrides the built-in configuration.
@@ -247,12 +248,15 @@ changelog: check-app
 		echo "Add a hand-written '## [$$ver]' section if this release still warrants an entry (e.g. translation updates)."; \
 		exit 0; \
 	fi; \
+	if [ -n "$(gh_slug)" ]; then \
+		printf '\n[%s]: https://github.com/%s/releases/tag/v%s\n' "$$ver" "$(gh_slug)" "$$ver" >> "$(cache_dir)/changelog_new.md"; \
+	fi; \
 	awk -v new="$(cache_dir)/changelog_new.md" ' \
 		/^## \[/ && !done { while ((getline line < new) > 0) print line; print ""; done=1 } \
 		{ print } \
 		END { if (!done) { while ((getline line < new) > 0) print line } }' CHANGELOG.md > "$(cache_dir)/changelog_merged.md"; \
 	mv "$(cache_dir)/changelog_merged.md" CHANGELOG.md; \
-	echo "==> Inserted '## [$$ver]' into CHANGELOG.md - review, extend if needed, then commit."
+	echo "==> Inserted '## [$$ver]' and its link reference into CHANGELOG.md - review, extend if needed, then commit."
 
 # Freeze the current HEAD as a signed release tag. Everything that belongs in the
 # release must already be committed (CHANGELOG and all content). Refuses to re-tag.
