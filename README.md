@@ -123,6 +123,15 @@ runs the detected build commands, each in its container:
 
 When a side does not apply, it is skipped with a note. Apps with special build steps override the commands in `ncmake.mk` (see [Per-app tuning](#per-app-tuning)).
 
+For everything beyond the release build there are generic pass-through targets running in the same throwaway containers — the host needs no toolchain even for the dev setup:
+
+```sh
+make composer ARGS=install       # install dependencies INCLUDING dev tools (vendor-bin etc.)
+make composer ARGS="cs:check"    # run a composer script
+make npm ARGS=ci                 # install frontend dependencies
+make npm ARGS="run test"         # run the frontend tests
+```
+
 `make dist-clean` resets to a pristine checkout first (it removes every git-ignored build output: `vendor/`, `node_modules/`, `js/`, caches), so
 
 ```sh
@@ -278,7 +287,7 @@ Set on the command line (`make build RUNTIME=bare`), in the environment, or pers
 | Area | Targets |
 |---|---|
 | Release versioning | `version`, `changelog`, `tag` |
-| Build | `build`, `dist`, `sign`, `release` |
+| Build | `build`, `dist`, `sign`, `release`, `composer ARGS=...`, `npm ARGS=...` |
 | Local deploy | `rsync TARGET=...`, `cp TARGET=...` |
 | App Store | `register`, `publish`, `list-releases`, `list-releases-full`, `list-for-author`, `delete-release`, `ratings` |
 | Utility | `clean`, `dist-clean`, `self-update`, `help` |

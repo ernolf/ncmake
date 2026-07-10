@@ -135,7 +135,7 @@ ifeq ($(filter $(RUNTIME),bare none),)
   node_run = $(container) $(node_image) sh -lc
 endif
 
-.PHONY: all version changelog tag build check-app check-build stage dist sign release rsync cp \
+.PHONY: all version changelog tag build check-app check-build stage dist sign release rsync cp composer npm \
         fetch-apps \
         register publish list-releases list-releases-full list-for-author delete-release ratings \
         clean dist-clean self-update help
@@ -294,6 +294,22 @@ build: check-app
 	@if [ -n "$(node_build_cmd)" ]; then \
 		echo "+ $(node_build_cmd)"; $(node_run) '$(node_build_cmd)' || exit 1; \
 	else echo "(npm: nothing to build)"; fi
+
+# Generic pass-through into the throwaway containers: run any composer or npm
+# command inside the same containers 'make build' uses, so the host needs no
+# toolchain even for the dev setup, e.g.:
+#   make composer ARGS=install         install dependencies INCLUDING dev tools
+#   make composer ARGS="cs:check"      run a composer script
+#   make npm ARGS="run test"           run the frontend tests
+composer: check-app
+	@test -n "$(ARGS)" || { echo "Usage: make composer ARGS=\"<composer arguments>\"" >&2; exit 1; }
+	@echo "==> composer $(ARGS) (RUNTIME=$(RUNTIME))"
+	@$(php_run) 'composer $(ARGS)'
+
+npm: check-app
+	@test -n "$(ARGS)" || { echo "Usage: make npm ARGS=\"<npm arguments>\"" >&2; exit 1; }
+	@echo "==> npm $(ARGS) (RUNTIME=$(RUNTIME))"
+	@$(node_run) 'npm $(ARGS)'
 
 # Abort (do not ship a broken file set) when a build output is missing. Only
 # gitignored outputs are demanded: a committed js/ or vendor/ ships as-is.
@@ -614,6 +630,8 @@ help:
 	@echo ""
 	@echo "Build:"
 	@echo "  build                Build PHP deps + frontend (auto-detected from composer.json/package.json)"
+	@echo "  composer ARGS=...    Run any composer command in the throwaway PHP container"
+	@echo "  npm ARGS=...         Run any npm command in the throwaway Node container"
 	@echo "  dist                 Build the distribution tarball from the shipped file set"
 	@echo "                       → $(tarball)"
 	@echo "  sign                 Sign the tarball (base64 signature for publish / App Store)  [m]"
