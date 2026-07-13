@@ -190,7 +190,9 @@ check-app:
 # == Release versioning (maintainer only) ==
 
 # Open the next release (maintainer only - needs repo write access). Runs from main, explains
-# itself, prompts + validates the version (> latest tag, empty = abort), then branches off into
+# itself, and warns when a manifest description drifts from the info.xml summary (the
+# single source of truth - absent description fields are fine and never warned about).
+# Prompts + validates the version (> latest tag, empty = abort), then branches off into
 # ncmake/release/X.Y.Z (branches created by ncmake carry the ncmake/ prefix) and commits the
 # bump there: info.xml/composer.json/package.json plus the
 # re-synced lockfiles (via RUNTIME). 'main' is protected, so the bump lands through that branch
@@ -221,6 +223,14 @@ version: check-app
 	[ -f package.json ] && git add package.json; [ -f package-lock.json ] && git add package-lock.json; \
 	git commit -s -m "build(release): bump version to $$new"; \
 	echo; \
+	summary="$$(xmllint --xpath 'string(/info/summary)' appinfo/info.xml 2>/dev/null)"; \
+	for f in composer.json package.json; do \
+		[ -f "$$f" ] || continue; \
+		d="$$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("description",""))' "$$f" 2>/dev/null)"; \
+		if [ -n "$$d" ] && [ "$$d" != "$$summary" ]; then \
+			echo "WARNING: the description in $$f differs from the info.xml summary - sync it or drop the field."; \
+		fi; \
+	done; \
 	echo "==> Bumped to $$new on branch $$branch and committed."; \
 	echo "==> Next: run 'make changelog' - it generates the '## [$$new]' section and prints"; \
 	echo "    the exact commit command (folded into this bump commit while it is unpushed)."; \
