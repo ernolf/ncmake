@@ -222,8 +222,9 @@ version: check-app
 	git commit -s -m "build(release): bump version to $$new"; \
 	echo; \
 	echo "==> Bumped to $$new on branch $$branch and committed."; \
-	echo "==> Next: run 'make changelog', review and extend the generated '## [$$new]' section,"; \
-	echo "    commit it on this branch, push, open a PR and merge. Then on main: git pull && make tag"
+	echo "==> Next: run 'make changelog' - it generates the '## [$$new]' section and prints"; \
+	echo "    the exact commit command (folded into this bump commit while it is unpushed)."; \
+	echo "    Then: push, open a PR, merge. Afterwards on main: git pull && make tag"
 
 # Generate the '## [X.Y.Z]' CHANGELOG section for the current info.xml version
 # from the conventional commits since the last tag (git-cliff via npx, in the
@@ -256,7 +257,15 @@ changelog: check-app
 		{ print } \
 		END { if (!done) { while ((getline line < new) > 0) print line } }' CHANGELOG.md > "$(cache_dir)/changelog_merged.md"; \
 	mv "$(cache_dir)/changelog_merged.md" CHANGELOG.md; \
-	echo "==> Inserted '## [$$ver]' and its link reference into CHANGELOG.md - review, extend if needed, then commit."
+	echo "==> Inserted '## [$$ver]' and its link reference into CHANGELOG.md."; \
+	echo "==> Review and extend it, then commit:"; \
+	if [ "$$(git log -1 --pretty=%s 2>/dev/null)" = "build(release): bump version to $$ver" ] \
+		&& [ "$$(git rev-parse HEAD 2>/dev/null)" != "$$(git rev-parse @{u} 2>/dev/null)" ]; then \
+		echo "      git add CHANGELOG.md && git commit --amend --no-edit"; \
+		echo "    which folds the changelog into the unpushed bump commit - one commit per release."; \
+	else \
+		echo "      git add CHANGELOG.md && git commit -s -m 'build(release): update changelog for $$ver'"; \
+	fi
 
 # Freeze the current HEAD as a signed release tag. Everything that belongs in the
 # release must already be committed (CHANGELOG and all content). Refuses to re-tag.
