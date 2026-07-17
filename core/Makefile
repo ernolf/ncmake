@@ -113,13 +113,16 @@ php_min     = $(shell xmllint --xpath 'string(//dependencies/php/@min-version)' 
 node_major  = $(shell python3 -c 'import json,re;print(re.search(r"[0-9]+", json.load(open("package.json"))["engines"]["node"]).group())' 2>/dev/null)
 php_image   ?= ghcr.io/nextcloud/continuous-integration-php$(php_min):latest
 node_image  ?= node:$(or $(node_major),lts)
+reuse_image ?= docker.io/fsfe/reuse:latest
 
 ifeq ($(RUNTIME),bare)
-  php_run  = sh -lc
-  node_run = sh -lc
+  php_run   = sh -lc
+  node_run  = sh -lc
+  reuse_run = reuse
 else ifeq ($(RUNTIME),none)
-  php_run  = $(no_runtime)
-  node_run = $(no_runtime)
+  php_run   = $(no_runtime)
+  node_run  = $(no_runtime)
+  reuse_run = $(no_runtime)
 else ifeq ($(RUNTIME),podman)
   container = podman run --rm -v "$(CURDIR)":/app -w /app
 else ifeq ($(RUNTIME),docker-rootless)
@@ -131,11 +134,12 @@ else
 endif
 
 ifeq ($(filter $(RUNTIME),bare none),)
-  php_run  = $(container) -e COMPOSER_HOME=/tmp/composer -e COMPOSER_ALLOW_SUPERUSER=1 $(php_image) sh -lc
-  node_run = $(container) $(node_image) sh -lc
+  php_run   = $(container) -e COMPOSER_HOME=/tmp/composer -e COMPOSER_ALLOW_SUPERUSER=1 $(php_image) sh -lc
+  node_run  = $(container) $(node_image) sh -lc
+  reuse_run = $(container) $(reuse_image)
 endif
 
-.PHONY: all version changelog tag build check-app check-build stage dist sign release rsync cp composer npm \
+.PHONY: all version changelog tag build check-app check-build stage dist sign release rsync cp composer npm reuse \
         fetch-apps \
         register publish list-releases list-releases-full list-for-author delete-release ratings \
         clean dist-clean self-update help
@@ -334,6 +338,12 @@ npm: check-app
 	@test -n "$(ARGS)" || { echo "Usage: make npm ARGS=\"<npm arguments>\"" >&2; exit 1; }
 	@echo "==> npm $(ARGS) (RUNTIME=$(RUNTIME))"
 	@$(node_run) 'npm $(ARGS)'
+
+# REUSE compliance check (https://reuse.software) with the official fsfe/reuse
+# container image; RUNTIME=bare expects the reuse tool on the host.
+reuse: check-app
+	@echo "==> reuse lint (RUNTIME=$(RUNTIME))"
+	@$(reuse_run) lint
 
 # Abort (do not ship a broken file set) when a build output is missing. Only
 # gitignored outputs are demanded: a committed js/ or vendor/ ships as-is.
@@ -656,6 +666,7 @@ help:
 	@echo "  build                Build PHP deps + frontend (auto-detected from composer.json/package.json)"
 	@echo "  composer ARGS=...    Run any composer command in the throwaway PHP container"
 	@echo "  npm ARGS=...         Run any npm command in the throwaway Node container"
+	@echo "  reuse                Run the REUSE compliance check in the fsfe/reuse container"
 	@echo "  dist                 Build the distribution tarball from the shipped file set"
 	@echo "                       → $(tarball)"
 	@echo "  sign                 Sign the tarball (base64 signature for publish / App Store)  [m]"
