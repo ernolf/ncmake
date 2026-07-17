@@ -59,8 +59,29 @@ cert_file     = $(firstword $(wildcard $(cert_dir)/$(app_id).crt $(cert_dir)/$(a
 cert_display  = $(or $(cert_file),$(cert_dir)/$(app_id).crt)
 key_file      = $(cert_dir)/$(app_id).key
 token_file    = $(cert_dir)/appstore_api-token
+# == Help palette ==
+# Real ESC bytes (not the literal \033 string) so plain `echo` in the recipes
+# passes them straight through. Colors are on when writing to a terminal and
+# off otherwise (piped/redirected output stays clean) or when NO_COLOR is set
+# (https://no-color.org). MAKE_TERMOUT is empty when stdout is not a terminal;
+# on make < 4.1 it is undefined, so colors default on there.
+ncmake_tty := $(if $(filter undefined,$(origin MAKE_TERMOUT)),1,$(MAKE_TERMOUT))
+ifeq ($(strip $(NO_COLOR)),)
+  ifneq ($(strip $(ncmake_tty)),)
+    ESC := $(shell printf '\033')
+    c0  := $(ESC)[0m
+    ch  := $(ESC)[1;36m
+    ct  := $(ESC)[32m
+    cd  := $(ESC)[2m
+    cv  := $(ESC)[33m
+    cm  := $(ESC)[35m
+    cok := $(ESC)[32m
+    cno := $(ESC)[31m
+  endif
+endif
+
 # Green check / red cross for the help listing, depending on file existence.
-mark          = $(if $(wildcard $(1)),\033[32m✓\033[0m,\033[31m✗\033[0m)
+mark          = $(if $(wildcard $(1)),$(cok)✓$(c0),$(cno)✗$(c0))
 
 # == Shipped file set (keep model) ==
 # The runtime file set is an allowlist, not an exclude list: ship these paths when
@@ -698,64 +719,64 @@ workflows:
 
 # Show available targets and required files
 help:
-	@echo "Usage: make <target>    (no target = this help)"
+	@echo "$(cd)Usage: make <target>    (no target = this help)$(c0)"
 	@echo ""
-	@echo "Release versioning (maintainer only):"
-	@echo "  version              Open a release branch with the version bump for a PR (prompts)  [m]"
-	@echo "  changelog            Generate the '## [version]' CHANGELOG section from the commits  [m]"
-	@echo "  tag                  Tag the release commit on main, signed, and push it  [m]"
+	@echo "$(ch)Release versioning (maintainer only):$(c0)"
+	@echo "  $(ct)version$(c0)              Open a release branch with the version bump for a PR (prompts)  $(cm)[m]$(c0)"
+	@echo "  $(ct)changelog$(c0)            Generate the '## [version]' CHANGELOG section from the commits  $(cm)[m]$(c0)"
+	@echo "  $(ct)tag$(c0)                  Tag the release commit on main, signed, and push it  $(cm)[m]$(c0)"
 	@echo ""
-	@echo "  Container runtime for 'version' (lockfile sync) and 'build': RUNTIME=... (now: $(RUNTIME))"
-	@echo "    podman | docker | docker-rootless | bare   (auto-detected, podman preferred)"
+	@echo "  $(cd)Container runtime for 'version' (lockfile sync) and 'build': $(c0)$(cv)RUNTIME=...$(c0)$(cd) (now: $(RUNTIME))$(c0)"
+	@echo "    $(cd)podman | docker | docker-rootless | bare   (auto-detected, podman preferred)$(c0)"
 	@echo ""
-	@echo "Build:"
-	@echo "  build                Build PHP deps + frontend (auto-detected from composer.json/package.json)"
-	@echo "  composer ARGS=...    Run any composer command in the throwaway PHP container"
-	@echo "  npm ARGS=...         Run any npm command in the throwaway Node container"
-	@echo "  reuse                Run the REUSE compliance check in the fsfe/reuse container"
-	@echo "  dist                 Build the distribution tarball from the shipped file set"
-	@echo "                       → $(tarball)"
-	@echo "  sign                 Sign the tarball (base64 signature for publish / App Store)  [m]"
-	@echo "  release              dist + sign in one step  [m]"
+	@echo "$(ch)Build:$(c0)"
+	@echo "  $(ct)build$(c0)                Build PHP deps + frontend (auto-detected from composer.json/package.json)"
+	@echo "  $(ct)composer$(c0) $(cv)ARGS=...$(c0)    Run any composer command in the throwaway PHP container"
+	@echo "  $(ct)npm$(c0) $(cv)ARGS=...$(c0)         Run any npm command in the throwaway Node container"
+	@echo "  $(ct)reuse$(c0)                Run the REUSE compliance check in the fsfe/reuse container"
+	@echo "  $(ct)dist$(c0)                 Build the distribution tarball from the shipped file set"
+	@echo "                       $(cd)→ $(tarball)$(c0)"
+	@echo "  $(ct)sign$(c0)                 Sign the tarball (base64 signature for publish / App Store)  $(cm)[m]$(c0)"
+	@echo "  $(ct)release$(c0)              dist + sign in one step  $(cm)[m]$(c0)"
 	@echo ""
-	@echo "Local deploy:"
-	@echo "  rsync                Deploy the shipped file set into an apps/ dir via rsync (no tarball)."
-	@echo "                       Needs TARGET=<apps-dir|user@host:apps-dir>; run 'make build' first."
-	@echo "                       OCC=1 adds occ app:disable -> chown -> occ app:enable around it."
-	@echo "  cp                   Deploy the shipped file set into a RUNNING container's apps/ dir"
-	@echo "                       (e.g. Nextcloud All-in-One). Needs TARGET=<container>:<apps-dir>;"
-	@echo "                       OCC=1 as above, inside the container; ENGINE=docker|podman (now: $(ENGINE))."
+	@echo "$(ch)Local deploy:$(c0)"
+	@echo "  $(ct)rsync$(c0)                Deploy the shipped file set into an apps/ dir via rsync (no tarball)."
+	@echo "                       Needs $(cv)TARGET=<apps-dir|user@host:apps-dir>$(c0); run 'make build' first."
+	@echo "                       $(cv)OCC=1$(c0) adds occ app:disable -> chown -> occ app:enable around it."
+	@echo "  $(ct)cp$(c0)                   Deploy the shipped file set into a RUNNING container's apps/ dir"
+	@echo "                       (e.g. Nextcloud All-in-One). Needs $(cv)TARGET=<container>:<apps-dir>$(c0);"
+	@echo "                       $(cv)OCC=1$(c0) as above, inside the container; $(cv)ENGINE=docker|podman$(c0) (now: $(ENGINE))."
 	@echo ""
-	@echo "  Shipped file set: allowlist of standard app paths, existence-filtered."
-	@echo "  Optional per-app tuning: .nextcloudignore (excludes), ncmake.mk (variable overrides)."
+	@echo "  $(cd)Shipped file set: allowlist of standard app paths, existence-filtered.$(c0)"
+	@echo "  $(cd)Optional per-app tuning: .nextcloudignore (excludes), ncmake.mk (variable overrides).$(c0)"
 	@echo ""
-	@echo "App Store  (cert dir: $(cert_dir)$(cert_dir_note))"
+	@echo "$(ch)App Store$(c0)  $(cd)(cert dir: $(cert_dir)$(cert_dir_note))$(c0)"
 	@printf "           %b token: %s\n" "$(call mark,$(token_file))" "$(token_file)"
 	@printf "           %b cert:  %s\n" "$(call mark,$(cert_file))" "$(cert_display)"
 	@printf "           %b key:   %s\n" "$(call mark,$(key_file))" "$(key_file)"
 	@echo ""
-	@echo "  csr                  Generate the signing key + certificate request (one-time).  [m]"
-	@echo "  register             Register app on the App Store (one-time).  [m]"
+	@echo "  $(ct)csr$(c0)                  Generate the signing key + certificate request (one-time).  $(cm)[m]$(c0)"
+	@echo "  $(ct)register$(c0)             Register app on the App Store (one-time).  $(cm)[m]$(c0)"
 	@echo "                       Needs the certificate (.crt or .cert) and .key."
-	@echo "  publish              Publish a release: downloads the asset from the URL and signs it.  [m]"
-	@echo "                       Prompts for the URL; GH=1 pre-fills the standard GitHub URL to confirm."
-	@echo "  list-releases        List published releases (compact JSON)."
-	@echo "  list-releases-full   Full App Store entry as JSON."
-	@echo "  list-for-author      Find all apps by author (prompts for name)."
-	@echo "  delete-release       Delete a release (shows list, prompts for version).  [m]"
-	@echo "  ratings              Show app ratings from the App Store."
+	@echo "  $(ct)publish$(c0)              Publish a release: downloads the asset from the URL and signs it.  $(cm)[m]$(c0)"
+	@echo "                       Prompts for the URL; $(cv)GH=1$(c0) pre-fills the standard GitHub URL to confirm."
+	@echo "  $(ct)list-releases$(c0)        List published releases (compact JSON)."
+	@echo "  $(ct)list-releases-full$(c0)   Full App Store entry as JSON."
+	@echo "  $(ct)list-for-author$(c0)      Find all apps by author (prompts for name)."
+	@echo "  $(ct)delete-release$(c0)       Delete a release (shows list, prompts for version).  $(cm)[m]$(c0)"
+	@echo "  $(ct)ratings$(c0)              Show app ratings from the App Store."
 	@echo ""
-	@echo "  apps.json cache: $(apps_cache)"
-	@echo "           (ETag: $(apps_etag))"
+	@echo "  $(cd)apps.json cache: $(apps_cache)$(c0)"
+	@echo "  $(cd)         (ETag: $(apps_etag))$(c0)"
 	@echo ""
-	@echo "Utility:"
-	@echo "  clean                Remove build/ directory (incl. stage and cache)"
-	@echo "  dist-clean           Remove ALL git-ignored build outputs (vendor, node_modules, js, …)"
-	@echo "  self-update          Fetch the newest ncmake Makefile"
-	@echo "  workflows            Install/update the ncmake CI workflow files in .github/workflows/"
-	@echo "  help                 Show this help"
+	@echo "$(ch)Utility:$(c0)"
+	@echo "  $(ct)clean$(c0)                Remove build/ directory (incl. stage and cache)"
+	@echo "  $(ct)dist-clean$(c0)           Remove ALL git-ignored build outputs (vendor, node_modules, js, …)"
+	@echo "  $(ct)self-update$(c0)          Fetch the newest ncmake Makefile"
+	@echo "  $(ct)workflows$(c0)            Install/update the ncmake CI workflow files in .github/workflows/"
+	@echo "  $(ct)help$(c0)                 Show this help"
 	@echo ""
-	@echo "  [m] = maintainer only (needs repo write access and/or the signing key/cert)"
+	@echo "  $(cm)[m]$(c0) $(cd)= maintainer only (needs repo write access and/or the signing key/cert)$(c0)"
 	@echo ""
-	@echo "Current: $(if $(app_id),$(app_id) v$(version),(not inside a Nextcloud app))"
-	@echo "ncmake:  $(this_ncmake)"
+	@echo "$(cd)Current:$(c0) $(if $(app_id),$(cv)$(app_id) v$(version)$(c0),$(cd)(not inside a Nextcloud app)$(c0))"
+	@echo "$(cd)ncmake:  $(this_ncmake)$(c0)"
