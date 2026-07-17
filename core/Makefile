@@ -31,8 +31,10 @@ endif
 
 # App id and version come from appinfo/info.xml - the checkout directory name is
 # NOT the app id (they often differ), so it is never used for anything.
-app_id        = $(shell xmllint --xpath 'string(/info/id)' appinfo/info.xml 2>/dev/null)
-version       = $(shell xmllint --xpath 'string(/info/version)' appinfo/info.xml 2>/dev/null)
+# xmllint is preferred but not always present (e.g. minimal CI runners); fall
+# back to grep so 'make' works on any host without libxml2-utils.
+app_id        = $(shell xmllint --xpath 'string(/info/id)' appinfo/info.xml 2>/dev/null || grep -oPm1 '(?<=<id>)[^<]+' appinfo/info.xml 2>/dev/null)
+version       = $(shell xmllint --xpath 'string(/info/version)' appinfo/info.xml 2>/dev/null || grep -oPm1 '(?<=<version>)[^<]+' appinfo/info.xml 2>/dev/null)
 dist_dir      = $(CURDIR)/build/artifacts/dist
 stage_dir     = $(CURDIR)/build/stage
 cache_dir     = $(CURDIR)/build/cache
@@ -109,7 +111,7 @@ RUNTIME     ?= $(default_runtime)
 no_runtime   = sh -c 'echo "ERROR: no container runtime found (podman/docker). Install podman: apt-get install podman, or use RUNTIME=bare to build on the host." >&2; exit 1'
 # Image tags are derived from the declared support range, never hardcoded: the PHP CI
 # image from info.xml's min-version, the Node image from package.json's engines.node.
-php_min     = $(shell xmllint --xpath 'string(//dependencies/php/@min-version)' appinfo/info.xml 2>/dev/null)
+php_min     = $(shell xmllint --xpath 'string(//dependencies/php/@min-version)' appinfo/info.xml 2>/dev/null || grep -oPm1 '(?<=<php min-version=")[^"]+' appinfo/info.xml 2>/dev/null)
 node_major  = $(shell python3 -c 'import json,re;print(re.search(r"[0-9]+", json.load(open("package.json"))["engines"]["node"]).group())' 2>/dev/null)
 php_image   ?= ghcr.io/nextcloud/continuous-integration-php$(php_min):latest
 node_image  ?= node:$(or $(node_major),lts)
