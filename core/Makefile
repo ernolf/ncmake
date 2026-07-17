@@ -234,7 +234,9 @@ version: check-app
 	echo "==> Bumped to $$new on branch $$branch and committed."; \
 	echo "==> Next: run 'make changelog' - it generates the '## [$$new]' section and prints"; \
 	echo "    the exact commit command (folded into this bump commit while it is unpushed)."; \
-	echo "    Then: push, open a PR, merge. Afterwards on main: git pull && make tag"
+	echo "    Then:"; \
+	echo "      git push -u origin $$branch"; \
+	echo "    Open a PR and merge it; afterwards on main: git pull && make tag"
 
 # Generate the '## [X.Y.Z]' CHANGELOG section for the current info.xml version
 # from the conventional commits since the last tag (git-cliff via npx, in the
@@ -273,6 +275,9 @@ changelog: check-app
 		&& [ "$$(git rev-parse HEAD 2>/dev/null)" != "$$(git rev-parse @{u} 2>/dev/null)" ]; then \
 		echo "      git add CHANGELOG.md && git commit --amend --no-edit"; \
 		echo "    which folds the changelog into the unpushed bump commit - one commit per release."; \
+		echo "    Then:"; \
+		echo "      git push -u origin $$(git rev-parse --abbrev-ref HEAD)"; \
+		echo "    Open a PR and merge it; afterwards on main: git pull && make tag"; \
 	else \
 		echo "      git add CHANGELOG.md && git commit -s -m 'build(release): update changelog for $$ver'"; \
 	fi
