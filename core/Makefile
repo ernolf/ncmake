@@ -141,7 +141,7 @@ endif
 
 .PHONY: all version changelog tag build check-app check-build stage dist sign release rsync cp composer npm reuse \
         fetch-apps \
-        register publish list-releases list-releases-full list-for-author delete-release ratings \
+        csr register publish list-releases list-releases-full list-for-author delete-release ratings \
         clean dist-clean self-update help
 
 # == Changelog configuration (git-cliff) ==
@@ -502,6 +502,28 @@ fetch-apps:
 
 # == App Store ==
 
+# Generate the signing key and certificate signing request (one-time setup,
+# first step of the store onboarding). Prints the CSR for the pull request to
+# https://github.com/nextcloud/app-certificate-requests; the certificate issued
+# there goes into $(cert_dir) as $(app_id).crt, then 'make register' follows.
+# Refuses to overwrite an existing key or CSR.
+csr: check-app
+	@mkdir -p "$(cert_dir)"
+	@test ! -f "$(key_file)" || { echo "ERROR: $(key_file) already exists - refusing to overwrite." >&2; exit 1; }
+	@csr="$(cert_dir)/$(app_id).csr"; \
+	test ! -f "$$csr" || { echo "ERROR: $$csr already exists - refusing to overwrite." >&2; exit 1; }; \
+	echo "Generating key + CSR for '$(app_id)' in $(cert_dir)..."; \
+	openssl req -nodes -newkey rsa:4096 -sha256 -keyout "$(key_file)" -out "$$csr" -subj "/CN=$(app_id)" || exit 1; \
+	chmod 600 "$(key_file)"; \
+	echo; \
+	echo "CSR - submit as $(app_id)/$(app_id).csr in a PR to"; \
+	echo "https://github.com/nextcloud/app-certificate-requests:"; \
+	echo; \
+	cat "$$csr"; \
+	echo; \
+	echo "After the PR is merged, save the issued certificate as $(cert_display)"; \
+	echo "and run 'make register'."
+
 # Register the app on the App Store (one-time setup).
 # Requires the app certificate (.crt or .cert) and .key in $(cert_dir).
 register: check-app
@@ -688,6 +710,7 @@ help:
 	@printf "           %b cert:  %s\n" "$(call mark,$(cert_file))" "$(cert_display)"
 	@printf "           %b key:   %s\n" "$(call mark,$(key_file))" "$(key_file)"
 	@echo ""
+	@echo "  csr                  Generate the signing key + certificate request (one-time).  [m]"
 	@echo "  register             Register app on the App Store (one-time).  [m]"
 	@echo "                       Needs the certificate (.crt or .cert) and .key."
 	@echo "  publish              Publish a release: downloads the asset from the URL and signs it.  [m]"
