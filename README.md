@@ -16,6 +16,7 @@ Everything is derived from the app itself, so there is nothing to configure for 
 - [Packaging: the shipped file set](#packaging-the-shipped-file-set)
 - [Deploying to a test instance](#deploying-to-a-test-instance)
 - [Releasing](#releasing)
+- [The release workflow](#the-release-workflow)
 - [App Store management](#app-store-management)
 - [Per-app tuning](#per-app-tuning)
 - [Variables](#variables)
@@ -215,6 +216,22 @@ flowchart LR
 **`make tag`** (back on `main`, after the merge) refuses to re-tag, refuses when `CHANGELOG.md` has no `## [X.Y.Z]` section, shows a fat reminder that a tag freezes the current commit, then creates and pushes the **signed** `vX.Y.Z` tag after your confirmation.
 
 `make dist` builds the tarball to attach to the GitHub release, `make sign` prints its base64 signature, `make release` does both in one step.
+
+## The release workflow
+
+ncmake ships one GitHub Actions workflow that builds the release tarball in CI. It carries no app-specific data — the shipped file set comes entirely from ncmake (keep model + `.nextcloudignore`) — so it is byte-identical across all ncmake apps. Install it once, into `.github/workflows/`:
+
+```sh
+curl -fL --create-dirs -o .github/workflows/release.yml \
+  https://raw.githubusercontent.com/ernolf/ncmake/main/workflows/release.yml
+git add .github/workflows/release.yml
+```
+
+It triggers on `release: published` (attaches `<app_id>-<version>.tar.gz` to the release) and on `workflow_dispatch` (produces the same tarball as a downloadable artifact for inspection, without publishing). The whole build is `make build && make dist`; the tarball is located by glob, so nothing in the file names the app.
+
+`make` runs on the runner host, not in a job container: `ubuntu-latest` already carries podman (which ncmake uses for the build containers) plus git, curl, rsync, tar and python3, so the workflow needs no `setup-*` steps and no toolchain of its own. `contents: write` is the only permission, for the release upload; no secrets beyond the automatic `GITHUB_TOKEN`.
+
+Like the bootstrap stub, the file carries ncmake's MIT header and is committed verbatim; the `LICENSES/MIT.txt` you already have for the stub covers it for REUSE.
 
 ## App Store management
 

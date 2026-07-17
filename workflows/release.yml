@@ -1,0 +1,50 @@
+# SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
+# SPDX-License-Identifier: MIT
+#
+# ncmake release workflow - https://github.com/ernolf/ncmake
+#
+# Commit this file verbatim as .github/workflows/release.yml. It carries no
+# app-specific data: the shipped file set comes entirely from ncmake (keep model
+# + .nextcloudignore), so this workflow is identical across all ncmake apps.
+
+name: Release tarball
+
+# Builds the install tarball with ncmake and, when a release is published,
+# attaches it as a release asset. workflow_dispatch produces a downloadable
+# artifact for testing without publishing a release. No secrets, no App Store
+# upload: the store later only receives the download URL and a signature.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  tarball:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Build the release tarball
+        run: make build && make dist
+
+      - name: Locate the tarball
+        run: echo "TARBALL=$(ls build/artifacts/dist/*.tar.gz)" >> "$GITHUB_ENV"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-tarball
+          path: build/artifacts/dist/*.tar.gz
+
+      - name: Attach to release
+        if: github.event_name == 'release'
+        run: gh release upload "${GITHUB_REF_NAME}" "${TARBALL}" --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
