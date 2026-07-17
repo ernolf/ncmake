@@ -37,6 +37,8 @@ git add Makefile
 
 The stub is a dozen lines that never change. It fetches the real Makefile into a per-machine cache and includes it from there. Every developer who clones your app and runs `make` automatically gets the current ncmake, on every machine, for every app, from one shared cache.
 
+The stub is the only thing you install by hand. Everything else ncmake contributes to your repository — currently the CI workflow (see [The release workflow](#the-release-workflow)) — is installed and updated through `make` targets once the stub is in place.
+
 **What lands in your repository: only the stub.** The stub file you committed stays byte-identical forever; the fetched Makefile lives in `~/.cache/ncmake/`, outside of every project. Running `make` creates or modifies nothing in your checkout (apart from the usual build outputs such as `build/`, `js/` and `vendor/`, which belong in your `.gitignore` anyway, as in every Nextcloud app). `git status` stays clean; there is nothing extra to ignore.
 
 **How the cache stays current.** At most once per day (`NCMAKE_TTL_MIN`, default 1440 minutes) the cached Makefile checks upstream with a conditional GET (ETag): unchanged or offline keeps the cache, a new version replaces it and is used from the next run on. `make self-update` forces a refresh at any time.
@@ -219,15 +221,16 @@ flowchart LR
 
 ## The release workflow
 
-ncmake ships one GitHub Actions workflow that builds the release tarball in CI. It carries no app-specific data — the shipped file set comes entirely from ncmake (keep model + `.nextcloudignore`) — so it is byte-identical across all ncmake apps. Install it once, into `.github/workflows/`:
+ncmake ships one GitHub Actions workflow that builds the release tarball in CI. It carries no app-specific data — the shipped file set comes entirely from ncmake (keep model + `.nextcloudignore`) — so it is byte-identical across all ncmake apps. Once the bootstrap stub is in place, install (and later update) it with:
 
 ```sh
-curl -fL --create-dirs -o .github/workflows/release.yml \
-  https://raw.githubusercontent.com/ernolf/ncmake/main/workflows/release.yml
-git add .github/workflows/release.yml
+make workflows
+git add .github/workflows/
 ```
 
-It triggers on `release: published` (attaches `<app_id>-<version>.tar.gz` to the release) and on `workflow_dispatch` (produces the same tarball as a downloadable artifact for inspection, without publishing). The whole build is `make build && make dist`; the tarball is located by glob, so nothing in the file names the app.
+`make workflows` fetches every workflow ncmake provides into `.github/workflows/`, reporting each as installed, updated or up to date; run it again any time to pick up new versions. `NCMAKE_REF` selects the ncmake version, as everywhere. The manual equivalent, if you prefer, is a plain `curl -fL --create-dirs -o .github/workflows/release.yml https://raw.githubusercontent.com/ernolf/ncmake/main/workflows/release.yml`.
+
+The workflow triggers on `release: published` (attaches `<app_id>-<version>.tar.gz` to the release) and on `workflow_dispatch` (produces the same tarball as a downloadable artifact for inspection, without publishing). The whole build is `make build && make dist`; the tarball is located by glob, so nothing in the file names the app.
 
 `make` runs on the runner host, not in a job container: `ubuntu-latest` already carries podman (which ncmake uses for the build containers) plus git, curl, rsync, tar and python3, so the workflow needs no `setup-*` steps and no toolchain of its own. `contents: write` is the only permission, for the release upload; no secrets beyond the automatic `GITHUB_TOKEN`.
 
@@ -307,7 +310,7 @@ Set on the command line (`make build RUNTIME=bare`), in the environment, or pers
 | Build | `build`, `dist`, `sign`, `release`, `composer ARGS=...`, `npm ARGS=...` |
 | Local deploy | `rsync TARGET=...`, `cp TARGET=...` |
 | App Store | `register`, `publish`, `list-releases`, `list-releases-full`, `list-for-author`, `delete-release`, `ratings` |
-| Utility | `clean`, `dist-clean`, `self-update`, `help` |
+| Utility | `clean`, `dist-clean`, `self-update`, `workflows`, `help` |
 
 Targets marked `[m]` in the help are maintainer-only: they need repository write access and/or the App Store signing key. Everything else works for anyone who clones the app.
 

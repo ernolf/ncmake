@@ -18,7 +18,8 @@
 # GET (ETag); offline or unchanged keeps the cache. A committed copy never
 # modifies itself; use 'make self-update' explicitly.
 this_ncmake    := $(abspath $(lastword $(MAKEFILE_LIST)))
-ncmake_url      = https://raw.githubusercontent.com/ernolf/ncmake/$(or $(NCMAKE_REF),main)/core/Makefile
+ncmake_raw      = https://raw.githubusercontent.com/ernolf/ncmake/$(or $(NCMAKE_REF),main)
+ncmake_url      = $(ncmake_raw)/core/Makefile
 NCMAKE_TTL_MIN ?= 1440
 ifneq ($(NCMAKE),)
   ifneq ($(shell find "$(NCMAKE)" -mmin +$(NCMAKE_TTL_MIN) 2>/dev/null),)
@@ -144,7 +145,7 @@ endif
 .PHONY: all version changelog tag build check-app check-build stage dist sign release rsync cp composer npm reuse \
         fetch-apps \
         csr register publish list-releases list-releases-full list-for-author delete-release ratings \
-        clean dist-clean self-update help
+        clean dist-clean self-update workflows help
 
 # == Changelog configuration (git-cliff) ==
 # Keep a Changelog sections from Conventional Commits, user-visible changes only:
@@ -674,6 +675,27 @@ dist-clean: clean
 self-update:
 	@curl -fsSL "$(ncmake_url)" -o "$(this_ncmake)" && rm -f "$(this_ncmake).etag" && echo "ncmake updated: $(this_ncmake)"
 
+# Install or update the ncmake-provided GitHub Actions workflow files into
+# .github/workflows/. They carry no app-specific data and are committed verbatim,
+# so this just fetches the current versions (NCMAKE_REF selects which); run it
+# again any time to pick up changes. Only the bootstrap stub is installed by hand;
+# everything else ncmake ships lands through here.
+ncmake_workflows ?= release.yml
+workflows:
+	@mkdir -p .github/workflows
+	@for wf in $(ncmake_workflows); do \
+		tmp="$$(mktemp)"; \
+		if ! curl -fsSL "$(ncmake_raw)/workflows/$$wf" -o "$$tmp"; then \
+			echo "ERROR: could not fetch $$wf from ncmake (check your network / NCMAKE_REF)" >&2; \
+			rm -f "$$tmp"; exit 1; \
+		fi; \
+		dst=".github/workflows/$$wf"; \
+		if [ ! -f "$$dst" ]; then mv "$$tmp" "$$dst"; echo "installed: $$dst"; \
+		elif cmp -s "$$tmp" "$$dst"; then rm -f "$$tmp"; echo "up to date: $$dst"; \
+		else mv "$$tmp" "$$dst"; echo "updated:   $$dst"; fi; \
+	done
+	@echo "Review and commit: git add .github/workflows/"
+
 # Show available targets and required files
 help:
 	@echo "Usage: make <target>    (no target = this help)"
@@ -730,6 +752,7 @@ help:
 	@echo "  clean                Remove build/ directory (incl. stage and cache)"
 	@echo "  dist-clean           Remove ALL git-ignored build outputs (vendor, node_modules, js, …)"
 	@echo "  self-update          Fetch the newest ncmake Makefile"
+	@echo "  workflows            Install/update the ncmake CI workflow files in .github/workflows/"
 	@echo "  help                 Show this help"
 	@echo ""
 	@echo "  [m] = maintainer only (needs repo write access and/or the signing key/cert)"
