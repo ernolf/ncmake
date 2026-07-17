@@ -302,7 +302,7 @@ Set on the command line (`make build RUNTIME=bare`), in the environment, or pers
 
 ## Target reference
 
-`make` without a target prints the annotated help, including the detected app, version and certificate status.
+`make` without a target prints the annotated, colorized help, including the detected app, version and certificate status. Colors turn off automatically when stdout is not a terminal and honor `NO_COLOR`. `make help-<target>` (for example `make help-rsync`) prints extended help for a single target — options and worked examples where they help.
 
 | Area | Targets |
 |---|---|

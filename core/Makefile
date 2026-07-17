@@ -717,6 +717,181 @@ workflows:
 	done
 	@echo "Review and commit: git add .github/workflows/"
 
+# == Per-target help ==
+# `make help-<target>` prints the extended help below (examples, options); a
+# target without one falls back to a pointer to `make help`. Printed via $(info)
+# so multi-line text needs no shell quoting.
+define help_build
+make build
+
+Builds the PHP dependencies and the frontend, each in a throwaway container, so
+the host needs neither PHP nor Node. What runs is detected from your files:
+  composer install --no-dev    when composer.json declares runtime requirements
+  npm ci && npm run build      when package.json has a build script
+A side that does not apply is skipped; override in ncmake.mk (php_build_cmd,
+node_build_cmd). RUNTIME= selects the container (podman, docker, docker-rootless,
+bare).
+
+  make build
+  make dist-clean && make build     reproducible from-scratch build
+endef
+
+define help_composer
+make composer ARGS="<composer arguments>"
+
+Runs any composer command in the throwaway PHP container (the image make build
+uses), so no composer or PHP is needed on the host. The PHP version is the
+minimum declared in info.xml.
+
+Examples:
+  make composer ARGS=install               all deps including dev tools
+  make composer ARGS="install --no-dev"    runtime deps only
+  make composer ARGS="cs:check"            run a composer script
+  make composer ARGS="require --dev vimeo/psalm"
+  make composer ARGS=update                refresh composer.lock
+endef
+
+define help_npm
+make npm ARGS="<npm arguments>"
+
+Runs any npm command in the throwaway Node container; no Node on the host. The
+image comes from engines.node in package.json.
+
+Examples:
+  make npm ARGS=ci                   install from package-lock.json
+  make npm ARGS="run build"          build the frontend into js/
+  make npm ARGS="run dev"            watch and rebuild during development
+  make npm ARGS="run test"           run the frontend tests
+  make npm ARGS="install -D vitest"  add a dev dependency
+endef
+
+define help_reuse
+make reuse
+
+Runs the REUSE compliance check (reuse.software) in the fsfe/reuse container:
+every file must carry a license, via an SPDX header or a REUSE.toml annotation.
+RUNTIME=bare expects the reuse tool on the host.
+endef
+
+define help_dist
+make dist
+
+Materializes the shipped file set (keep model + .nextcloudignore) into
+build/stage/<app_id>/ and packs build/artifacts/dist/<app_id>-<version>.tar.gz.
+The same staged tree is what make rsync and make cp deploy, so a test deploy is
+byte-for-byte what a release ships. Run make build first if the app has build
+outputs (vendor/, js/).
+endef
+
+define help_rsync
+make rsync TARGET=<apps-dir> [OCC=1]
+
+Deploys the shipped file set into a Nextcloud apps/ directory with rsync
+(--delete, so removed files disappear too). Run make build first. TARGET is the
+apps/ PARENT directory; the app subdir is appended automatically. It may be local
+or remote:
+  make rsync TARGET=/var/www/nextcloud/apps
+  make rsync TARGET=deploy@host:/var/www/nextcloud/apps
+
+OCC=1 wraps the sync into occ app:disable, chown to web_user, occ app:enable, so
+info.xml is re-read and migrations run:
+  make build && make rsync TARGET=/var/www/nextcloud/apps OCC=1
+
+web_user defaults to www-data. Without OCC=1 only the rsync happens and the
+finishing commands are printed for copy and paste.
+endef
+
+define help_cp
+make cp TARGET=<container>:<apps-dir> [OCC=1]
+
+Deploys the shipped file set into a RUNNING container whose filesystem rsync
+cannot reach from outside, e.g. Nextcloud All-in-One (docker cp syntax; the app
+subdir is appended and replaced as a whole).
+
+  make build && make cp TARGET=nextcloud-aio-nextcloud:/var/www/html/custom_apps OCC=1
+
+ENGINE=docker|podman picks the container CLI, independent of RUNTIME (the build
+may use podman while the instance runs under docker). OCC=1 runs the full
+disable/chown/enable cycle inside the container.
+endef
+
+define help_version
+make version    (maintainer, on main)
+
+Prompts for the new version, validates it is greater than the latest tag,
+branches off into ncmake/release/X.Y.Z and commits the bump there (info.xml,
+composer.json/package.json and the re-synced lockfiles). Then run make changelog,
+push the branch and open a PR. RUNTIME= selects the container for the lockfile
+sync.
+endef
+
+define help_changelog
+make changelog    (maintainer, on the release branch)
+
+Generates the "## [X.Y.Z]" CHANGELOG section from the conventional commits since
+the last tag (feat to Added, fix to Fixed, perf to Changed; build/ci/test/chore/
+docs/refactor/style, merges and Transifex bot commits are skipped) and inserts it
+with its link reference. Prints the exact commit command: while the version bump
+is still unpushed it folds in via git commit --amend --no-edit (one commit per
+release). Rerunning is safe; an app-provided cliff.toml overrides the built-in
+config.
+endef
+
+define help_tag
+make tag    (maintainer, on main after the merge)
+
+Refuses to re-tag, refuses when CHANGELOG.md has no "## [X.Y.Z]" section, then
+creates and pushes the signed vX.Y.Z tag after confirmation. Publishing the
+release triggers the release workflow, which attaches the tarball asset.
+endef
+
+define help_csr
+make csr    (maintainer, one-time)
+
+Generates the signing key and certificate request for the App Store. Writes
+<app_id>.key (chmod 600) and prints the CSR to submit as <app_id>/<app_id>.csr in
+a PR to github.com/nextcloud/app-certificate-requests. Refuses to overwrite an
+existing key or CSR. After the PR is merged, save the issued certificate as
+<app_id>.crt in the cert dir and run make register.
+endef
+
+define help_register
+make register    (maintainer, one-time)
+
+Registers the app id and certificate on the App Store. Needs <app_id>.crt (or
+.cert), <app_id>.key and appstore_api-token in the cert dir (make help shows
+their status). Run make csr first if you have no certificate yet.
+endef
+
+define help_publish
+make publish [GH=1] [URL=...]    (maintainer)
+
+Submits a release to the App Store: downloads the tarball from the given URL,
+signs exactly those bytes and posts the URL plus signature. Prompts for the URL;
+GH=1 pre-fills the standard GitHub release asset URL to confirm, URL= sets it
+directly. A GitHub asset uses gh when available, so private repos work.
+endef
+
+define help_workflows
+make workflows
+
+Installs or updates the GitHub Actions workflow files ncmake provides into
+.github/workflows/, reporting each as installed, updated or up to date. Run it
+again any time to pick up new versions; NCMAKE_REF selects the ncmake version.
+Only the bootstrap stub is installed by hand; everything else lands through here.
+endef
+
+define help_self-update
+make self-update
+
+Fetches the newest ncmake Makefile over the current one (the per-machine cache in
+stub mode, the committed copy otherwise) and drops the ETag so the next run
+revalidates.
+endef
+
+help-%:
+	@:$(info $(or $(help_$*),No extended help for "$*". Run "make help" for the target list and "make help-<target>" for another target.))
+
 # Show available targets and required files
 help:
 	@echo "$(cd)Usage: make <target>    (no target = this help)$(c0)"
@@ -777,6 +952,8 @@ help:
 	@echo "  $(ct)help$(c0)                 Show this help"
 	@echo ""
 	@echo "  $(cm)[m]$(c0) $(cd)= maintainer only (needs repo write access and/or the signing key/cert)$(c0)"
+	@echo ""
+	@echo "  $(cd)Details on one target:$(c0) $(ct)make help-<target>$(c0)   $(cd)(e.g. make help-rsync)$(c0)"
 	@echo ""
 	@echo "$(cd)Current:$(c0) $(if $(app_id),$(cv)$(app_id) v$(version)$(c0),$(cd)(not inside a Nextcloud app)$(c0))"
 	@echo "$(cd)ncmake:  $(this_ncmake)$(c0)"
