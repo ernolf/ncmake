@@ -8,24 +8,27 @@ The Swiss Army knife for Nextcloud app development: one generic `Makefile` for b
 
 Everything is derived from the app itself, so there is nothing to configure for a standard app: drop it in, run `make`, done. The package managers run in throwaway containers, so the host needs neither PHP nor Node.
 
-- [Installation](#installation)
-- [What happens when you run make](#what-happens-when-you-run-make)
-- [How ncmake understands your app](#how-ncmake-understands-your-app)
-- [The container runtime](#the-container-runtime)
-- [Building](#building)
-- [Packaging: the shipped file set](#packaging-the-shipped-file-set)
-- [Deploying to a test instance](#deploying-to-a-test-instance)
-- [Releasing](#releasing)
-- [The release workflow](#the-release-workflow)
-- [The Installation section for your app's README](#the-installation-section-for-your-apps-readme)
-- [App Store management](#app-store-management)
-- [Per-app tuning](#per-app-tuning)
-- [Variables](#variables)
-- [Target reference](#target-reference)
-- [Requirements](#requirements)
-- [Show that your app uses ncmake](#show-that-your-app-uses-ncmake)
+> [!TIP]
+> **TL;DR** — Commit the [bootstrap stub](#-installation) as your app's `Makefile`, then `make` gives you build, packaging, test-deploy, release and App Store targets — all in throwaway containers, so no PHP or Node on your host. `make` alone prints a colorized, annotated help; `make help-<target>` explains one target in depth.
 
-## Installation
+- [Installation](#-installation)
+- [What happens when you run make](#-what-happens-when-you-run-make)
+- [How ncmake understands your app](#-how-ncmake-understands-your-app)
+- [The container runtime](#-the-container-runtime)
+- [Building](#-building)
+- [Packaging: the shipped file set](#-packaging-the-shipped-file-set)
+- [Deploying to a test instance](#-deploying-to-a-test-instance)
+- [Releasing](#-releasing)
+- [The release workflow](#-the-release-workflow)
+- [The Installation section for your app's README](#-the-installation-section-for-your-apps-readme)
+- [App Store management](#-app-store-management)
+- [Per-app tuning](#-per-app-tuning)
+- [Variables](#-variables)
+- [Target reference](#-target-reference)
+- [Requirements](#-requirements)
+- [Show that your app uses ncmake](#-show-that-your-app-uses-ncmake)
+
+## 🧩 Installation
 
 ### The bootstrap stub (recommended)
 
@@ -38,9 +41,10 @@ git add Makefile
 
 The stub is a dozen lines that never change. It fetches the real Makefile into a per-machine cache and includes it from there. Every developer who clones your app and runs `make` automatically gets the current ncmake, on every machine, for every app, from one shared cache.
 
-The stub is the only thing you install by hand. Everything else ncmake contributes to your repository — currently the CI workflow (see [The release workflow](#the-release-workflow)) — is installed and updated through `make` targets once the stub is in place.
+The stub is the only thing you install by hand. Everything else ncmake contributes to your repository — currently the CI workflow (see [The release workflow](#-the-release-workflow)) — is installed and updated through `make` targets once the stub is in place.
 
-**What lands in your repository: only the stub.** The stub file you committed stays byte-identical forever; the fetched Makefile lives in `~/.cache/ncmake/`, outside of every project. Running `make` creates or modifies nothing in your checkout (apart from the usual build outputs such as `build/`, `js/` and `vendor/`, which belong in your `.gitignore` anyway, as in every Nextcloud app). `git status` stays clean; there is nothing extra to ignore.
+> [!IMPORTANT]
+> **Only the stub lands in your repository.** The stub file you committed stays byte-identical forever; the fetched Makefile lives in `~/.cache/ncmake/`, outside of every project. Running `make` creates or modifies nothing in your checkout (apart from the usual build outputs such as `build/`, `js/` and `vendor/`, which belong in your `.gitignore` anyway, as in every Nextcloud app). `git status` stays clean; there is nothing extra to ignore.
 
 **How the cache stays current.** At most once per day (`NCMAKE_TTL_MIN`, default 1440 minutes) the cached Makefile checks upstream with a conditional GET (ETag): unchanged or offline keeps the cache, a new version replaces it and is used from the next run on. `make self-update` forces a refresh at any time.
 
@@ -60,7 +64,7 @@ curl -fLo Makefile https://raw.githubusercontent.com/ernolf/ncmake/main/core/Mak
 
 A committed copy never modifies itself. `make self-update` downloads the newest version over it; review the diff and commit it like any other change.
 
-## What happens when you run make
+## 🔍 What happens when you run make
 
 ```mermaid
 flowchart TD
@@ -79,7 +83,7 @@ flowchart TD
 
 The first `make` after a fresh `git clone` needs network once (to fill the cache); after that everything works offline.
 
-## How ncmake understands your app
+## 🧠 How ncmake understands your app
 
 Nothing is configured twice, everything is read from files your app has anyway:
 
@@ -97,7 +101,7 @@ The `.gitignore` line deserves a word: when `js/` is gitignored, it is a build o
 
 The tarball and the deployed directory are always named after the **app id**, regardless of what your checkout directory is called.
 
-## The container runtime
+## 🐳 The container runtime
 
 `composer` and `npm` never run on your host by default. Each invocation starts a throwaway container (`--rm`), does its work in your bind-mounted checkout and disappears. Your host needs no PHP, no Node, no version juggling, and you can build against exactly the PHP the app declares as its minimum.
 
@@ -110,11 +114,12 @@ The runtime is auto-detected (podman preferred, then docker) and can be chosen p
 | `docker-rootless` | rootless docker | |
 | `bare` | no container | composer and npm must be on the PATH |
 
-The images are derived, never hardcoded: PHP runs in `ghcr.io/nextcloud/continuous-integration-php<min>` (the same images the Nextcloud CI uses, with all required extensions), Node in `node:<major>` from your `engines.node`. Both can be overridden (see [Variables](#variables)).
+The images are derived, never hardcoded: PHP runs in `ghcr.io/nextcloud/continuous-integration-php<min>` (the same images the Nextcloud CI uses, with all required extensions), Node in `node:<major>` from your `engines.node`. Both can be overridden (see [Variables](#-variables)).
 
-On SELinux hosts (Fedora, RHEL) bind mounts may need a `:z` label; if you hit permission errors there, run with `RUNTIME=bare` or adjust your container policy.
+> [!CAUTION]
+> On SELinux hosts (Fedora, RHEL) bind mounts may need a `:z` label. If you hit permission errors there, run with `RUNTIME=bare` or adjust your container policy.
 
-## Building
+## 🔨 Building
 
 ```sh
 make build
@@ -125,7 +130,7 @@ runs the detected build commands, each in its container:
 - `composer install --no-dev --no-scripts --prefer-dist --no-progress` when `composer.json` declares runtime requirements
 - `npm ci && npm run build` when `package.json` has a `build` script
 
-When a side does not apply, it is skipped with a note. Apps with special build steps override the commands in `ncmake.mk` (see [Per-app tuning](#per-app-tuning)).
+When a side does not apply, it is skipped with a note. Apps with special build steps override the commands in `ncmake.mk` (see [Per-app tuning](#-per-app-tuning)).
 
 For everything beyond the release build there are generic pass-through targets running in the same throwaway containers — the host needs no toolchain even for the dev setup:
 
@@ -144,7 +149,7 @@ make dist-clean && make build
 
 is the reproducible from-scratch build.
 
-## Packaging: the shipped file set
+## 📦 Packaging: the shipped file set
 
 What ends up in a release is defined as an **allowlist** (the keep model), not as an exclude list. Shipped are the standard app paths, each only when it exists:
 
@@ -153,7 +158,8 @@ appinfo/ lib/ l10n/ templates/ img/ css/ js/ vendor/ LICENSES/
 CHANGELOG.md AUTHORS.md REUSE.toml COPYING COPYING.md LICENSE LICENSE.md
 ```
 
-A new dev file in your repository can never leak into the tarball, because it is not on the list. A missing runtime directory fails loudly instead of silently shipping a broken app.
+> [!NOTE]
+> A new dev file in your repository can never leak into the tarball, because it is not on the list. A missing runtime directory fails loudly instead of silently shipping a broken app.
 
 ```mermaid
 flowchart LR
@@ -165,43 +171,21 @@ flowchart LR
 
 `make dist` materializes the file set once into a staging directory and packs it; `make rsync` and `make cp` deploy the very same staging directory. One mechanism, one source of truth: what you deploy for testing is byte-for-byte what a release ships.
 
-## Deploying to a test instance
+## 🚀 Deploying to a test instance
 
 ```sh
 make build
 make rsync TARGET=/var/www/nextcloud/apps OCC=1
 ```
 
-`TARGET` is the `apps/` parent directory, locally or over SSH (`user@host:/var/www/nextcloud/apps`); the app subdirectory is appended automatically and synced with `--delete`, so removed files disappear from the instance too.
+`make rsync` deploys the shipped file set straight into an `apps/` directory (local or over SSH); `make cp` does the same into a running container such as Nextcloud All-in-One. `OCC=1` wraps the sync into the full `occ app:disable → chown → occ app:enable` refresh cycle, so `info.xml` is re-read and migrations run. `make dist`, `make rsync` and `make cp` all deploy the very same staged file set — one source of truth, byte-for-byte what a release ships.
 
-`OCC=1` wraps the sync into the full refresh cycle, so one short command replaces the chain you would otherwise have to remember and retype:
+The full walkthrough — `TARGET` forms, remote SSH, `ENGINE`, `web_user`, the `-it`/TTY detail — lives in the install guide: **[Method 3: `make rsync`](doc/INSTALL.md#-method-3--deploy-with-make-rsync)** and **[Method 4: `make cp`](doc/INSTALL.md#-method-4--deploy-into-a-running-container-with-make-cp)**.
 
-1. `occ app:disable <app>` — tolerated to fail on a first deploy
-2. the rsync itself
-3. `chown -R www-data: <apps-dir>/<app>`
-4. `occ app:enable <app>`
+> [!TIP]
+> That guide is written for the people who *install* your app rather than develop it, so every ncmake app can link its users straight to [doc/INSTALL.md](doc/INSTALL.md) and [keep its own README down to a couple of lines](#-the-installation-section-for-your-apps-readme).
 
-The disable/enable cycle makes Nextcloud re-read `info.xml` and run pending migrations. `occ` is expected at `<apps-dir>/../occ` and runs as the web server user (`web_user`, default `www-data`; via `sudo` unless you already are that user). On a remote `TARGET` each step runs through `ssh`, so the ssh user needs the rights for `sudo` and `chown`. Without `OCC=1` only the rsync happens, and the finishing commands are printed ready for copy and paste.
-
-When the instance runs inside a container whose filesystem rsync cannot reach from outside — a setup like Nextcloud All-in-One — `make cp` deploys the same staged file set into the running container:
-
-```sh
-make cp TARGET=nextcloud-aio-nextcloud:/var/www/html/custom_apps OCC=1
-```
-
-`TARGET` uses `docker cp` syntax (`<container>:<apps-dir>`); the app subdirectory is appended automatically and replaced as a whole, so removed files disappear too. `ENGINE=docker|podman` picks the container CLI — it is independent of `RUNTIME`, because builds may use podman while the instance runs under docker; that is why docker is preferred here when both are installed.
-
-The same ground, written for the people who *install* your app rather than develop it, is collected in **[doc/INSTALL.md](doc/INSTALL.md)** — tarball, from-source build, `make rsync` and `make cp`, ownership and updating. It is app-agnostic, so every ncmake app can link its users straight to it and keep its own README down to a couple of lines.
-
-`OCC=1` runs the same four-step cycle as above, entirely inside the container. `occ` is invoked in the form the [All-in-One documentation](https://github.com/nextcloud/all-in-one#how-to-run-occ-commands) uses:
-
-```sh
-docker exec --user www-data -it nextcloud-aio-nextcloud php occ <command>
-```
-
-One detail worth knowing: `-it` (keep stdin open, allocate a terminal) belongs in commands you type into an interactive terminal, and is required as soon as an `occ` command prompts for input. Non-interactive commands such as `chown` do not need it, and automated calls must not use it — without a terminal attached, `-t` fails with "the input device is not a TTY". That is why the copy-and-paste lines ncmake prints carry `-it` on the `occ` call, while the calls it executes itself do not.
-
-## Releasing
+## 🚢 Releasing
 
 The release flow assumes a protected `main` (required checks, no direct pushes), which is good practice anyway:
 
@@ -222,7 +206,7 @@ flowchart LR
 
 `make dist` builds the tarball to attach to the GitHub release, `make sign` prints its base64 signature, `make release` does both in one step.
 
-## The release workflow
+## 🤖 The release workflow
 
 ncmake ships one GitHub Actions workflow that builds the release tarball in CI. It carries no app-specific data — the shipped file set comes entirely from ncmake (keep model + `.nextcloudignore`) — so it is byte-identical across all ncmake apps. Once the bootstrap stub is in place, install (and later update) it with:
 
@@ -239,7 +223,7 @@ The workflow triggers on `release: published` (attaches `<app_id>-<version>.tar.
 
 Like the bootstrap stub, the file carries ncmake's MIT header and is committed verbatim; the `LICENSES/MIT.txt` you already have for the stub covers it for REUSE.
 
-## The Installation section for your app's README
+## 📝 The Installation section for your app's README
 
 Every ncmake app's install instructions should read the same and stay short: one line for the App Store, one that points at the shared [install guide](doc/INSTALL.md). Do not repeat tarball or `make` steps in the app README — they live in the guide, in one place, so a change is made once.
 
@@ -263,7 +247,7 @@ This app is not yet in the App Store. It is built with [ncmake](https://github.c
 
 Replace `<app>` with the app id and `<App name>` with the app's display name (the exact term users search for in the App Store). Anything genuinely app-specific — a migration note, a link to the app's own developer docs — follows as its own subsection.
 
-## App Store management
+## 🏪 App Store management
 
 The maintainer targets talk directly to the [App Store REST API](https://nextcloudappstore.readthedocs.io/en/latest/developer.html). They expect three files under `~/.nextcloud/certificates/` (change with `cert_dir=`):
 
@@ -277,6 +261,7 @@ The maintainer targets talk directly to the [App Store REST API](https://nextclo
 
 | Target | What it does |
 |---|---|
+| `make csr` | generates the signing key and certificate request, one time |
 | `make register` | registers the app id and certificate, one time |
 | `make publish` | submits a release: downloads the tarball from the given URL, signs exactly those bytes and posts it. Prompts for the URL (any host, `curl`; a GitHub release asset uses `gh` when installed, so private repos work); `GH=1` pre-fills the standard GitHub release URL to just confirm, `URL=` sets it directly |
 | `make list-releases` | your published releases, compact JSON |
@@ -287,7 +272,7 @@ The maintainer targets talk directly to the [App Store REST API](https://nextclo
 
 The read-only list targets cache `apps.json` with ETag revalidation under `build/cache/`, so repeated calls are fast and gentle to the API.
 
-## Per-app tuning
+## 🔧 Per-app tuning
 
 Most apps need none of this.
 
@@ -306,7 +291,7 @@ node_build_cmd =                         # empty = skip the npm build
 php_image      = ghcr.io/nextcloud/continuous-integration-php8.2:latest
 ```
 
-## Variables
+## 📋 Variables
 
 Set on the command line (`make build RUNTIME=bare`), in the environment, or persistently in `ncmake.mk`.
 
@@ -327,25 +312,25 @@ Set on the command line (`make build RUNTIME=bare`), in the environment, or pers
 | `NCMAKE_DIR` | `$XDG_CACHE_HOME/ncmake`, else `~/.cache/ncmake` | cache location of the shared Makefile |
 | `NCMAKE_TTL_MIN` | `1440` | minutes between upstream freshness checks |
 
-## Target reference
+## 🎯 Target reference
 
 `make` without a target prints the annotated, colorized help, including the detected app, version and certificate status. Colors turn off automatically when stdout is not a terminal and honor `NO_COLOR`. `make help-<target>` (for example `make help-rsync`) prints extended help for a single target — options and worked examples where they help.
 
 | Area | Targets |
 |---|---|
 | Release versioning | `version`, `changelog`, `tag` |
-| Build | `build`, `dist`, `sign`, `release`, `composer ARGS=...`, `npm ARGS=...` |
+| Build | `build`, `dist`, `sign`, `release`, `composer ARGS=...`, `npm ARGS=...`, `reuse` |
 | Local deploy | `rsync TARGET=...`, `cp TARGET=...` |
-| App Store | `register`, `publish`, `list-releases`, `list-releases-full`, `list-for-author`, `delete-release`, `ratings` |
-| Utility | `clean`, `dist-clean`, `self-update`, `workflows`, `help` |
+| App Store | `csr`, `register`, `publish`, `list-releases`, `list-releases-full`, `list-for-author`, `delete-release`, `ratings` |
+| Utility | `clean`, `dist-clean`, `self-update`, `workflows`, `help`, `help-<target>` |
 
 Targets marked `[m]` in the help are maintainer-only: they need repository write access and/or the App Store signing key. Everything else works for anyone who clones the app.
 
-## Requirements
+## ✅ Requirements
 
-GNU make, git, curl, openssl, rsync, xmllint (libxml2), python3. Optional: podman or docker for containerized builds (strongly recommended; without them use `RUNTIME=bare` and provide composer and npm yourself).
+GNU make, git, curl, openssl, rsync, python3. Optional but recommended: `xmllint` (libxml2) for reading `info.xml` — ncmake falls back to `grep` when it is missing, so a bare CI runner works too. Optional: podman or docker for containerized builds (strongly recommended; without them use `RUNTIME=bare` and provide composer and npm yourself).
 
-## Show that your app uses ncmake
+## 🏅 Show that your app uses ncmake
 
 If ncmake is useful to you, add a badge to your app's README:
 
@@ -365,8 +350,9 @@ The same from the command line needs a recent `gh` (2.10 or newer, for the `sear
 gh search code 'raw.githubusercontent.com/ernolf/ncmake' --json repository --jq '.[].repository.full_name' | sort -u
 ```
 
-Both queries hit the same code-search index, so an empty result early on is expected: GitHub only searches public repositories it has already indexed, and a freshly created repo can take weeks to be picked up (the REST `search/code` API uses an even older, sparser index — prefer the browser query above). The bootstrap stub is committed regardless, so a consumer becomes findable the moment its repo is indexed.
+> [!NOTE]
+> Both queries hit the same code-search index, so an empty result early on is expected: GitHub only searches public repositories it has already indexed, and a freshly created repo can take weeks to be picked up (the REST `search/code` API uses an even older, sparser index — prefer the browser query above). The bootstrap stub is committed regardless, so a consumer becomes findable the moment its repo is indexed.
 
-## License
+## 📄 License
 
 [MIT](LICENSE)
