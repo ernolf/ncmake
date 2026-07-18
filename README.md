@@ -17,6 +17,7 @@ Everything is derived from the app itself, so there is nothing to configure for 
 - [Deploying to a test instance](#deploying-to-a-test-instance)
 - [Releasing](#releasing)
 - [The release workflow](#the-release-workflow)
+- [The Installation section for your app's README](#the-installation-section-for-your-apps-readme)
 - [App Store management](#app-store-management)
 - [Per-app tuning](#per-app-tuning)
 - [Variables](#variables)
@@ -237,6 +238,30 @@ The workflow triggers on `release: published` (attaches `<app_id>-<version>.tar.
 `make` runs on the runner host, not in a job container: `ubuntu-latest` already carries podman (which ncmake uses for the build containers) plus git, curl, rsync, tar and python3, so the workflow needs no `setup-*` steps and no toolchain of its own. `contents: write` is the only permission, for the release upload; no secrets beyond the automatic `GITHUB_TOKEN`.
 
 Like the bootstrap stub, the file carries ncmake's MIT header and is committed verbatim; the `LICENSES/MIT.txt` you already have for the stub covers it for REUSE.
+
+## The Installation section for your app's README
+
+Every ncmake app's install instructions should read the same and stay short: one line for the App Store, one that points at the shared [install guide](doc/INSTALL.md). Do not repeat tarball or `make` steps in the app README — they live in the guide, in one place, so a change is made once.
+
+If the app is in the App Store:
+
+```markdown
+## Installation
+
+The app is published in the [App Store](https://apps.nextcloud.com/apps/<app>). Install it through [Nextcloud's app management UI](https://docs.nextcloud.com/server/latest/admin_manual/apps_management.html#managing-apps) (**Apps** → search for **<App name>** → Install) or with `occ app:enable <app>`.
+
+It is built with [ncmake](https://github.com/ernolf/ncmake). To build and install it from source — release tarball, `make rsync` or `make cp` — see the [installation guide](https://github.com/ernolf/ncmake/blob/main/doc/INSTALL.md).
+```
+
+If it is not (yet) in the App Store, drop the first paragraph:
+
+```markdown
+## Installation
+
+This app is not yet in the App Store. It is built with [ncmake](https://github.com/ernolf/ncmake). To build and install it from source — release tarball, `make rsync` or `make cp` — see the [installation guide](https://github.com/ernolf/ncmake/blob/main/doc/INSTALL.md).
+```
+
+Replace `<app>` with the app id and `<App name>` with the app's display name (the exact term users search for in the App Store). Anything genuinely app-specific — a migration note, a link to the app's own developer docs — follows as its own subsection.
 
 ## App Store management
 
