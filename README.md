@@ -190,6 +190,8 @@ make cp TARGET=nextcloud-aio-nextcloud:/var/www/html/custom_apps OCC=1
 
 `TARGET` uses `docker cp` syntax (`<container>:<apps-dir>`); the app subdirectory is appended automatically and replaced as a whole, so removed files disappear too. `ENGINE=docker|podman` picks the container CLI — it is independent of `RUNTIME`, because builds may use podman while the instance runs under docker; that is why docker is preferred here when both are installed.
 
+The same ground, written for the people who *install* your app rather than develop it, is collected in **[doc/INSTALL.md](doc/INSTALL.md)** — tarball, from-source build, `make rsync` and `make cp`, ownership and updating. It is app-agnostic, so every ncmake app can link its users straight to it and keep its own README down to a couple of lines.
+
 `OCC=1` runs the same four-step cycle as above, entirely inside the container. `occ` is invoked in the form the [All-in-One documentation](https://github.com/nextcloud/all-in-one#how-to-run-occ-commands) uses:
 
 ```sh
