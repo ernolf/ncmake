@@ -97,13 +97,21 @@ GitHub's workflow templates may contain placeholders in the form `$default-branc
 
 Unknown placeholders of that form are left as-is and reported with a warning, so a new upstream placeholder never breaks the install — you edit the file manually and the manager treats your edit as `modified` from then on. Everything else in the files — `${{ ... }}` expressions, shell variables in `run:` blocks — is none of the manager's business and passes through untouched.
 
-**Runner labels.** The Nextcloud templates run on the org's own runner pool, with labels like `ubuntu-latest-low` that do not exist in a normal (personal) repo — a job on such a label would queue forever and never turn green. On install the manager rewrites them to their GitHub-hosted equivalent:
+**Runner labels.** The Nextcloud templates run on the org's own runner pool, with labels like `ubuntu-latest-low`. These are configured at the organization level and are therefore *org-scoped*: a repo outside that org has no such runner, so a job on that label would queue forever and never turn green. On install the manager rewrites them to their GitHub-hosted equivalent:
 
 | Rewritten from | to |
 |---|---|
 | `ubuntu-latest-low` | `ubuntu-latest` |
 
-The rule set is `wf_runner_rewrite` (space-separated `old=new` pairs); clear or extend it in `ncmake.mk` if your repo really does have those runners. The rewrite is applied before the file is hashed, so it is invisible to the status model — a rewritten file is still `installed`, and `workflows-update` keeps it so.
+**Whether to rewrite is decided automatically** from the owner of your `origin` remote. A repo *inside* the org that owns those runners keeps the labels (it really has them); every other repo gets the rewrite. So a `nextcloud/…` repo and your own `you/…` repo both do the right thing with no configuration. The org is `wf_runner_org` (default `nextcloud`); the rules are `wf_runner_rewrite` (space-separated `old=new` pairs). Override either in `ncmake.mk`:
+
+```make
+wf_runner_org     = my-org          # keep the org labels for repos under my-org
+wf_runner_rewrite =                 # or: never rewrite, regardless of owner
+wf_runner_rewrite = big=small a=b   # or: your own rewrite rules
+```
+
+The rewrite is applied before the file is hashed, so it is invisible to the status model — a rewritten file is still `installed`, and `workflows-update` keeps it so.
 
 > [!TIP]
 > This is why the templates are installed through the manager rather than copied by hand: the same fetch that finds updates also localizes the org-specific bits (branch name, runner labels) and keeps the file REUSE-compliant.

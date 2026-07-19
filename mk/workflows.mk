@@ -25,11 +25,17 @@ export wf_src_nextcloud_raw  = https://raw.githubusercontent.com/nextcloud/.gith
 wf_dir  = .github/workflows
 
 # The Nextcloud templates target the org's own runner pool: labels like
-# ubuntu-latest-low do not exist in a normal (personal) repo, so those jobs would
-# queue forever. On install each old=new pair is applied to the fetched file, so
-# the templates run anywhere. Space-separated; clear it in ncmake.mk when your
-# repo really has those runners.
-wf_runner_rewrite ?= ubuntu-latest-low=ubuntu-latest
+# ubuntu-latest-low are org-scoped and do not exist in a repo outside that org,
+# so those jobs would queue forever. On install each old=new pair is applied to
+# the fetched file, so the templates run anywhere.
+#
+# Whether to rewrite is decided from the origin owner (gh_slug): a repo INSIDE
+# wf_runner_org keeps the labels (it really has those runners), every other repo
+# gets the rewrite - so both cases need no configuration. Override either in
+# ncmake.mk: set wf_runner_org to your org, or set wf_runner_rewrite directly
+# (empty = never rewrite, or your own space-separated old=new pairs).
+wf_runner_org     ?= nextcloud
+wf_runner_rewrite ?= $(if $(filter $(wf_runner_org),$(firstword $(subst /, ,$(gh_slug)))),,ubuntu-latest-low=ubuntu-latest)
 export wf_runner_rewrite
 
 # REUSE for the generated lock file: JSON carries no comment, so a .license
@@ -301,9 +307,9 @@ make workflows-install W="<name> [<name>...]"
 
 Fetches the named workflows (the .yml suffix is optional), replaces GitHub's
 template placeholders ($$default-branch from the origin HEAD; unknown ones are
-warned about and left as-is), rewrites the Nextcloud-org runner labels so the
-templates run in a normal repo (wf_runner_rewrite, default
-ubuntu-latest-low=ubuntu-latest), writes them into .github/workflows/ and records
+warned about and left as-is), rewrites the org-scoped runner labels so the
+templates run outside that org (unless your origin owner is wf_runner_org, in
+which case the labels are kept), writes them into .github/workflows/ and records
 source, upstream sha and content hash in .ncmake-workflows.json. A .license
 sidecar next to the lock keeps make reuse green without a REUSE.toml edit. Commit
 the lock and its .license together with the workflows. Reinstalling an existing
