@@ -13,6 +13,7 @@ This guide covers everything that connects an ncmake app to the [Nextcloud App S
 - [The certificate directory](#-the-certificate-directory)
 - [One-time onboarding](#-one-time-onboarding)
 - [Publishing a release](#-publishing-a-release)
+- [Nightly releases](#-nightly-releases)
 - [Queries and housekeeping](#-queries-and-housekeeping)
 - [FAQ](#-faq)
 
@@ -74,6 +75,31 @@ For a manually assembled release there are the building blocks:
 ```sh
 make sign       # sign the local tarball from make dist, print the base64 signature
 make release    # dist + sign in one step
+```
+
+## 🌙 Nightly releases
+
+The App Store has a dedicated nightly channel, and `publish` targets it with a flag:
+
+```sh
+make publish GH=1 NIGHTLY=1
+```
+
+Nightlies follow their own rules, straight from the store's API:
+
+- The store keeps **exactly one nightly per app** — publishing a new one replaces the previous, no cleanup needed.
+- A nightly does **not** need a higher version than the one before; for identical versions the upload time decides.
+- Stable releases are completely unaffected: the nightly lives next to them in its own channel.
+
+To catch mix-ups, `publish` cross-checks GitHub when it can: for a GitHub asset URL (with `gh` installed) it reads the release's **pre-release flag** and asks before publishing when it contradicts `NIGHTLY` — a pre-release without `NIGHTLY=1`, or `NIGHTLY=1` on a regular release. For non-GitHub URLs the flag alone decides.
+
+> [!TIP]
+> Mark your nightly releases as **pre-release** on GitHub. That keeps them off the repository's "Latest" badge and gives `make publish` the signal for the cross-check.
+
+Removing a nightly from the store works through the same flag:
+
+```sh
+make delete-release NIGHTLY=1
 ```
 
 ## 🔍 Queries and housekeeping

@@ -254,7 +254,7 @@ make register        # one-time: register app id and certificate
 make publish GH=1    # per release: sign and submit the GitHub release asset
 ```
 
-plus the read-only queries (`list-releases`, `ratings`, ...), `delete-release` and the signing building blocks `sign` and `release`. `make help` shows whether token, certificate and key are in place (green check or red cross, with the real filename).
+plus the read-only queries (`list-releases`, `ratings`, ...), `delete-release` and the signing building blocks `sign` and `release`. `NIGHTLY=1` switches `publish` and `delete-release` to the store's nightly channel. `make help` shows whether token, certificate and key are in place (green check or red cross, with the real filename).
 
 The full guide — certificate directory, onboarding walkthrough, the publish flow and why it signs the downloaded bytes — lives in **[doc/APPSTORE.md](doc/APPSTORE.md)**.
 
