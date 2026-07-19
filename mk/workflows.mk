@@ -24,6 +24,23 @@ export wf_src_nextcloud_raw  = https://raw.githubusercontent.com/nextcloud/.gith
 
 wf_dir  = .github/workflows
 
+# The Nextcloud templates target the org's own runner pool: labels like
+# ubuntu-latest-low do not exist in a normal (personal) repo, so those jobs would
+# queue forever. On install each old=new pair is applied to the fetched file, so
+# the templates run anywhere. Space-separated; clear it in ncmake.mk when your
+# repo really has those runners.
+wf_runner_rewrite ?= ubuntu-latest-low=ubuntu-latest
+export wf_runner_rewrite
+
+# REUSE for the generated lock file: JSON carries no comment, so a .license
+# sidecar declares it (the REUSE sidecar convention). It is generated content, so
+# CC0-1.0 is the natural default - the same license the Nextcloud apps put on
+# their generated files. Override in ncmake.mk to match your app's convention.
+wf_lock_license   ?= CC0-1.0
+wf_lock_copyright ?= $(shell git config user.name 2>/dev/null || echo ncmake)
+export wf_lock_license
+export wf_lock_copyright
+
 # The tool itself: plain python3 (a core requirement anyway), written to the
 # build cache at run time - the same pattern the changelog target uses for its
 # cliff config, so no quoting acrobatics in the recipes.
@@ -94,6 +111,14 @@ def save_lock(lock):
     with open(LOCK, 'w', encoding='utf-8') as f:
         json.dump(lock, f, indent=2, sort_keys=True)
         f.write('\n')
+    # JSON carries no SPDX header, so declare the generated lock via a .license
+    # sidecar - keeps make reuse green without touching the app's REUSE.toml.
+    lic = os.environ.get('wf_lock_license', 'CC0-1.0')
+    cop = os.environ.get('wf_lock_copyright', '').strip()
+    with open(LOCK + '.license', 'w', encoding='utf-8', newline='\n') as f:
+        if cop:
+            f.write('SPDX-FileCopyrightText: %s\n' % cop)
+        f.write('SPDX-License-Identifier: %s\n' % lic)
 
 def file_hash(path):
     with open(path, 'rb') as f:
@@ -124,6 +149,17 @@ def substitute(text, name):
             print('  %s: replaced %s with %s' % (name, token, branch))
         else:
             print('  WARNING %s: unknown placeholder %s left as-is - edit the file manually' % (name, token))
+    return text
+
+def rewrite_runners(text, name):
+    # Longest-match first so a replacement value that is a prefix of a rewritten
+    # label (ubuntu-latest vs ubuntu-latest-low) never gets rewritten in turn.
+    for pair in sorted(os.environ.get('wf_runner_rewrite', '').split(), key=len, reverse=True):
+        if '=' in pair:
+            old, new = pair.split('=', 1)
+            if old in text:
+                text = text.replace(old, new)
+                print('  %s: runner %s -> %s' % (name, old, new))
     return text
 
 def state(name, entry, lock):
@@ -173,6 +209,7 @@ def install(names, lock, cat):
             continue
         text = fetch(entry['raw']).decode('utf-8')
         text = substitute(text, name)
+        text = rewrite_runners(text, name)
         path = os.path.join(WF_DIR, name)
         os.makedirs(WF_DIR, exist_ok=True)
         verb = 'updated' if os.path.exists(path) else 'installed'
@@ -261,10 +298,14 @@ make workflows-install W="<name> [<name>...]"
 
 Fetches the named workflows (the .yml suffix is optional), replaces GitHub's
 template placeholders ($$default-branch from the origin HEAD; unknown ones are
-warned about and left as-is), writes them into .github/workflows/ and records
-source, upstream sha and content hash in .ncmake-workflows.json - commit that
-lock file together with the workflows. Reinstalling an existing file overwrites
-it, which also adopts an unmanaged file or discards local modifications.
+warned about and left as-is), rewrites the Nextcloud-org runner labels so the
+templates run in a normal repo (wf_runner_rewrite, default
+ubuntu-latest-low=ubuntu-latest), writes them into .github/workflows/ and records
+source, upstream sha and content hash in .ncmake-workflows.json. A .license
+sidecar next to the lock keeps make reuse green without a REUSE.toml edit. Commit
+the lock and its .license together with the workflows. Reinstalling an existing
+file overwrites it, which also adopts an unmanaged file or discards local
+modifications.
 
   make workflows-install W=reuse
   make workflows-install W="lint-php lint-info-xml psalm-matrix"
