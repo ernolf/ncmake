@@ -204,7 +204,7 @@ flowchart LR
 
 **`make tag`** (back on `main`, after the merge) refuses to re-tag, refuses when `CHANGELOG.md` has no `## [X.Y.Z]` section, shows a fat reminder that a tag freezes the current commit, then creates and pushes the **signed** `vX.Y.Z` tag after your confirmation.
 
-`make dist` builds the tarball to attach to the GitHub release, `make sign` prints its base64 signature, `make release` does both in one step.
+`make dist` builds the tarball to attach to the GitHub release; `make sign` (base64 signature) and `make release` (dist + sign) come from the [appstore module](#-app-store-management).
 
 ## 🤖 CI workflows
 
@@ -246,28 +246,17 @@ Replace `<app>` with the app id and `<App name>` with the app's display name (th
 
 ## 🏪 App Store management
 
-The maintainer targets talk directly to the [App Store REST API](https://nextcloudappstore.readthedocs.io/en/latest/developer.html). They expect three files under `~/.nextcloud/certificates/` (change with `cert_dir=`):
+Everything that talks to the [App Store](https://apps.nextcloud.com) or needs the signing key lives in the **appstore module**, another developer module: `make dev-init` once, then
 
-| File | Purpose |
-|---|---|
-| `<app_id>.crt` (or `.cert`, both are accepted) | the app certificate issued via [app-certificate-requests](https://github.com/nextcloud/app-certificate-requests) |
-| `<app_id>.key` | the private key |
-| `appstore_api-token` | your API token from the App Store account page |
+```sh
+make csr             # one-time: key + certificate request
+make register        # one-time: register app id and certificate
+make publish GH=1    # per release: sign and submit the GitHub release asset
+```
 
-`make help` shows for each of the three whether it was found (green check or red cross, with the real filename).
+plus the read-only queries (`list-releases`, `ratings`, ...), `delete-release` and the signing building blocks `sign` and `release`. `make help` shows whether token, certificate and key are in place (green check or red cross, with the real filename).
 
-| Target | What it does |
-|---|---|
-| `make csr` | generates the signing key and certificate request, one time |
-| `make register` | registers the app id and certificate, one time |
-| `make publish` | submits a release: downloads the tarball from the given URL, signs exactly those bytes and posts it. Prompts for the URL (any host, `curl`; a GitHub release asset uses `gh` when installed, so private repos work); `GH=1` pre-fills the standard GitHub release URL to just confirm, `URL=` sets it directly |
-| `make list-releases` | your published releases, compact JSON |
-| `make list-releases-full` | the full App Store entry |
-| `make list-for-author` | all apps of an author (prompts for a name) |
-| `make delete-release` | deletes one release, interactively, with confirmation |
-| `make ratings` | ratings and comments for the app |
-
-The read-only list targets cache `apps.json` with ETag revalidation under `build/cache/`, so repeated calls are fast and gentle to the API.
+The full guide — certificate directory, onboarding walkthrough, the publish flow and why it signs the downloaded bytes — lives in **[doc/APPSTORE.md](doc/APPSTORE.md)**.
 
 ## 🔧 Per-app tuning
 
@@ -316,13 +305,13 @@ Set on the command line (`make build RUNTIME=bare`), in the environment, or pers
 | Area | Targets |
 |---|---|
 | Release versioning | `version`, `changelog`, `tag` |
-| Build | `build`, `dist`, `sign`, `release`, `composer ARGS=...`, `npm ARGS=...`, `reuse` |
+| Build | `build`, `dist`, `composer ARGS=...`, `npm ARGS=...`, `reuse` |
 | Local deploy | `rsync TARGET=...`, `cp TARGET=...` |
-| App Store | `csr`, `register`, `publish`, `list-releases`, `list-releases-full`, `list-for-author`, `delete-release`, `ratings` |
+| App Store (module) | `csr`, `register`, `publish`, `sign`, `release`, `list-releases`, `list-releases-full`, `list-for-author`, `delete-release`, `ratings` |
 | CI workflows (module) | `workflows-list`, `workflows-install W=...`, `workflows-update` |
 | Utility | `clean`, `dist-clean`, `self-update`, `dev-init`, `dev-clean`, `help`, `help-<target>` |
 
-Targets marked `[m]` in the help are maintainer-only: they need repository write access and/or the App Store signing key. Everything else works for anyone who clones the app. The CI workflow targets come from the developer modules (`make dev-init`, see [CI workflows](#-ci-workflows)); without the modules they simply do not exist.
+Targets marked `[m]` in the help are maintainer-only: they need repository write access and/or the App Store signing key. Everything else works for anyone who clones the app. The areas marked *(module)* come from the developer modules (`make dev-init`, see [CI workflows](#-ci-workflows) and [App Store management](#-app-store-management)); without the modules those targets simply do not exist — which keeps the help of a plain checkout down to build, deploy and utility.
 
 ## ✅ Requirements
 
