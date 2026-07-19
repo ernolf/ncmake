@@ -18,13 +18,31 @@
 # GET (ETag); offline or unchanged keeps the cache. A committed copy never
 # modifies itself; use 'make self-update' explicitly.
 this_ncmake    := $(abspath $(lastword $(MAKEFILE_LIST)))
-ncmake_raw      = https://raw.githubusercontent.com/ernolf/ncmake/$(or $(NCMAKE_REF),main)
+ncmake_ref      = $(or $(NCMAKE_REF),main)
+ncmake_raw      = https://raw.githubusercontent.com/ernolf/ncmake/$(ncmake_ref)
 ncmake_url      = $(ncmake_raw)/core/Makefile
 NCMAKE_TTL_MIN ?= 1440
 ifneq ($(NCMAKE),)
   ifneq ($(shell find "$(NCMAKE)" -mmin +$(NCMAKE_TTL_MIN) 2>/dev/null),)
     $(shell curl -fsSL --etag-compare "$(NCMAKE).etag" --etag-save "$(NCMAKE).etag" "$(ncmake_url)" -o "$(NCMAKE).new" 2>/dev/null; \
       if [ -s "$(NCMAKE).new" ]; then mv "$(NCMAKE).new" "$(NCMAKE)"; else rm -f "$(NCMAKE).new"; fi; touch "$(NCMAKE)")
+  endif
+endif
+
+# == Developer modules ==
+# Optional target packs live in the ncmake repo under mk/ and are fetched into
+# the per-machine cache via 'make dev-init' - a user who only builds and
+# installs an app never sees their targets. Cached next to the core Makefile
+# and refreshed with the same TTL mechanism; included at the END of this file
+# so module help:: sections print after the core help.
+ncmake_cache   := $(if $(NCMAKE),$(patsubst %/,%,$(dir $(NCMAKE))),$(if $(XDG_CACHE_HOME),$(XDG_CACHE_HOME),$(HOME)/.cache)/ncmake)
+ncmake_modules := $(wildcard $(ncmake_cache)/*.mk-$(ncmake_ref))
+ifneq ($(ncmake_modules),)
+  ifneq ($(shell find $(ncmake_modules) -mmin +$(NCMAKE_TTL_MIN) 2>/dev/null),)
+    $(shell for f in $(ncmake_modules); do \
+        m=$$(basename "$$f"); m=$${m%-$(ncmake_ref)}; \
+        curl -fsSL --etag-compare "$$f.etag" --etag-save "$$f.etag" "$(ncmake_raw)/mk/$$m" -o "$$f.new" 2>/dev/null; \
+        if [ -s "$$f.new" ]; then mv "$$f.new" "$$f"; else rm -f "$$f.new"; fi; touch "$$f"; done)
   endif
 endif
 
@@ -166,7 +184,7 @@ endif
 .PHONY: all version changelog tag build check-app check-build stage dist sign release rsync cp composer npm reuse \
         fetch-apps \
         csr register publish list-releases list-releases-full list-for-author delete-release ratings \
-        clean dist-clean self-update workflows help
+        clean dist-clean self-update dev-init dev-clean help
 
 # == Changelog configuration (git-cliff) ==
 # Keep a Changelog sections from Conventional Commits, user-visible changes only:
@@ -696,26 +714,29 @@ dist-clean: clean
 self-update:
 	@curl -fsSL "$(ncmake_url)" -o "$(this_ncmake)" && rm -f "$(this_ncmake).etag" && echo "ncmake updated: $(this_ncmake)"
 
-# Install or update the ncmake-provided GitHub Actions workflow files into
-# .github/workflows/. They carry no app-specific data and are committed verbatim,
-# so this just fetches the current versions (NCMAKE_REF selects which); run it
-# again any time to pick up changes. Only the bootstrap stub is installed by hand;
-# everything else ncmake ships lands through here.
-ncmake_workflows ?= release.yml
-workflows:
-	@mkdir -p .github/workflows
-	@for wf in $(ncmake_workflows); do \
-		tmp="$$(mktemp)"; \
-		if ! curl -fsSL "$(ncmake_raw)/workflows/$$wf" -o "$$tmp"; then \
-			echo "ERROR: could not fetch $$wf from ncmake (check your network / NCMAKE_REF)" >&2; \
-			rm -f "$$tmp"; exit 1; \
-		fi; \
-		dst=".github/workflows/$$wf"; \
-		if [ ! -f "$$dst" ]; then mv "$$tmp" "$$dst"; echo "installed: $$dst"; \
-		elif cmp -s "$$tmp" "$$dst"; then rm -f "$$tmp"; echo "up to date: $$dst"; \
-		else mv "$$tmp" "$$dst"; echo "updated:   $$dst"; fi; \
-	done
-	@echo "Review and commit: git add .github/workflows/"
+# Fetch the optional developer modules (mk/*.mk in the ncmake repo) into the
+# per-machine cache. Discovery is dynamic: whatever modules the repo ships for
+# the selected NCMAKE_REF is what lands here, so new modules appear without
+# touching this file. The modules load on every subsequent make run, in every
+# app on this machine; 'make dev-clean' removes them again (the plain user view).
+dev-init:
+	@mkdir -p "$(ncmake_cache)"
+	@echo "==> Fetching ncmake developer modules ($(ncmake_ref))..."
+	@names=$$(curl -fsSL -H 'User-Agent: ncmake' "https://api.github.com/repos/ernolf/ncmake/contents/mk?ref=$(ncmake_ref)" \
+		| python3 -c 'import json,sys; [print(e["name"]) for e in json.load(sys.stdin) if e["name"].endswith(".mk")]' 2>/dev/null) \
+		|| { echo "ERROR: could not list the ncmake modules (network? ref '$(ncmake_ref)'?)" >&2; exit 1; }; \
+	test -n "$$names" || { echo "(no modules published for $(ncmake_ref))"; exit 0; }; \
+	for m in $$names; do \
+		curl -fsSL "$(ncmake_raw)/mk/$$m" -o "$(ncmake_cache)/$$m-$(ncmake_ref)" \
+			|| { echo "ERROR: could not fetch module $$m" >&2; exit 1; }; \
+		echo "  module: $$m"; \
+	done; \
+	echo "==> Done. 'make help' now includes the module targets (all apps on this machine)."
+
+# Remove the developer modules from the cache - back to the plain user target set.
+dev-clean:
+	@rm -f $(ncmake_cache)/*.mk-$(ncmake_ref) $(ncmake_cache)/*.mk-$(ncmake_ref).etag
+	@echo "Developer modules removed ($(ncmake_cache), ref $(ncmake_ref))."
 
 # == Per-target help ==
 # `make help-<target>` prints the extended help below (examples, options); a
@@ -872,13 +893,22 @@ GH=1 pre-fills the standard GitHub release asset URL to confirm, URL= sets it
 directly. A GitHub asset uses gh when available, so private repos work.
 endef
 
-define help_workflows
-make workflows
+define help_dev-init
+make dev-init    (maintainer, once per machine)
 
-Installs or updates the GitHub Actions workflow files ncmake provides into
-.github/workflows/, reporting each as installed, updated or up to date. Run it
-again any time to pick up new versions; NCMAKE_REF selects the ncmake version.
-Only the bootstrap stub is installed by hand; everything else lands through here.
+Fetches the optional ncmake developer modules (mk/*.mk in the ncmake repo, e.g.
+the CI workflow manager) into the per-machine cache. Their targets appear in
+every ncmake app on this machine from the next make run on; the module list is
+discovered from the repo, so new modules arrive without a core update. The
+cache refreshes with the same TTL mechanism as the core Makefile. make
+dev-clean removes the modules again.
+endef
+
+define help_dev-clean
+make dev-clean
+
+Removes the fetched developer modules from the per-machine cache - make help
+shows the plain user target set again. make dev-init brings them back.
 endef
 
 define help_self-update
@@ -892,8 +922,10 @@ endef
 help-%:
 	@:$(info $(or $(help_$*),No extended help for "$*". Run "make help" for the target list and "make help-<target>" for another target.))
 
-# Show available targets and required files
-help:
+# Show available targets and required files. Double-colon so the developer
+# modules can append their own sections; the footer is a second help:: rule
+# after the module include, keeping it last.
+help::
 	@echo "$(cd)Usage: make <target>    (no target = this help)$(c0)"
 	@echo ""
 	@echo "$(ch)Release versioning (maintainer only):$(c0)"
@@ -948,12 +980,22 @@ help:
 	@echo "  $(ct)clean$(c0)                Remove build/ directory (incl. stage and cache)"
 	@echo "  $(ct)dist-clean$(c0)           Remove ALL git-ignored build outputs (vendor, node_modules, js, …)"
 	@echo "  $(ct)self-update$(c0)          Fetch the newest ncmake Makefile"
-	@echo "  $(ct)workflows$(c0)            Install/update the ncmake CI workflow files in .github/workflows/"
+	@echo "  $(ct)dev-init$(c0)             Fetch the ncmake developer modules (e.g. the CI workflow manager)  $(cm)[m]$(c0)"
+	@echo "  $(ct)dev-clean$(c0)            Remove the developer modules again"
 	@echo "  $(ct)help$(c0)                 Show this help"
 	@echo ""
 	@echo "  $(cm)[m]$(c0) $(cd)= maintainer only (needs repo write access and/or the signing key/cert)$(c0)"
+
+# == Module include ==
+# Fetched by 'make dev-init', absent for plain users. Included here, after all
+# core rules, so module help:: sections print between the core help and the
+# footer below, and modules may extend core variables.
+-include $(ncmake_modules)
+
+help::
 	@echo ""
 	@echo "  $(cd)Details on one target:$(c0) $(ct)make help-<target>$(c0)   $(cd)(e.g. make help-rsync)$(c0)"
 	@echo ""
 	@echo "$(cd)Current:$(c0) $(if $(app_id),$(cv)$(app_id) v$(version)$(c0),$(cd)(not inside a Nextcloud app)$(c0))"
 	@echo "$(cd)ncmake:  $(this_ncmake)$(c0)"
+	@echo "$(cd)modules: $(if $(ncmake_modules),$(notdir $(ncmake_modules)),(none - 'make dev-init' fetches the developer targets))$(c0)"
