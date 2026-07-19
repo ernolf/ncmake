@@ -13,7 +13,7 @@ This guide covers everything about GitHub Actions workflows in an ncmake app: th
 - [Where the workflows come from](#-where-the-workflows-come-from)
 - [Listing, installing, updating](#-listing-installing-updating)
 - [The lock file](#-the-lock-file)
-- [Placeholders](#-placeholders)
+- [Placeholders and runner labels](#-placeholders-and-runner-labels)
 - [The ncmake release workflow](#-the-ncmake-release-workflow)
 - [FAQ](#-faq)
 
@@ -81,9 +81,13 @@ git add .github/workflows/
 
 `.github/workflows/.ncmake-workflows.json` records, per managed workflow, the source it came from, the upstream blob sha at install time and the hash of the installed content. Those two fingerprints are what makes the status column possible: a differing upstream sha means `update available`, a differing content hash means `modified`.
 
-**Commit the lock file.** It contains no secrets, and with it in the repository every machine — and every co-maintainer — sees the same status and can run `workflows-update`. Without it the manager would consider all workflows `unmanaged`.
+The recorded hash is the hash of the file **as written** — after placeholder substitution and the runner rewrite below. Those transforms are deterministic, so a re-install of an unchanged upstream produces the identical bytes and the status stays `installed`; only a real upstream change or a hand edit moves it.
 
-## 🔤 Placeholders
+Next to the lock the manager writes `.ncmake-workflows.json.license`, a [REUSE sidecar](https://reuse.software/spec/) that licenses the generated JSON (which cannot carry an SPDX header of its own). It defaults to `CC0-1.0` with your git user name as the copyright holder — override with `wf_lock_license` and `wf_lock_copyright` in `ncmake.mk`. This keeps `make reuse` green without any `REUSE.toml` edit.
+
+**Commit the lock file and its `.license` sidecar.** They contain no secrets, and with them in the repository every machine — and every co-maintainer — sees the same status and can run `workflows-update`. Without the lock the manager would consider all workflows `unmanaged`.
+
+## 🔤 Placeholders and runner labels
 
 GitHub's workflow templates may contain placeholders in the form `$default-branch` (lowercase, hyphenated). The manager substitutes the ones it knows at install time:
 
@@ -92,6 +96,17 @@ GitHub's workflow templates may contain placeholders in the form `$default-branc
 | `$default-branch` | the default branch of your origin remote (falls back to `main`) |
 
 Unknown placeholders of that form are left as-is and reported with a warning, so a new upstream placeholder never breaks the install — you edit the file manually and the manager treats your edit as `modified` from then on. Everything else in the files — `${{ ... }}` expressions, shell variables in `run:` blocks — is none of the manager's business and passes through untouched.
+
+**Runner labels.** The Nextcloud templates run on the org's own runner pool, with labels like `ubuntu-latest-low` that do not exist in a normal (personal) repo — a job on such a label would queue forever and never turn green. On install the manager rewrites them to their GitHub-hosted equivalent:
+
+| Rewritten from | to |
+|---|---|
+| `ubuntu-latest-low` | `ubuntu-latest` |
+
+The rule set is `wf_runner_rewrite` (space-separated `old=new` pairs); clear or extend it in `ncmake.mk` if your repo really does have those runners. The rewrite is applied before the file is hashed, so it is invisible to the status model — a rewritten file is still `installed`, and `workflows-update` keeps it so.
+
+> [!TIP]
+> This is why the templates are installed through the manager rather than copied by hand: the same fetch that finds updates also localizes the org-specific bits (branch name, runner labels) and keeps the file REUSE-compliant.
 
 ## 🚢 The ncmake release workflow
 
