@@ -1,0 +1,7 @@
+{
+    "name": "ncmake release tarball",
+    "description": "Build the release tarball with ncmake (make build && make dist) and attach it to the published GitHub release",
+    "categories": [
+        "ncmake"
+    ]
+}
