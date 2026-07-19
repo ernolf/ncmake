@@ -19,7 +19,7 @@ Everything is derived from the app itself, so there is nothing to configure for 
 - [Packaging: the shipped file set](#-packaging-the-shipped-file-set)
 - [Deploying to a test instance](#-deploying-to-a-test-instance)
 - [Releasing](#-releasing)
-- [The release workflow](#-the-release-workflow)
+- [CI workflows](#-ci-workflows)
 - [The Installation section for your app's README](#-the-installation-section-for-your-apps-readme)
 - [App Store management](#-app-store-management)
 - [Per-app tuning](#-per-app-tuning)
@@ -41,7 +41,7 @@ git add Makefile
 
 The stub is a dozen lines that never change. It fetches the real Makefile into a per-machine cache and includes it from there. Every developer who clones your app and runs `make` automatically gets the current ncmake, on every machine, for every app, from one shared cache.
 
-The stub is the only thing you install by hand. Everything else ncmake contributes to your repository — currently the CI workflow (see [The release workflow](#-the-release-workflow)) — is installed and updated through `make` targets once the stub is in place.
+The stub is the only thing you install by hand. Everything else ncmake contributes to your repository — the CI workflows (see [CI workflows](#-ci-workflows)) — is installed and updated through `make` targets once the stub is in place.
 
 > [!IMPORTANT]
 > **Only the stub lands in your repository.** The stub file you committed stays byte-identical forever; the fetched Makefile lives in `~/.cache/ncmake/`, outside of every project. Running `make` creates or modifies nothing in your checkout (apart from the usual build outputs such as `build/`, `js/` and `vendor/`, which belong in your `.gitignore` anyway, as in every Nextcloud app). `git status` stays clean; there is nothing extra to ignore.
@@ -206,22 +206,19 @@ flowchart LR
 
 `make dist` builds the tarball to attach to the GitHub release, `make sign` prints its base64 signature, `make release` does both in one step.
 
-## 🤖 The release workflow
+## 🤖 CI workflows
 
-ncmake ships one GitHub Actions workflow that builds the release tarball in CI. It carries no app-specific data — the shipped file set comes entirely from ncmake (keep model + `.nextcloudignore`) — so it is byte-identical across all ncmake apps. Once the bootstrap stub is in place, install (and later update) it with:
+The workflows of an ncmake app are managed by the **workflow manager**, a developer module: `make dev-init` fetches the ncmake modules once per machine, then
 
 ```sh
-make workflows
+make workflows-list
+make workflows-install W="release reuse lint-php"
 git add .github/workflows/
 ```
 
-`make workflows` fetches every workflow ncmake provides into `.github/workflows/`, reporting each as installed, updated or up to date; run it again any time to pick up new versions. `NCMAKE_REF` selects the ncmake version, as everywhere. The manual equivalent, if you prefer, is a plain `curl -fL --create-dirs -o .github/workflows/release.yml https://raw.githubusercontent.com/ernolf/ncmake/main/workflows/release.yml`.
+lists everything the sources offer — ncmake's own release workflow plus the official [nextcloud/.github workflow templates](https://github.com/nextcloud/.github/tree/master/workflow-templates) — installs your pick and records the provenance in a lock file, so `make workflows-update` later distinguishes upstream updates from your local edits. Discovery is live via the GitHub API: new upstream templates appear in the list without any ncmake update.
 
-The workflow triggers on `release: published` (attaches `<app_id>-<version>.tar.gz` to the release) and on `workflow_dispatch` (produces the same tarball as a downloadable artifact for inspection, without publishing). The whole build is `make build && make dist`; the tarball is located by glob, so nothing in the file names the app.
-
-`make` runs on the runner host, not in a job container: `ubuntu-latest` already carries podman (which ncmake uses for the build containers) plus git, curl, rsync, tar and python3, so the workflow needs no `setup-*` steps and no toolchain of its own. `contents: write` is the only permission, for the release upload; no secrets beyond the automatic `GITHUB_TOKEN`.
-
-Like the bootstrap stub, the file carries ncmake's MIT header and is committed verbatim; the `LICENSES/MIT.txt` you already have for the stub covers it for REUSE.
+The full guide — module setup, sources, status model, the lock file, placeholder handling and the release workflow ncmake ships itself — lives in **[doc/WORKFLOWS.md](doc/WORKFLOWS.md)**.
 
 ## 📝 The Installation section for your app's README
 
@@ -322,9 +319,10 @@ Set on the command line (`make build RUNTIME=bare`), in the environment, or pers
 | Build | `build`, `dist`, `sign`, `release`, `composer ARGS=...`, `npm ARGS=...`, `reuse` |
 | Local deploy | `rsync TARGET=...`, `cp TARGET=...` |
 | App Store | `csr`, `register`, `publish`, `list-releases`, `list-releases-full`, `list-for-author`, `delete-release`, `ratings` |
-| Utility | `clean`, `dist-clean`, `self-update`, `workflows`, `help`, `help-<target>` |
+| CI workflows (module) | `workflows-list`, `workflows-install W=...`, `workflows-update` |
+| Utility | `clean`, `dist-clean`, `self-update`, `dev-init`, `dev-clean`, `help`, `help-<target>` |
 
-Targets marked `[m]` in the help are maintainer-only: they need repository write access and/or the App Store signing key. Everything else works for anyone who clones the app.
+Targets marked `[m]` in the help are maintainer-only: they need repository write access and/or the App Store signing key. Everything else works for anyone who clones the app. The CI workflow targets come from the developer modules (`make dev-init`, see [CI workflows](#-ci-workflows)); without the modules they simply do not exist.
 
 ## ✅ Requirements
 
