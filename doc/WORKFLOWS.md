@@ -83,7 +83,7 @@ git add .github/workflows/
 
 The recorded hash is the hash of the file **as written** — after placeholder substitution and the runner rewrite below. Those transforms are deterministic, so a re-install of an unchanged upstream produces the identical bytes and the status stays `installed`; only a real upstream change or a hand edit moves it.
 
-Next to the lock the manager writes `.ncmake-workflows.json.license`, a [REUSE sidecar](https://reuse.software/spec/) that licenses the generated JSON (which cannot carry an SPDX header of its own). It defaults to `CC0-1.0` with your git user name as the copyright holder — override with `wf_lock_license` and `wf_lock_copyright` in `ncmake.mk`. This keeps `make reuse` green without any `REUSE.toml` edit.
+Next to the lock the manager writes `.ncmake-workflows.json.license`, a [REUSE sidecar](https://reuse.software/spec/) that licenses the generated JSON (which cannot carry an SPDX header of its own). It defaults to `CC0-1.0` — the license Nextcloud apps put on generated files — with a copyright line whose year is read from the clock at generation time, so a file regenerated in a later year updates on its own. Override `wf_lock_license` and `wf_lock_copyright` in `ncmake.mk`. This keeps `make reuse` green without any `REUSE.toml` edit.
 
 **Commit the lock file and its `.license` sidecar.** They contain no secrets, and with them in the repository every machine — and every co-maintainer — sees the same status and can run `workflows-update`. Without the lock the manager would consider all workflows `unmanaged`.
 

@@ -37,7 +37,10 @@ export wf_runner_rewrite
 # CC0-1.0 is the natural default - the same license the Nextcloud apps put on
 # their generated files. Override in ncmake.mk to match your app's convention.
 wf_lock_license   ?= CC0-1.0
-wf_lock_copyright ?= $(shell git config user.name 2>/dev/null || echo ncmake)
+# Copyright holder for the sidecar. The year is read from date at generation
+# time, so a file regenerated in a later year carries that year on its own -
+# right for generated content. Override the whole line in ncmake.mk.
+wf_lock_copyright ?= $(shell date +%Y) [ernolf] Raphael Gradenwitz
 export wf_lock_license
 export wf_lock_copyright
 
