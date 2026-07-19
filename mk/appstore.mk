@@ -138,6 +138,10 @@ register: check-app
 #   make publish GH=1         pre-fill the standard GitHub release URL for the
 #                             current version, so you only press Enter to confirm
 # URL=<download-url> sets it non-interactively in either case.
+# NIGHTLY=1 marks the release as a nightly: the store keeps exactly one nightly
+# per app (a new one replaces the previous) and does not require an increasing
+# version. When the URL is a GitHub asset and gh is available, the release's
+# pre-release flag is cross-checked against NIGHTLY and a mismatch asks first.
 publish: check-app
 	$(require_cert_dir)
 	@set -e; \
@@ -156,6 +160,16 @@ publish: check-app
 		tag=$$(printf '%s' "$$rest" | cut -d/ -f5); \
 		[ "$$s3" = releases ] && [ "$$s4" = download ] && [ -n "$$tag" ] && [ -n "$$file" ] && gh_ok=1; \
 	fi; \
+	if [ -n "$$gh_ok" ]; then \
+		pre=$$(gh release view "$$tag" -R "$$slug" --json isPrerelease -q .isPrerelease 2>/dev/null); \
+		if [ "$$pre" = true ] && [ -z "$(NIGHTLY)" ]; then \
+			read -p "GitHub marks $$tag as a pre-release, but NIGHTLY=1 is not set. Publish as STABLE anyway? [y/N] " yn; \
+			[ "$$yn" = y ] || [ "$$yn" = Y ] || { echo "Aborted."; exit 0; }; \
+		elif [ "$$pre" = false ] && [ -n "$(NIGHTLY)" ]; then \
+			read -p "NIGHTLY=1 is set, but GitHub does not mark $$tag as a pre-release. Publish as NIGHTLY anyway? [y/N] " yn; \
+			[ "$$yn" = y ] || [ "$$yn" = Y ] || { echo "Aborted."; exit 0; }; \
+		fi; \
+	fi; \
 	echo "Downloading $$url ..."; \
 	if [ -n "$$gh_ok" ]; then \
 		gh release download "$$tag" -R "$$slug" -p "$$file" -D "$$tmpd" || { echo "gh release download failed" >&2; exit 1; }; \
@@ -165,8 +179,8 @@ publish: check-app
 	test -s "$$asset" || { echo "ERROR: downloaded asset is empty or missing: $$asset" >&2; exit 1; }; \
 	echo "Computing signature over the downloaded asset..."; \
 	openssl dgst -sha512 -sign "$(key_file)" "$$asset" | openssl base64 | tr -d '\n' > /tmp/.ncmake_sig; \
-	python3 -c "import sys,json;sig=open('/tmp/.ncmake_sig').read();print(json.dumps({'download':sys.argv[1],'signature':sig}))" "$$url" > /tmp/.ncmake_body; \
-	echo "Publishing v$(version) to the App Store..."; \
+	python3 -c "import sys,json;sig=open('/tmp/.ncmake_sig').read();print(json.dumps({'download':sys.argv[1],'signature':sig,'nightly':sys.argv[2]=='1'}))" "$$url" "$(if $(NIGHTLY),1,0)" > /tmp/.ncmake_body; \
+	echo "Publishing v$(version) ($(if $(NIGHTLY),nightly,stable)) to the App Store..."; \
 	http=$$(curl -s -o /tmp/.ncmake_resp -w "%{http_code}" \
 		-X POST \
 		-H "Authorization: Token $(api_token)" \
@@ -199,7 +213,8 @@ list-for-author: fetch-apps
 	python3 -c "import sys,json;apps=json.load(open('$(apps_cache)'));term=sys.argv[1].lower();matched=[{'id':a['id'],'name':next(iter(a.get('translations',{}).values()),{}).get('name',''),'authors':a.get('authors',[]),'releases':[r['version'] for r in a['releases']]} for a in apps if any(term in au['name'].lower() for au in a.get('authors',[]))];print(json.dumps(matched,indent=2))" "$$term" 2>/dev/null \
 	|| echo "Failed to search app list."
 
-# Delete a specific release from the App Store (interactive)
+# Delete a specific release from the App Store (interactive).
+# NIGHTLY=1 targets the nightly channel (its own API endpoint).
 delete-release: check-app fetch-apps
 	$(require_cert_dir)
 	@set -e; \
@@ -212,12 +227,12 @@ delete-release: check-app fetch-apps
 	fi; \
 	read -p "Version to delete (empty = abort): " ver; \
 	test -n "$$ver" || { echo "Aborted."; exit 0; }; \
-	read -p "Delete $(app_id) v$$ver from the App Store? [y/N] " confirm; \
+	read -p "Delete $(app_id) $(if $(NIGHTLY),nightly ,)v$$ver from the App Store? [y/N] " confirm; \
 	[ "$$confirm" = "y" ] || [ "$$confirm" = "Y" ] || { echo "Aborted."; exit 0; }; \
 	http=$$(curl -s -o /dev/null -w "%{http_code}" \
 		-X DELETE \
 		-H "Authorization: Token $(api_token)" \
-		"$(appstore_api)/apps/$(app_id)/releases/$$ver"); \
+		"$(appstore_api)/apps/$(app_id)/releases/$(if $(NIGHTLY),nightly/,)$$ver"); \
 	case "$$http" in \
 		204) echo "Release $$ver deleted successfully.";; \
 		401) echo "HTTP 401 — check $(cert_dir)/appstore_api-token"; exit 1;; \
@@ -259,12 +274,18 @@ their status). Run make csr first if you have no certificate yet.
 endef
 
 define help_publish
-make publish [GH=1] [URL=...]    (maintainer)
+make publish [GH=1] [URL=...] [NIGHTLY=1]    (maintainer)
 
 Submits a release to the App Store: downloads the tarball from the given URL,
 signs exactly those bytes and posts the URL plus signature. Prompts for the URL;
 GH=1 pre-fills the standard GitHub release asset URL to confirm, URL= sets it
 directly. A GitHub asset uses gh when available, so private repos work.
+
+NIGHTLY=1 publishes into the nightly channel: the store keeps exactly one
+nightly per app (a new one replaces the previous) and does not require an
+increasing version. For a GitHub asset the release's pre-release flag is
+cross-checked against NIGHTLY and a mismatch asks before publishing. Delete a
+nightly with make delete-release NIGHTLY=1.
 endef
 
 help::
@@ -281,10 +302,11 @@ help::
 	@echo "                       Needs the certificate (.crt or .cert) and .key."
 	@echo "  $(ct)publish$(c0)              Publish a release: downloads the asset from the URL and signs it.  $(cm)[m]$(c0)"
 	@echo "                       Prompts for the URL; $(cv)GH=1$(c0) pre-fills the standard GitHub URL to confirm."
+	@echo "                       $(cv)NIGHTLY=1$(c0) publishes into the nightly channel (replaces the previous nightly)."
 	@echo "  $(ct)list-releases$(c0)        List published releases (compact JSON)."
 	@echo "  $(ct)list-releases-full$(c0)   Full App Store entry as JSON."
 	@echo "  $(ct)list-for-author$(c0)      Find all apps by author (prompts for name)."
-	@echo "  $(ct)delete-release$(c0)       Delete a release (shows list, prompts for version).  $(cm)[m]$(c0)"
+	@echo "  $(ct)delete-release$(c0)       Delete a release (shows list, prompts for version; $(cv)NIGHTLY=1$(c0)).  $(cm)[m]$(c0)"
 	@echo "  $(ct)ratings$(c0)              Show app ratings from the App Store."
 	@echo ""
 	@echo "  $(cd)apps.json cache: $(apps_cache)$(c0)"
