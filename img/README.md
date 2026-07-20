@@ -13,7 +13,7 @@ The ncmake mark is the build-tool chevron `❯` with a cursor, in Nextcloud blue
 | <img src="ncmake.svg" width="46" alt="ncmake tile"> | `ncmake.svg` | Primary mark (blue tile). Icons, favicon, bot avatar (export to PNG). |
 | <img src="ncmake-inverted.svg" width="46" alt="ncmake tile inverted"> | `ncmake-inverted.svg` | White tile, blue mark. On coloured or photographic surfaces. |
 | <img src="ncmake-glyph.svg" height="26" alt="ncmake glyph"> | `ncmake-glyph.svg` | Bare chevron, blue. Inline in prose (works on light and dark). |
-| _white_ | `ncmake-glyph-white.svg` | Bare chevron, white. Inline on a solid dark background. |
+| <picture><source media="(prefers-color-scheme: dark)" srcset="ncmake-glyph-white.svg"><img src="ncmake-glyph.svg" height="26" alt="ncmake glyph, white variant"></picture> | `ncmake-glyph-white.svg` | Bare chevron, white. Inline on a solid dark background. |
 | <img src="ncmake-lockup.svg" width="180" alt="ncmake lockup"> | `ncmake-lockup.svg` | Tile + wordmark. `ncmake` is one word; the background alone breaks light→blue between `c` and `m`. README header, legible on white and on dark. |
 | <img src="ncmake-mark.svg" height="20" alt="ncmake mark"> | `ncmake-mark.svg` | Compact horizontal mark: chevron + `ncmake`, same light→blue background break. Scalable; use inline or as a small brand tag. |
 | <img src="ncmake-badge.svg" height="20" alt="built with ncmake"> | `ncmake-badge.svg` | `built with` label + the mark, at badge geometry. Drops into the README badge row. |

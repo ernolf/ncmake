@@ -2,6 +2,10 @@
   - SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
   - SPDX-License-Identifier: MIT
 -->
+<p align="center">
+  <img src="img/ncmake-lockup.svg" alt="ncmake" width="360">
+</p>
+
 # ncmake
 
 The Swiss Army knife for Nextcloud app development: one generic `Makefile` for building, packaging, deploying, versioning and App Store management of a Nextcloud app.
@@ -321,15 +325,15 @@ GNU make, git, curl, openssl, rsync, python3. Optional but recommended: `xmllint
 
 ## 🏅 Show that your app uses ncmake
 
-If ncmake is useful to you, add a badge to your app's README:
+If ncmake is useful to you, add the badge to your app's README:
 
-[![Built with ncmake](https://img.shields.io/badge/built%20with-ncmake-0082c9)](https://github.com/ernolf/ncmake)
+[![built with ncmake](https://cdn.jsdelivr.net/gh/ernolf/ncmake@main/img/ncmake-badge.svg)](https://github.com/ernolf/ncmake)
 
 ```markdown
-[![Built with ncmake](https://img.shields.io/badge/built%20with-ncmake-0082c9)](https://github.com/ernolf/ncmake)
+[![built with ncmake](https://cdn.jsdelivr.net/gh/ernolf/ncmake@main/img/ncmake-badge.svg)](https://github.com/ernolf/ncmake)
 ```
 
-The badge is served by shields.io and links here; it is purely cosmetic and reports nothing back. To actually find the apps that use ncmake, search GitHub's code search for the fetch URL every stub carries — that signal does not depend on the badge:
+The badge is a small SVG served from this repository through the jsDelivr CDN and links here; it is purely cosmetic and reports nothing back. To actually find the apps that use ncmake, search GitHub's code search for the fetch URL every stub carries — that signal does not depend on the badge:
 
 <https://github.com/search?q=%22raw.githubusercontent.com%2Fernolf%2Fncmake%22&type=code>
 
