@@ -6,16 +6,17 @@
 # pull request when anything changed. This replaces Dependabot for the files
 # under .github/workflows/.
 #
-# Without a personal access token the pull request is created with the default
-# GITHUB_TOKEN, which by GitHub's design does NOT trigger the repository's own
-# CI checks. Add a fine-grained PAT as the NCMAKE_UPDATE_TOKEN secret to have
-# the update PR run the full checks. See ncmake's documentation.
+# This workflow changes files under .github/workflows/, which GitHub does not
+# allow the automatic GITHUB_TOKEN to push. It therefore requires a fine-grained
+# PAT stored as the NCMAKE_UPDATE_TOKEN secret (the PAT also lets the update PR
+# run the repository's CI checks). See doc/AUTOUPDATE_WORKFLOW.md and
+# doc/GITHUB_PAT.md.
 
 name: ncmake workflow update
 
 on:
   schedule:
-    - cron: '30 5 * * 1'      # Mondays 05:30 UTC
+    - cron: '30 5 * * *'      # daily 05:30 UTC
   workflow_dispatch:
 
 permissions:

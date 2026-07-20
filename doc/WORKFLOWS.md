@@ -12,6 +12,7 @@ This guide covers everything about GitHub Actions workflows in an ncmake app: th
 - [The developer module](#-the-developer-module)
 - [Where the workflows come from](#-where-the-workflows-come-from)
 - [Listing, installing, updating](#-listing-installing-updating)
+- [Keeping them up to date automatically](#-keeping-them-up-to-date-automatically)
 - [The lock file](#-the-lock-file)
 - [Placeholders and runner labels](#-placeholders-and-runner-labels)
 - [The ncmake release workflow](#-the-ncmake-release-workflow)
@@ -76,6 +77,10 @@ brings every managed workflow to the current upstream state in one go: outdated 
 ```sh
 git add .github/workflows/
 ```
+
+## 🔄 Keeping them up to date automatically
+
+Running `make workflows-update` by hand works, but ncmake also ships a workflow that does it for you. The [workflow updater](AUTOUPDATE_WORKFLOW.md) runs `make workflows-update` on a daily schedule and opens a pull request whenever a managed workflow has changed upstream. It is what replaces Dependabot for `.github/workflows/`. See **[The workflow updater](AUTOUPDATE_WORKFLOW.md)** for installing it and the one-time token it needs.
 
 ## 🔒 The lock file
 
