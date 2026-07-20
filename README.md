@@ -2,11 +2,7 @@
   - SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
   - SPDX-License-Identifier: MIT
 -->
-<p align="center">
-  <img src="img/ncmake-lockup.svg" alt="ncmake" width="360">
-</p>
-
-# ncmake
+# <img src="img/ncmake-lockup.svg" alt="ncmake" width="360">
 
 The Swiss Army knife for Nextcloud app development: one generic `Makefile` for building, packaging, deploying, versioning and App Store management of a Nextcloud app.
 
