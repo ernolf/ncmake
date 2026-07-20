@@ -3,7 +3,7 @@
   SPDX-License-Identifier: MIT
 -->
 
-# 📦 Installing a Nextcloud app built with <img src="../img/ncmake-mark.svg" alt="ncmake" height="36">
+# 📦 Installing a Nextcloud app built with <img src="../img/ncmake-mark.svg" alt="ncmake" width="130">
 
 This app is built and packaged with [ncmake](https://github.com/ernolf/ncmake), the shared build tool for Nextcloud apps. Installation is therefore the same for every ncmake app: this one guide covers all of it.
 
