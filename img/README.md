@@ -18,6 +18,7 @@ The ncmake mark is the build-tool chevron `❯` with a cursor, in Nextcloud blue
 | <img src="ncmake-mark.svg" height="20" alt="ncmake mark"> | `ncmake-mark.svg` | Compact horizontal mark: chevron + `ncmake`, same light→blue background break. Scalable; use inline or as a small brand tag. |
 | <img src="ncmake-badge.svg" height="20" alt="built with ncmake"> | `ncmake-badge.svg` | `built with` label + the mark, at badge geometry. Drops into the README badge row. |
 | <img src="ncmake-hex.svg" width="46" alt="ncmake hexagon"> | `ncmake-hex.svg` | Hexagon silhouette. Kept for contexts where hexagons are the house style. |
+| <img src="ncmake-avatar.svg" width="46" alt="ncmake avatar"> | `ncmake-avatar.svg` / `ncmake-avatar.png` | Round mark on a full-bleed circle. Bot / GitHub App avatar. PNG is 512×512 with transparent corners. |
 
 ## Snippets
 
@@ -46,7 +47,11 @@ built and packaged with <img src="img/ncmake-glyph.svg" height="13" alt="ncmake"
 built and packaged with <img src="img/ncmake-mark.svg" height="15" alt="ncmake">
 ```
 
-**Bot / GitHub App icon** — upload a PNG of `ncmake.svg` under the app's *Display information*. The round avatar mask crops the rounded tile cleanly.
+**Bot / GitHub App icon** — upload `ncmake-avatar.png` (512×512, round) under the app's *Display information*. Regenerate it from the source with:
+
+```sh
+rsvg-convert -w 512 -h 512 -f png ncmake-avatar.svg > ncmake-avatar.png
+```
 
 ## Colour
 
