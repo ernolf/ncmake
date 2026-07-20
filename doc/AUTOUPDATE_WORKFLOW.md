@@ -7,11 +7,11 @@
 The [workflow manager](WORKFLOWS.md) lets you install and update your CI workflows from their upstream templates by hand (`make workflows-update`). The **workflow updater** automates the update side: on a schedule it runs `make workflows-update` for you and opens a pull request whenever a managed workflow has changed upstream. It is what replaces Dependabot for the files under `.github/workflows/`.
 
 > [!TIP]
-> **TL;DR** — Install with `make workflows-install W=ncmake-update`, add the [`NCMAKE_UPDATE_TOKEN` PAT](GITHUB_PAT.md), and from then on you get a pull request whenever your managed workflows drift from upstream. Locally modified workflows are left untouched.
+> **TL;DR** — Install with `make workflows-install W=workflow-updater`, set up the [GitHub App](GITHUB_APP.md) it authenticates with, and from then on you get a pull request whenever your managed workflows drift from upstream. Locally modified workflows are left untouched.
 
 - [What it does](#-what-it-does)
 - [Installing it](#-installing-it)
-- [The token it needs](#-the-token-it-needs)
+- [The GitHub App it needs](#-the-github-app-it-needs)
 - [When it runs](#-when-it-runs)
 - [What a run does](#-what-a-run-does)
 - [The pull request it opens](#-the-pull-request-it-opens)
@@ -38,14 +38,12 @@ git add .github/workflows/
 
 Commit and merge that like any other workflow adoption. From then on `workflow-updater.yml` lives in `.github/workflows/` and is itself managed, so a later run keeps it up to date too.
 
-## 🔑 The token it needs
+## 🔑 The GitHub App it needs
 
-The updater changes files under `.github/workflows/`, and GitHub does not allow the automatic `GITHUB_TOKEN` to push workflow-file changes. It therefore needs a **fine-grained Personal Access Token** stored as the `NCMAKE_UPDATE_TOKEN` secret.
+The updater changes files under `.github/workflows/`, which the automatic `GITHUB_TOKEN` may not push, and its commit must be verified when your branch protection requires signed commits. A **GitHub App** covers both: its token pushes the workflow files, and the pull request is committed as the app's bot with a verified signature. It also triggers your CI checks (a real actor, unlike the `GITHUB_TOKEN`), so you see whether a template update breaks anything before you merge.
 
 > [!IMPORTANT]
-> Without that token the run fails the moment there is a workflow change to push. Set it up once, following **[GitHub tokens and PAT](GITHUB_PAT.md)**; it needs Contents, Pull requests and Workflows, each Read and write.
-
-The token brings a second benefit: because a PAT acts as a real user, the pull request it opens **triggers your CI checks**, so you see whether a template update breaks anything before you merge. A pull request opened with the plain `GITHUB_TOKEN` would not run them.
+> Set the app up once, following **[A GitHub App for the workflow updater](GITHUB_APP.md)**. It needs Contents, Pull requests and Workflows (each Read and write), installed on the repository, with its App ID and private key stored as the `NCMAKE_UPDATER_APP_ID` and `NCMAKE_UPDATER_PRIVATE_KEY` secrets. Without it the run fails the moment there is a workflow change to push.
 
 ## ⏰ When it runs
 
@@ -56,7 +54,7 @@ The manual trigger only appears once the workflow is on your default branch. Tha
 
 ## ⚙️ What a run does
 
-The single job runs on `ubuntu-latest` (which already carries make, git, curl and python3, so there is nothing to set up), checks out the repository, runs `make dev-init` then `make workflows-update`, and hands any resulting changes to the pull-request step. The commit it prepares is authored by `github-actions[bot]` with a matching `Signed-off-by`, so the DCO check passes.
+The single job mints the app token, checks out the repository, runs `make dev-init` then `make workflows-update`, and hands any resulting changes to the pull-request step. `ubuntu-latest` already carries make, git, curl and python3, so there is nothing to set up. The commit is signed by the app's bot (so it is verified) and carries a matching `Signed-off-by`, so the DCO check passes.
 
 ## 🚀 The pull request it opens
 

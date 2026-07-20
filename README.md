@@ -220,7 +220,7 @@ lists everything the sources offer — ncmake's own release workflow plus the of
 
 The full guide — module setup, sources, status model, the lock file, placeholder handling and the release workflow ncmake ships itself — lives in **[doc/WORKFLOWS.md](doc/WORKFLOWS.md)**.
 
-ncmake can also keep the workflows current for you: the [workflow updater](doc/AUTOUPDATE_WORKFLOW.md) opens a pull request when they drift from upstream. It replaces Dependabot for `.github/workflows/` and needs a [one-time token](doc/GITHUB_PAT.md).
+ncmake can also keep the workflows current for you: the [workflow updater](doc/AUTOUPDATE_WORKFLOW.md) opens a pull request when they drift from upstream. It replaces Dependabot for `.github/workflows/` and authenticates with a [GitHub App](doc/GITHUB_APP.md).
 
 ## 📝 The Installation section for your app's README
 
