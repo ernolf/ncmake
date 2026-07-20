@@ -1,0 +1,18 @@
+<!-- SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com> -->
+<!-- SPDX-License-Identifier: MIT -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 392 150" width="392" height="150" role="img" aria-label="ncmake">
+  <rect width="392" height="150" rx="26" fill="#e6ecf2"/>
+  <path d="M216 0 H366 A26 26 0 0 1 392 26 V124 A26 26 0 0 1 366 150 H216 Z" fill="#0082c9"/>
+  <g transform="translate(22,26) scale(0.78)">
+    <rect x="4" y="4" width="120" height="120" rx="30" fill="#0082c9"/>
+    <g fill="none" stroke="#ffffff" stroke-width="13" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="45,40 74,64 45,88"/>
+      <line x1="80" y1="88" x2="97" y2="88"/>
+    </g>
+  </g>
+  <g font-family="ui-monospace,'DejaVu Sans Mono','Cascadia Code',Menlo,Consolas,monospace" font-size="62" font-weight="600">
+    <text x="140" y="98" textLength="76" lengthAdjust="spacingAndGlyphs" fill="#0082c9">nc</text>
+    <text x="216" y="98" textLength="150" lengthAdjust="spacingAndGlyphs" fill="#ffffff">make</text>
+  </g>
+  <rect x="0.75" y="0.75" width="390.5" height="148.5" rx="25.5" fill="none" stroke="#c3d0dc" stroke-width="1.5"/>
+</svg>

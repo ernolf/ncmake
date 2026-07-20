@@ -1,0 +1,8 @@
+<!-- SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com> -->
+<!-- SPDX-License-Identifier: MIT -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="35 31 74 66" role="img" aria-label="ncmake">
+  <g fill="none" stroke="#0082c9" stroke-width="13" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="45,40 74,64 45,88"/>
+    <line x1="80" y1="88" x2="97" y2="88"/>
+  </g>
+</svg>
