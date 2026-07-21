@@ -2,7 +2,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 392 150" width="392" height="150" role="img" aria-label="ncmake">
   <rect width="392" height="150" rx="26" fill="#e6ecf2"/>
-  <path d="M216 0 H366 A26 26 0 0 1 392 26 V124 A26 26 0 0 1 366 150 H216 Z" fill="#0082c9"/>
+  <path d="M214 0 H366 A26 26 0 0 1 392 26 V124 A26 26 0 0 1 366 150 H214 Z" fill="#0082c9"/>
   <g transform="translate(22,26) scale(0.78)">
     <rect x="4" y="4" width="120" height="120" rx="30" fill="#0082c9"/>
     <g fill="none" stroke="#ffffff" stroke-width="13" stroke-linecap="round" stroke-linejoin="round">
