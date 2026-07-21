@@ -10,9 +10,9 @@
     <polyline points="45,40 74,64 45,88"/>
     <line x1="80" y1="88" x2="97" y2="88"/>
   </g>
-  <g font-family="ui-monospace,'DejaVu Sans Mono','Cascadia Code',Menlo,Consolas,monospace" font-size="11" font-weight="600">
-    <text x="20" y="14.3" textLength="13" lengthAdjust="spacingAndGlyphs" fill="#0082c9">nc</text>
-    <text x="33" y="14.3" textLength="26" lengthAdjust="spacingAndGlyphs" fill="#ffffff">make</text>
+  <g font-family="ui-monospace,'DejaVu Sans Mono','Cascadia Code',Menlo,Consolas,monospace" font-size="12" font-weight="600">
+    <text x="20" y="14" textLength="13" lengthAdjust="spacingAndGlyphs" fill="#0082c9">nc</text>
+    <text x="33.5" y="14" textLength="28" lengthAdjust="spacingAndGlyphs" fill="#ffffff">make</text>
   </g>
   <rect x="0.5" y="0.5" width="65" height="19" rx="2.5" fill="none" stroke="#c3d0dc" stroke-width="1"/>
 </svg>
