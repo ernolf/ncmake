@@ -4,16 +4,16 @@
   <clipPath id="ncmake-badge-r"><rect width="129" height="20" rx="3"/></clipPath>
   <g clip-path="url(#ncmake-badge-r)">
     <rect width="64" height="20" fill="#555555"/>
-    <rect x="64" width="33" height="20" fill="#e6ecf2"/>
-    <rect x="97" width="32" height="20" fill="#0082c9"/>
+    <rect x="64" width="32.5" height="20" fill="#e6ecf2"/>
+    <rect x="96.5" width="32.5" height="20" fill="#0082c9"/>
   </g>
   <text x="32" y="14.3" textLength="52" lengthAdjust="spacingAndGlyphs" fill="#ffffff" font-family="Verdana,Geneva,'DejaVu Sans',sans-serif" font-size="11" text-anchor="middle">built with</text>
   <g transform="translate(59.1,-4.08) scale(0.22)" fill="none" stroke="#0082c9" stroke-width="13" stroke-linecap="round" stroke-linejoin="round">
     <polyline points="45,40 74,64 45,88"/>
     <line x1="80" y1="88" x2="97" y2="88"/>
   </g>
-  <g font-family="ui-monospace,'DejaVu Sans Mono','Cascadia Code',Menlo,Consolas,monospace" font-size="11" font-weight="600">
-    <text x="84" y="14.3" textLength="13" lengthAdjust="spacingAndGlyphs" fill="#0082c9">nc</text>
-    <text x="97" y="14.3" textLength="26" lengthAdjust="spacingAndGlyphs" fill="#ffffff">make</text>
+  <g font-family="ui-monospace,'DejaVu Sans Mono','Cascadia Code',Menlo,Consolas,monospace" font-size="12" font-weight="600">
+    <text x="84" y="14" textLength="13" lengthAdjust="spacingAndGlyphs" fill="#0082c9">nc</text>
+    <text x="97" y="14" textLength="26" lengthAdjust="spacingAndGlyphs" fill="#ffffff">make</text>
   </g>
 </svg>
