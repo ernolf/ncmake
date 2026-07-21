@@ -216,11 +216,11 @@ make workflows-install W="release reuse lint-php"
 git add .github/workflows/
 ```
 
-lists everything the sources offer — ncmake's own release workflow plus the official [nextcloud/.github workflow templates](https://github.com/nextcloud/.github/tree/master/workflow-templates) — installs your pick and records the provenance in a lock file, so `make workflows-update` later distinguishes upstream updates from your local edits. Discovery is live via the GitHub API: new upstream templates appear in the list without any ncmake update.
+lists everything the sources offer — ncmake's own workflow-updater- and release workflow plus the official [nextcloud/.github workflow templates](https://github.com/nextcloud/.github/tree/master/workflow-templates) — installs your pick and records the provenance in a lock file, so `make workflows-update` later distinguishes upstream updates from your local edits. Discovery is live via the GitHub API: new upstream templates appear in the list without any ncmake update.
 
-The full guide — module setup, sources, status model, the lock file, placeholder handling and the release workflow ncmake ships itself — lives in **[doc/WORKFLOWS.md](doc/WORKFLOWS.md)**.
+The full guide — module setup, sources, status model, the lock file, placeholder handling and the workflow-updater- and release workflows ncmake ships itself — lives in **[doc/WORKFLOWS.md](doc/WORKFLOWS.md)**.
 
-ncmake can also keep the workflows current for you: the [workflow updater](doc/AUTOUPDATE_WORKFLOW.md) opens a pull request when they drift from upstream. It replaces Dependabot for `.github/workflows/` and authenticates with a [GitHub App](doc/GITHUB_APP.md).
+ncmake can keep the workflows current for you: the [workflow updater](doc/AUTOUPDATE_WORKFLOW.md) opens a pull request when they drift from upstream. It replaces Dependabot for `.github/workflows/` and authenticates with a [GitHub App](doc/GITHUB_APP.md).
 
 ## 📝 The Installation section for your app's README
 
