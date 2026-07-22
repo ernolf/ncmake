@@ -336,11 +336,11 @@ The badge is a small SVG served from this repository through the jsDelivr CDN an
 The same from the command line needs a recent `gh` (2.10 or newer, for the `search` command):
 
 ```sh
-gh search code 'raw.githubusercontent.com/ernolf/ncmake' --json repository --jq '.[].repository.full_name' | sort -u
+gh search code 'raw.githubusercontent.com/ernolf/ncmake' --json repository --jq '.[].repository.nameWithOwner' | sort -u
 ```
 
 > [!NOTE]
-> Both queries hit the same code-search index, so an empty result early on is expected: GitHub only searches public repositories it has already indexed, and a freshly created repo can take weeks to be picked up (the REST `search/code` API uses an even older, sparser index — prefer the browser query above). The bootstrap stub is committed regardless, so a consumer becomes findable the moment its repo is indexed.
+> Both queries hit code-search indexes that only contain public repositories GitHub has already picked up, so a freshly created consumer can take weeks to appear. The bootstrap stub is committed regardless, so a consumer becomes findable the moment its repo is indexed.
 
 ## 📄 License
 
