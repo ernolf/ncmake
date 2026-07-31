@@ -130,13 +130,29 @@ else
 endif
 RUNTIME     ?= $(default_runtime)
 no_runtime   = sh -c 'echo "ERROR: no container runtime found (podman/docker). Install podman: apt-get install podman, or use RUNTIME=bare to build on the host." >&2; exit 1'
-# Image tags are derived from the declared support range, never hardcoded: the PHP CI
-# image from info.xml's min-version, the Node image from package.json's engines.node.
+# Two container images, picked per task, both maintained upstream (nothing to build here):
+#   php_image      - the Nextcloud CI image for the declared min-version, fully tooled
+#                    (composer, git, unzip). 'make build' uses it so dependencies resolve
+#                    against the support floor, which is what package-correct output needs;
+#                    its frozen patch level does not matter for shipping runtime deps.
+#   analysis_image - the official composer image: always the newest PHP patch plus composer,
+#                    git and unzip. Everything interactive (composer, psalm) runs here, where
+#                    a current runtime matters - psalm needs a recent patch - while the
+#                    analysed PHP level stays pinned through psalm.xml, so the image's fixed
+#                    PHP version does not affect the result.
+# The Node image comes from package.json's engines.node.
 php_min     = $(shell xmllint --xpath 'string(//dependencies/php/@min-version)' appinfo/info.xml 2>/dev/null || grep -oPm1 '(?<=<php min-version=")[^"]+' appinfo/info.xml 2>/dev/null)
 node_major  = $(shell python3 -c 'import json,re;print(re.search(r"[0-9]+", json.load(open("package.json"))["engines"]["node"]).group())' 2>/dev/null)
-php_image   ?= ghcr.io/nextcloud/continuous-integration-php$(php_min):latest
-node_image  ?= node:$(or $(node_major),lts)
-reuse_image ?= docker.io/fsfe/reuse:latest
+php_image      ?= ghcr.io/nextcloud/continuous-integration-php$(php_min):latest
+analysis_image ?= docker.io/library/composer:2
+node_image     ?= node:$(or $(node_major),lts)
+reuse_image    ?= docker.io/fsfe/reuse:latest
+# PHP picks the image per task: max (default) runs on analysis_image, the newest tooled
+# runtime, right for dev tools and psalm; min runs on php_image, the support floor, for
+# package-correct dependency resolution. 'make build' sets PHP=min itself; add PHP=min to
+# any command to resolve against the floor instead.
+PHP ?= max
+active_php_image = $(if $(filter min,$(PHP)),$(php_image),$(analysis_image))
 
 ifeq ($(RUNTIME),bare)
   php_run   = sh -lc
@@ -157,12 +173,12 @@ else
 endif
 
 ifeq ($(filter $(RUNTIME),bare none),)
-  php_run   = $(container) -e COMPOSER_HOME=/tmp/composer -e COMPOSER_ALLOW_SUPERUSER=1 $(php_image) sh -lc
+  php_run   = $(container) -e COMPOSER_HOME=/tmp/composer -e COMPOSER_ALLOW_SUPERUSER=1 $(active_php_image) sh -lc
   node_run  = $(container) $(node_image) sh -lc
   reuse_run = $(container) $(reuse_image)
 endif
 
-.PHONY: all version changelog tag build check-app check-build stage dist rsync cp composer npm reuse \
+.PHONY: all version changelog tag build check-app check-build stage dist rsync cp composer npm reuse psalm \
         clean dist-clean self-update dev-init dev-clean help
 
 # == Changelog configuration (git-cliff) ==
@@ -334,7 +350,9 @@ tag: check-app
 # == Build ==
 
 # Build the app's dependencies and frontend. What runs is auto-detected (see the
-# build heuristics at the top) and routed to its container via RUNTIME.
+# build heuristics at the top) and routed to its container via RUNTIME. PHP=min so
+# packaging resolves dependencies against the declared support floor.
+build: PHP := min
 build: check-app
 	@echo "==> Building via RUNTIME=$(RUNTIME)"
 	@if [ -n "$(php_build_cmd)" ]; then \
@@ -354,6 +372,15 @@ composer: check-app
 	@test -n "$(ARGS)" || { echo "Usage: make composer ARGS=\"<composer arguments>\"" >&2; exit 1; }
 	@echo "==> composer $(ARGS) (RUNTIME=$(RUNTIME))"
 	@$(php_run) 'composer $(ARGS)'
+
+# Static analysis. Runs 'composer psalm' on analysis_image (the current composer image)
+# because psalm needs a recent runtime, while the analysed PHP level stays pinned through
+# psalm.xml. PHP=max is the default, but pin it here so the target is independent of it.
+# Install the dev tools first: make composer ARGS=install.
+psalm: PHP := max
+psalm: check-app
+	@echo "==> psalm ($(active_php_image), RUNTIME=$(RUNTIME))"
+	@$(php_run) 'composer psalm'
 
 npm: check-app
 	@test -n "$(ARGS)" || { echo "Usage: make npm ARGS=\"<npm arguments>\"" >&2; exit 1; }
@@ -542,9 +569,11 @@ endef
 define help_composer
 make composer ARGS="<composer arguments>"
 
-Runs any composer command in the throwaway PHP container (the image make build
-uses), so no composer or PHP is needed on the host. The PHP version is the
-minimum declared in info.xml.
+Runs any composer command in a throwaway container, so no composer or PHP is
+needed on the host. It uses analysis_image by default (the official composer
+image: newest PHP plus composer, git and unzip), which is what dev tools such as
+psalm need. Add PHP=min to run on php_image instead, the min-version build image,
+to resolve dependencies against the support floor.
 
 Examples:
   make composer ARGS=install               all deps including dev tools
@@ -552,6 +581,20 @@ Examples:
   make composer ARGS="cs:check"            run a composer script
   make composer ARGS="require --dev vimeo/psalm"
   make composer ARGS=update                refresh composer.lock
+  make composer ARGS="install --no-dev" PHP=min   resolve against the floor
+endef
+
+define help_psalm
+make psalm
+
+Runs static analysis (composer psalm) in a throwaway container on analysis_image
+(the official composer image: newest PHP plus composer, git and unzip), so no PHP
+is needed on the host. The runtime is modern enough for current psalm, while the
+analysed PHP level stays pinned via psalm.xml. Install the dev tools first with
+make composer ARGS=install.
+
+  make composer ARGS=install    install the dev tools (incl. psalm), then:
+  make psalm
 endef
 
 define help_npm
@@ -695,9 +738,12 @@ help::
 	@echo "  $(ct)build$(c0)                Build PHP deps + frontend (auto-detected from composer.json/package.json)"
 	@echo "  $(ct)composer$(c0) $(cv)ARGS=...$(c0)    Run any composer command in the throwaway PHP container"
 	@echo "  $(ct)npm$(c0) $(cv)ARGS=...$(c0)         Run any npm command in the throwaway Node container"
+	@echo "  $(ct)psalm$(c0)                Run static analysis (composer psalm) on the current composer image"
 	@echo "  $(ct)reuse$(c0)                Run the REUSE compliance check in the fsfe/reuse container"
 	@echo "  $(ct)dist$(c0)                 Build the distribution tarball from the shipped file set"
 	@echo "                       $(cd)→ $(tarball)$(c0)"
+	@echo ""
+	@echo "  $(cd)PHP image per task: build on the min-version, composer/psalm on the current composer image ($(cv)PHP=min|max$(c0)$(cd)).$(c0)"
 	@echo ""
 	@echo "$(ch)Local deploy:$(c0)"
 	@echo "  $(ct)rsync$(c0)                Deploy the shipped file set into an apps/ dir via rsync (no tarball)."
