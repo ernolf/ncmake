@@ -1,0 +1,72 @@
+# SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
+# SPDX-License-Identifier: MIT
+#
+# ncmake self-CI - static quality gates. https://github.com/ernolf/ncmake
+#
+# ncmake ships no composer.json or package.json, so these checks target what the
+# repository actually is: workflow YAML (both the self-CI here and the templates
+# in workflows/ that ncmake deploys into apps), Markdown docs, and REUSE
+# licensing. The functional end-to-end run lives in a separate workflow.
+
+name: Lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  yaml:
+    name: yamllint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install yamllint
+        run: pipx install yamllint
+      - name: Lint YAML
+        run: yamllint .
+
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install actionlint
+        run: go install github.com/rhysd/actionlint/cmd/actionlint@latest
+      - name: Lint workflows (self-CI and shipped templates)
+        run: |
+          "$(go env GOPATH)/bin/actionlint" -color \
+            .github/workflows/*.yml workflows/*.yml
+
+  markdown:
+    name: markdownlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Lint Markdown
+        run: npx --yes markdownlint-cli2 "**/*.md"
+
+  reuse:
+    name: REUSE
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install reuse
+        run: pipx install reuse
+      - name: Check licensing
+        run: reuse lint

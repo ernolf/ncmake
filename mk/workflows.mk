@@ -124,10 +124,12 @@ def save_lock(lock):
     # sidecar - keeps make reuse green without touching the app's REUSE.toml.
     lic = os.environ.get('wf_lock_license', 'CC0-1.0')
     cop = os.environ.get('wf_lock_copyright', '').strip()
+    # REUSE-IgnoreStart
     with open(LOCK + '.license', 'w', encoding='utf-8', newline='\n') as f:
         if cop:
             f.write('SPDX-FileCopyrightText: %s\n' % cop)
         f.write('SPDX-License-Identifier: %s\n' % lic)
+    # REUSE-IgnoreEnd
 
 def file_hash(path):
     with open(path, 'rb') as f:
