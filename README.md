@@ -94,7 +94,7 @@ Nothing is configured twice, everything is read from files your app has anyway:
 | PHP build needed? | `composer.json` declares runtime requirements (anything besides `php` and `ext-*`) |
 | Frontend build needed? | `package.json` has a `build` script |
 | Is `js/` (or `vendor/`) a build artifact? | `.gitignore` (evaluated via `git check-ignore`) |
-| PHP container image | minimum PHP version in `appinfo/info.xml` |
+| PHP container images | build image from the min-version in `appinfo/info.xml`; analysis on the current composer image |
 | Node container image | `engines.node` in `package.json` |
 
 The `.gitignore` line deserves a word: when `js/` is gitignored, it is a build output and must exist before packaging (`make dist` refuses otherwise and tells you to run `make build`). When `js/` is committed, as in apps that ship their built frontend in git, a fresh checkout is already complete and packages without building. The same logic applies to `vendor/`.
@@ -114,7 +114,7 @@ The runtime is auto-detected (podman preferred, then docker) and can be chosen p
 | `docker-rootless` | rootless docker | |
 | `bare` | no container | composer and npm must be on the PATH |
 
-The images are derived, never hardcoded: PHP runs in `ghcr.io/nextcloud/continuous-integration-php<min>` (the same images the Nextcloud CI uses, with all required extensions), Node in `node:<major>` from your `engines.node`. Both can be overridden (see [Variables](#-variables)).
+Two PHP images are picked per task, both maintained upstream so ncmake ships no image of its own. The **build** runs in the Nextcloud CI image for your declared min-version (`ghcr.io/nextcloud/continuous-integration-php<min>`): fully tooled (composer, git, unzip) and resolving dependencies against the support floor, which is what packaging needs — its frozen patch level is irrelevant for shipping runtime deps. Everything **interactive** (`make composer`, `make psalm`) runs in the official `composer` image (`docker.io/library/composer:2`), which always ships the newest PHP patch alongside composer, git and unzip; psalm needs a current runtime, while the analysed PHP level stays pinned through `psalm.xml`, so the image's fixed PHP version does not affect the result. Node runs in `node:<major>` from your `engines.node`. An app that needs a specific PHP version or an extra extension (`ext-gd`, `ext-intl`, …) points `php_image`/`analysis_image` at another image in `ncmake.mk`. All images can be overridden (see [Variables](#-variables)).
 
 > [!CAUTION]
 > On SELinux hosts (Fedora, RHEL) bind mounts may need a `:z` label. If you hit permission errors there, run with `RUNTIME=bare` or adjust your container policy.
@@ -137,9 +137,12 @@ For everything beyond the release build there are generic pass-through targets r
 ```sh
 make composer ARGS=install       # install dependencies INCLUDING dev tools (vendor-bin etc.)
 make composer ARGS="cs:check"    # run a composer script
+make psalm                       # run static analysis (psalm) on the current composer image
 make npm ARGS=ci                 # install frontend dependencies
 make npm ARGS="run test"         # run the frontend tests
 ```
+
+`make psalm` runs `composer psalm` on the current composer image, because psalm needs a newer runtime than the build floor; run `make composer ARGS=install` once beforehand to install the dev tools. `make composer` uses that same current image by default, so dev tools just work; only `make build` drops to the min-version for package-correct resolution. Add `PHP=min` to route any other composer command through the build floor instead.
 
 `make dist-clean` resets to a pristine checkout first (it removes every git-ignored build output: `vendor/`, `node_modules/`, `js/`, caches), so
 
@@ -276,7 +279,8 @@ Most apps need none of this.
 keep_extra     = resources               # extra runtime paths to ship
 php_build_cmd  = composer install --no-dev && php bin/generate.php
 node_build_cmd =                         # empty = skip the npm build
-php_image      = ghcr.io/nextcloud/continuous-integration-php8.2:latest
+php_image      = ghcr.io/nextcloud/continuous-integration-php8.2:latest   # build image
+analysis_image = docker.io/library/composer:2.7   # pin the composer/psalm image
 ```
 
 ## 📋 Variables
@@ -291,7 +295,9 @@ Set on the command line (`make build RUNTIME=bare`), in the environment, or pers
 | `web_user` | `www-data` | web server user of the target instance (file owner, runs occ) |
 | `ENGINE` | auto (`docker`, else `podman`) | container CLI for `make cp` (independent of `RUNTIME`) |
 | `cert_dir` | `~/.nextcloud/certificates` | location of certificate, key and API token |
-| `php_image` | `ghcr.io/nextcloud/continuous-integration-php<min>` | PHP container image |
+| `php_image` | `ghcr.io/nextcloud/continuous-integration-php<min>` | build image (min-version, fully tooled) |
+| `analysis_image` | `docker.io/library/composer:2` | image for `composer` and `psalm` (current PHP, fully tooled) |
+| `PHP` | `max` | `max` → `analysis_image`, `min` → `php_image` (build floor); `make build` forces `min` |
 | `node_image` | `node:<engines.node major>` | Node container image |
 | `keep_extra` | (empty) | additional paths for the shipped file set |
 | `php_build_cmd` | auto-detected | PHP-side build command, empty skips |
