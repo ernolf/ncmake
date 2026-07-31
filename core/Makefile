@@ -378,9 +378,11 @@ composer: check-app
 # psalm.xml. PHP=max is the default, but pin it here so the target is independent of it.
 # ARGS is forwarded to psalm past composer's own options (composer psalm -- ...), so
 # flags like --show-info=true reach psalm instead of being eaten by composer.
-# Install the dev tools first: make composer ARGS=install.
+# Install the dev tools first: make composer ARGS=install - the recipe guards this
+# and aborts with that hint when psalm is not present yet.
 psalm: PHP := max
 psalm: check-app
+	@test -e vendor/bin/psalm || { echo "ERROR: dev tools not installed - run 'make composer ARGS=install' first." >&2; exit 1; }
 	@echo "==> psalm ($(active_php_image), RUNTIME=$(RUNTIME))"
 	@$(php_run) 'composer psalm $(if $(strip $(ARGS)),-- $(ARGS))'
 
