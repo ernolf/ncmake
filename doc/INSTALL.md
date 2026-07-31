@@ -83,7 +83,7 @@ make build && make dist
 - `make build` installs the runtime PHP dependencies and builds the frontend, each in a throwaway container — nothing is installed on your host.
 - `make dist` assembles the runtime file set and writes the tarball to:
 
-  ```
+  ```text
   build/artifacts/dist/APP_ID-<version>.tar.gz
   ```
 

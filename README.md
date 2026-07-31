@@ -4,6 +4,8 @@
 -->
 # <img src="img/ncmake-lockup.svg" alt="ncmake" width="360">
 
+[![REUSE status](https://api.reuse.software/badge/github.com/ernolf/ncmake)](https://api.reuse.software/info/github.com/ernolf/ncmake)
+
 The Swiss Army knife for Nextcloud app development: one generic `Makefile` for building, packaging, deploying, versioning and App Store management of a Nextcloud app.
 
 Everything is derived from the app itself, so there is nothing to configure for a standard app: drop it in, run `make`, done. The package managers run in throwaway containers, so the host needs neither PHP nor Node.
@@ -156,7 +158,7 @@ is the reproducible from-scratch build.
 
 What ends up in a release is defined as an **allowlist** (the keep model), not as an exclude list. Shipped are the standard app paths, each only when it exists:
 
-```
+```text
 appinfo/ lib/ l10n/ templates/ img/ css/ js/ vendor/ LICENSES/
 CHANGELOG.md AUTHORS.md REUSE.toml COPYING COPYING.md LICENSE LICENSE.md
 ```
@@ -269,7 +271,7 @@ Most apps need none of this.
 
 **`.nextcloudignore`** removes files from within the shipped set (rsync exclude syntax, one pattern per line), for example test ballast inside shipped vendor packages:
 
-```
+```text
 /vendor/*/*/tests/
 ```
 

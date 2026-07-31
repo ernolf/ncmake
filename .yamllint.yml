@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
+# SPDX-License-Identifier: MIT
+#
+# yamllint configuration for ncmake's own YAML: the self-CI workflows and the
+# templates in workflows/ that ncmake deploys into apps.
+
+extends: default
+
+rules:
+  # GitHub workflows use the `on:` key, which yamllint's truthy rule flags.
+  truthy:
+    allowed-values: ['true', 'false']
+    check-keys: false
+  # This repo does not hard-wrap; long workflow expressions stay on one line.
+  line-length: disable
+  # Workflow and config files intentionally omit the `---` document marker.
+  document-start: disable
