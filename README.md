@@ -142,7 +142,7 @@ make npm ARGS=ci                 # install frontend dependencies
 make npm ARGS="run test"         # run the frontend tests
 ```
 
-`make psalm` runs `composer psalm` on the current composer image, because psalm needs a newer runtime than the build floor; run `make composer ARGS=install` once beforehand to install the dev tools. `make composer` uses that same current image by default, so dev tools just work; only `make build` drops to the min-version for package-correct resolution. Add `PHP=min` to route any other composer command through the build floor instead.
+`make psalm` runs `composer psalm` on the current composer image, because psalm needs a newer runtime than the build floor; run `make composer ARGS=install` once beforehand to install the dev tools. Pass extra flags straight to psalm with `make psalm ARGS="..."`; they are forwarded past composer's own options (`composer psalm -- ...`), so e.g. `make psalm ARGS="--show-info=true"` reaches psalm rather than being eaten by composer. `make composer` uses that same current image by default, so dev tools just work; only `make build` drops to the min-version for package-correct resolution. Add `PHP=min` to route any other composer command through the build floor instead.
 
 `make dist-clean` resets to a pristine checkout first (it removes every git-ignored build output: `vendor/`, `node_modules/`, `js/`, caches), so
 
