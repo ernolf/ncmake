@@ -1,0 +1,20 @@
+version = 1
+
+# Files that cannot carry an inline SPDX header: a binary asset and the
+# comment-less JSON sidecars. Every other file declares its license in its
+# own header.
+
+[[annotations]]
+path = "LICENSE"
+SPDX-FileCopyrightText = "2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>"
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = "img/ncmake-avatar.png"
+SPDX-FileCopyrightText = "2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>"
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = ["workflows/release.properties.json", "workflows/workflow-updater.properties.json"]
+SPDX-FileCopyrightText = "2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>"
+SPDX-License-Identifier = "MIT"

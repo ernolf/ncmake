@@ -1,0 +1,21 @@
+// SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
+// SPDX-License-Identifier: MIT
+//
+// markdownlint-cli2 configuration for ncmake's documentation.
+{
+  "config": {
+    "default": true,
+    // This repo does not hard-wrap prose.
+    "MD013": false,
+    // README and docs embed HTML (badges, sized <img>).
+    "MD033": false,
+    // Files open with an SPDX license comment, not a top-level heading.
+    "MD041": false,
+    // Compact tables (no padding around pipes) are the repository's style.
+    "MD060": false,
+    // Headings carry emoji; GitHub's anchor slugs differ from markdownlint's.
+    "MD051": false,
+    // GitHub alerts ([!NOTE], [!TIP]) are separate quotes needing a blank line.
+    "MD028": false
+  }
+}
