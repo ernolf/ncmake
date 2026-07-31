@@ -174,7 +174,7 @@ endif
 
 ifeq ($(filter $(RUNTIME),bare none),)
   php_run   = $(container) -e COMPOSER_HOME=/tmp/composer -e COMPOSER_ALLOW_SUPERUSER=1 $(active_php_image) sh -lc
-  node_run  = $(container) $(node_image) sh -lc
+  node_run  = $(container) -e npm_config_cache=/tmp/.npm $(node_image) sh -lc
   reuse_run = $(container) $(reuse_image)
 endif
 

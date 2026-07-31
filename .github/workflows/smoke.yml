@@ -1,0 +1,87 @@
+# SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
+# SPDX-License-Identifier: MIT
+#
+# ncmake self-CI - functional smoke test. https://github.com/ernolf/ncmake
+#
+# Exercises the core Makefile from this very revision against a real consuming
+# app, fetched over the network the way every app consumes ncmake (NCMAKE_REF
+# pointing at the pull request's own commit). The app is resolved to its latest
+# stable release: that release was itself produced by ncmake, so every target
+# must succeed - a red run here always means an ncmake regression, never a flaky
+# fixture. Tracking the latest release keeps this workflow maintenance-free.
+#
+# Each heavy target runs from a pristine tree (dist-clean in between), so a
+# target that only works on leftovers from a previous run is caught.
+
+name: Smoke
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  end-to-end:
+    name: build twofactor_oath with this revision
+    runs-on: ubuntu-latest
+    env:
+      RUNTIME: docker
+      NCMAKE_REF: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Resolve the latest stable release of the consuming app
+        id: app
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          tag="$(gh api repos/ernolf/twofactor_oath/releases/latest --jq .tag_name)"
+          echo "Latest stable release: $tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the consuming app
+        uses: actions/checkout@v7
+        with:
+          repository: ernolf/twofactor_oath
+          ref: ${{ steps.app.outputs.tag }}
+          persist-credentials: false
+
+      - name: Introspection - the help and target system
+        run: |
+          set -eu
+          make NCMAKE_REF="$NCMAKE_REF" help
+          make NCMAKE_REF="$NCMAKE_REF" help-build
+          make NCMAKE_REF="$NCMAKE_REF" help-dist
+
+      - name: Release pipeline from a pristine tree
+        run: |
+          set -eu
+          make NCMAKE_REF="$NCMAKE_REF" dist-clean
+          make NCMAKE_REF="$NCMAKE_REF" build
+          make NCMAKE_REF="$NCMAKE_REF" dist
+          ls -1 build/artifacts/dist/*.tar.gz
+
+      - name: dist is repeatable (rebuild without cleaning)
+        run: |
+          set -eu
+          make NCMAKE_REF="$NCMAKE_REF" dist
+          ls -1 build/artifacts/dist/*.tar.gz
+
+      - name: Static analysis from a pristine tree
+        run: |
+          set -eu
+          make NCMAKE_REF="$NCMAKE_REF" dist-clean
+          make NCMAKE_REF="$NCMAKE_REF" composer ARGS=install
+          make NCMAKE_REF="$NCMAKE_REF" psalm
+
+      - name: REUSE lint from a pristine tree
+        run: |
+          set -eu
+          make NCMAKE_REF="$NCMAKE_REF" dist-clean
+          make NCMAKE_REF="$NCMAKE_REF" reuse
