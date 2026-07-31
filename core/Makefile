@@ -129,7 +129,7 @@ else
   default_runtime := none
 endif
 RUNTIME     ?= $(default_runtime)
-no_runtime   = sh -c 'echo "ERROR: no container runtime found (podman/docker). Install podman: apt-get install podman, or use RUNTIME=bare to build on the host." >&2; exit 1'
+no_runtime   = sh -c 'echo >&2; echo "ERROR: no container runtime found (podman/docker). Install podman: apt-get install podman, or use RUNTIME=bare to build on the host." >&2; echo >&2; exit 1'
 # Two container images, picked per task, both maintained upstream (nothing to build here):
 #   php_image      - the Nextcloud CI image for the declared min-version, fully tooled
 #                    (composer, git, unzip). 'make build' uses it so dependencies resolve
@@ -226,7 +226,7 @@ all: dist
 
 # Every functional target needs the app id; help stays runnable anywhere.
 check-app:
-	@test -n "$(app_id)" || { echo "ERROR: no <id> found in appinfo/info.xml - run make from a Nextcloud app root." >&2; exit 1; }
+	@test -n "$(app_id)" || { echo >&2; echo "ERROR: no <id> found in appinfo/info.xml - run make from a Nextcloud app root." >&2; echo >&2; exit 1; }
 
 # == Release versioning (maintainer only) ==
 
@@ -369,7 +369,7 @@ build: check-app
 #   make composer ARGS="cs:check"      run a composer script
 #   make npm ARGS="run test"           run the frontend tests
 composer: check-app
-	@test -n "$(ARGS)" || { echo "Usage: make composer ARGS=\"<composer arguments>\"" >&2; exit 1; }
+	@test -n "$(ARGS)" || { echo >&2; echo "Usage: make composer ARGS=\"<composer arguments>\"" >&2; echo >&2; exit 1; }
 	@echo "==> composer $(ARGS) (RUNTIME=$(RUNTIME))"
 	@$(php_run) 'composer $(ARGS)'
 
@@ -382,12 +382,12 @@ composer: check-app
 # and aborts with that hint when psalm is not present yet.
 psalm: PHP := max
 psalm: check-app
-	@test -e vendor/bin/psalm || { echo "ERROR: dev tools not installed - run 'make composer ARGS=install' first." >&2; exit 1; }
+	@test -e vendor/bin/psalm || { echo >&2; echo "ERROR: dev tools not installed - run 'make composer ARGS=install' first." >&2; echo >&2; exit 1; }
 	@echo "==> psalm ($(active_php_image), RUNTIME=$(RUNTIME))"
 	@$(php_run) 'composer psalm $(if $(strip $(ARGS)),-- $(ARGS))'
 
 npm: check-app
-	@test -n "$(ARGS)" || { echo "Usage: make npm ARGS=\"<npm arguments>\"" >&2; exit 1; }
+	@test -n "$(ARGS)" || { echo >&2; echo "Usage: make npm ARGS=\"<npm arguments>\"" >&2; echo >&2; exit 1; }
 	@echo "==> npm $(ARGS) (RUNTIME=$(RUNTIME))"
 	@$(node_run) 'npm $(ARGS)'
 
@@ -401,10 +401,10 @@ reuse: check-app
 # gitignored outputs are demanded: a committed js/ or vendor/ ships as-is.
 check-build:
 	@if [ -n "$(need_npm)" ] && [ -n "$(js_ignored)" ] && { [ ! -d js ] || [ -z "$$(ls -A js 2>/dev/null)" ]; }; then \
-		echo "ERROR: js/ is missing or empty - run 'make build' first." >&2; exit 1; \
+		echo >&2; echo "ERROR: js/ is missing or empty - run 'make build' first." >&2; echo >&2; exit 1; \
 	fi
 	@if [ -n "$(need_composer)" ] && [ -n "$(vendor_ignored)" ] && [ ! -f vendor/autoload.php ]; then \
-		echo "ERROR: vendor/autoload.php is missing - run 'make build' first." >&2; exit 1; \
+		echo >&2; echo "ERROR: vendor/autoload.php is missing - run 'make build' first." >&2; echo >&2; exit 1; \
 	fi
 
 # Materialize the shipped runtime file set once, under the APP ID (the checkout
@@ -440,7 +440,7 @@ web_user ?= www-data
 # and chown. Without OCC=1 only the rsync happens and the finishing commands are
 # printed ready for copy and paste.
 rsync: stage
-	@test -n "$(TARGET)" || { echo "Usage: make rsync TARGET=<apps-dir | user@host:apps-dir> [OCC=1]" >&2; exit 1; }
+	@test -n "$(TARGET)" || { echo >&2; echo "Usage: make rsync TARGET=<apps-dir | user@host:apps-dir> [OCC=1]" >&2; echo >&2; exit 1; }
 	@t="$(TARGET)"; t="$${t%/}"; \
 	case "$$t" in \
 	  *:*) host="$${t%%:*}"; dir="$${t#*:}";; \
@@ -483,10 +483,10 @@ ENGINE ?= $(if $(have_docker),docker,$(if $(have_podman),podman,))
 # meant for an interactive terminal; the automated calls run without a TTY and
 # therefore without -it.
 cp: stage
-	@test -n "$(ENGINE)" || { echo "ERROR: no container CLI found (docker/podman)." >&2; exit 1; }
+	@test -n "$(ENGINE)" || { echo >&2; echo "ERROR: no container CLI found (docker/podman)." >&2; echo >&2; exit 1; }
 	@t="$(TARGET)"; c="$${t%%:*}"; d="$${t#*:}"; \
 	if [ -z "$$t" ] || [ "$$c" = "$$t" ] || [ -z "$$c" ] || [ -z "$$d" ]; then \
-		echo "Usage: make cp TARGET=<container>:<apps-dir> [OCC=1]" >&2; exit 1; \
+		echo >&2; echo "Usage: make cp TARGET=<container>:<apps-dir> [OCC=1]" >&2; echo >&2; exit 1; \
 	fi; \
 	d="$${d%/}"; app_dir="$$d/$(app_id)"; occ="$${d%/*}/occ"; \
 	occ_run="$(ENGINE) exec --user $(web_user) $$c php $$occ"; \
