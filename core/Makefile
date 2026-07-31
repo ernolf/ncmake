@@ -376,11 +376,13 @@ composer: check-app
 # Static analysis. Runs 'composer psalm' on analysis_image (the current composer image)
 # because psalm needs a recent runtime, while the analysed PHP level stays pinned through
 # psalm.xml. PHP=max is the default, but pin it here so the target is independent of it.
+# ARGS is forwarded to psalm past composer's own options (composer psalm -- ...), so
+# flags like --show-info=true reach psalm instead of being eaten by composer.
 # Install the dev tools first: make composer ARGS=install.
 psalm: PHP := max
 psalm: check-app
 	@echo "==> psalm ($(active_php_image), RUNTIME=$(RUNTIME))"
-	@$(php_run) 'composer psalm'
+	@$(php_run) 'composer psalm $(if $(strip $(ARGS)),-- $(ARGS))'
 
 npm: check-app
 	@test -n "$(ARGS)" || { echo "Usage: make npm ARGS=\"<npm arguments>\"" >&2; exit 1; }
@@ -585,7 +587,7 @@ Examples:
 endef
 
 define help_psalm
-make psalm
+make psalm [ARGS="<psalm arguments>"]
 
 Runs static analysis (composer psalm) in a throwaway container on analysis_image
 (the official composer image: newest PHP plus composer, git and unzip), so no PHP
@@ -593,8 +595,13 @@ is needed on the host. The runtime is modern enough for current psalm, while the
 analysed PHP level stays pinned via psalm.xml. Install the dev tools first with
 make composer ARGS=install.
 
-  make composer ARGS=install    install the dev tools (incl. psalm), then:
-  make psalm
+ARGS is forwarded to psalm past composer's own options (composer psalm -- <args>),
+so flags like --show-info=true reach psalm instead of being eaten by composer.
+
+  make composer ARGS=install             install the dev tools (incl. psalm), then:
+  make psalm                             analyse
+  make psalm ARGS="--show-info=true"     also list info-level findings
+  make psalm ARGS=--stats                print analysis statistics
 endef
 
 define help_npm
@@ -738,7 +745,7 @@ help::
 	@echo "  $(ct)build$(c0)                Build PHP deps + frontend (auto-detected from composer.json/package.json)"
 	@echo "  $(ct)composer$(c0) $(cv)ARGS=...$(c0)    Run any composer command in the throwaway PHP container"
 	@echo "  $(ct)npm$(c0) $(cv)ARGS=...$(c0)         Run any npm command in the throwaway Node container"
-	@echo "  $(ct)psalm$(c0)                Run static analysis (composer psalm) on the current composer image"
+	@echo "  $(ct)psalm$(c0) $(cv)[ARGS=...]$(c0)     Run static analysis (composer psalm) on the current composer image"
 	@echo "  $(ct)reuse$(c0)                Run the REUSE compliance check in the fsfe/reuse container"
 	@echo "  $(ct)dist$(c0)                 Build the distribution tarball from the shipped file set"
 	@echo "                       $(cd)→ $(tarball)$(c0)"
