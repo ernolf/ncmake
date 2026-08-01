@@ -5,8 +5,9 @@
 #
 # ncmake ships no composer.json or package.json, so these checks target what the
 # repository actually is: workflow YAML (both the self-CI here and the templates
-# in workflows/ that ncmake deploys into apps), Markdown docs, and REUSE
-# licensing. The functional end-to-end run lives in a separate workflow.
+# in workflows/ that ncmake deploys into apps) and Markdown docs. REUSE licensing
+# has its own workflow (reuse.yml, installed via the workflow manager); the
+# functional end-to-end run lives in another (smoke.yml).
 
 name: Lint
 
@@ -58,15 +59,3 @@ jobs:
           persist-credentials: false
       - name: Lint Markdown
         run: npx --yes markdownlint-cli2 "**/*.md"
-
-  reuse:
-    name: REUSE
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - name: Install reuse
-        run: pipx install reuse
-      - name: Check licensing
-        run: reuse lint
