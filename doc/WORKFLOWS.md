@@ -7,11 +7,12 @@
 This guide covers everything about GitHub Actions workflows in an ncmake app: the workflow manager that installs and updates them, and the release workflow ncmake ships itself.
 
 > [!TIP]
-> **TL;DR** — `make dev-init` once per machine, then `make workflows-list` shows every available workflow with its status, `make workflows-install W="reuse lint-php"` installs the ones you pick, and a `make workflows-update` from time to time keeps them current. Commit `.github/workflows/` including the `.ncmake-workflows.json` lock file.
+> **TL;DR** — `make dev-init` once per machine, then `make workflows-list` shows every available workflow with its status, `make workflows-install W="reuse lint-php"` installs the ones you pick, and a `make workflows-update` from time to time keeps them current. Both take an optional `COMMIT=1` (commit on a branch) or `PR=1` (commit and open the pull request). Commit `.github/workflows/` including the `.ncmake-workflows.json` lock file.
 
 - [The developer module](#-the-developer-module)
 - [Where the workflows come from](#-where-the-workflows-come-from)
 - [Listing, installing, updating](#-listing-installing-updating)
+- [Committing and opening a PR: `COMMIT` and `PR`](#-committing-and-opening-a-pr-commit-and-pr)
 - [Keeping them up to date automatically](#-keeping-them-up-to-date-automatically)
 - [The lock file](#-the-lock-file)
 - [Placeholders and runner labels](#-placeholders-and-runner-labels)
@@ -77,6 +78,38 @@ brings every managed workflow to the current upstream state in one go: outdated 
 ```sh
 git add .github/workflows/
 ```
+
+## 🌿 Committing and opening a PR: `COMMIT` and `PR`
+
+By default both `workflows-install` and `workflows-update` do exactly one thing: they rewrite the files in `.github/workflows/` and leave the commit to you. That is deliberate — it is what the [automatic updater](AUTOUPDATE_WORKFLOW.md) drives, so the plain form must stay side-effect-free. When you want the full move in one step, two flags take you the rest of the way. They work identically on **both** targets:
+
+| You run | Refresh files | Branch + commit | Push | Open PR |
+|---|:---:|:---:|:---:|:---:|
+| `make workflows-update` *(default)* | ✅ | | | |
+| `make workflows-update COMMIT=1` | ✅ | ✅ | | |
+| `make workflows-update PR=1` | ✅ | ✅ | ✅ | ✅ |
+| | | | | |
+| `make workflows-install W="…"` *(default)* | ✅ | | | |
+| `make workflows-install W="…" COMMIT=1` | ✅ | ✅ | | |
+| `make workflows-install W="…" PR=1` | ✅ | ✅ | ✅ | ✅ |
+
+**`COMMIT=1` — commit on a branch, stop before pushing.** Starting from `main`, it creates the branch (`ncmake/ci/workflow-update` for update, `ncmake/ci/workflows-install` for install), refreshes or installs there, and commits with a `Signed-off-by`. The commit message is a fixed first line plus **one bullet per file that actually changed**, read straight from the staged diff:
+
+```text
+ci: update managed CI workflows from upstream
+
+- reuse.yml
+- lint-php.yml
+```
+
+Then it **prints the exact `git push` command and stops** — nothing leaves your machine. This is the whole point of the separate flag: you can inspect the commit, `git commit --amend` to add or adjust something, and push when you are ready. If nothing changed, the branch is discarded and `main` is left untouched.
+
+**`PR=1` — commit, push, open the pull request.** It implies `COMMIT=1` (so everything above happens), then pushes the branch and opens the PR with the [GitHub CLI](GITHUB_PAT.md). The commit's first line becomes the PR title; the body is the same bullet list followed by a short description of what ran. `PR=1` needs `gh` installed (`make gh-install`) and authenticated (`gh auth login`); if either is missing you get a clear message and the commit still waiting on its branch with the push command shown, so nothing is lost.
+
+> [!IMPORTANT]
+> The commit is signed from **your** git config (`commit.gpgsign = true`), exactly like `make version`. If your branch protection requires verified signatures, set that up once (`git config --global commit.gpgsign true` and a configured signing key) or the pushed commit cannot be merged.
+
+For the unattended equivalent of `PR=1` — a signed, verified PR opened for you on a schedule with no local `gh` — see the automatic updater next.
 
 ## 🔄 Keeping them up to date automatically
 
