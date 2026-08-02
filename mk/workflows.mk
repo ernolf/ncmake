@@ -266,6 +266,86 @@ export wf_tool
 
 wf_run = mkdir -p "$(cache_dir)" && printf '%s\n' "$$wf_tool" > "$(cache_dir)/ncmake_workflows.py" && python3 "$(cache_dir)/ncmake_workflows.py"
 
+# COMMIT / PR: by default both targets only rewrite the files in place - that is
+# what the workflow updater relies on, so it stays flag-free. COMMIT=1 puts the
+# refresh on its own branch and commits it (like 'make version') without pushing;
+# PR=1 additionally pushes and opens the pull request via gh, and implies COMMIT=1.
+COMMIT ?= 0
+PR     ?= 0
+
+# Pull-request body (the commit itself stays lean: title + bullets). Kept in make
+# variables and exported so the backticks survive into the shell as literal text
+# instead of being taken for command substitution.
+define wf_install_body
+`make workflows-install` added these ncmake-managed workflows from their upstream templates (nextcloud/.github + ncmake). Review the diff and merge.
+endef
+define wf_update_body
+`make workflows-update` refreshed these ncmake-managed workflows from their upstream templates (nextcloud/.github + ncmake). Locally modified workflows are left untouched. Review the diff and merge.
+endef
+export wf_install_body
+export wf_update_body
+
+# Shared branch/commit/PR flow for COMMIT=1 / PR=1, as a shell function library
+# both targets source (eval) so the git handling lives in one place. The refresh
+# or install runs between _start and _finish, since that part differs per target.
+# _finish derives one bullet per actually changed file straight from the staged
+# diff, so install and update share the same shape and a no-op discards cleanly.
+define wf_flow
+wf_branch_start() {
+    branch="$$1"
+    cur=$$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+    if [ "$$cur" != "main" ]; then
+        echo "COMMIT=1/PR=1 must run on 'main' (you are on '$$cur')." >&2
+        return 1
+    fi
+    if git rev-parse --verify --quiet "refs/heads/$$branch" >/dev/null; then
+        echo "Branch $$branch already exists - delete it (git branch -D $$branch) or push and merge it first." >&2
+        return 1
+    fi
+    git checkout -b "$$branch"
+}
+wf_branch_abort() {
+    git checkout - >/dev/null 2>&1
+    git branch -D "$$1" >/dev/null 2>&1
+}
+wf_branch_finish() {
+    branch="$$1"; title="$$2"; body="$$3"; pr="$$4"
+    git add "$(wf_dir)"
+    if git diff --cached --quiet; then
+        echo "==> Nothing to commit - everything is already current. Branch discarded, main untouched."
+        wf_branch_abort "$$branch"
+        return 0
+    fi
+    bullets=$$(git diff --cached --name-only -- "$(wf_dir)" | grep -E '\.ya?ml$$' | sed 's#.*/#- #')
+    printf '%s\n\n%s\n' "$$title" "$$bullets" > "$(cache_dir)/wf_commit_msg"
+    git commit -s -F "$(cache_dir)/wf_commit_msg" || { wf_branch_abort "$$branch"; return 1; }
+    if [ "$$pr" != "1" ]; then
+        echo
+        echo "==> Committed on branch $$branch."
+        echo "    Amend it if you like (git commit --amend), then push:"
+        echo "      git push -u origin $$branch"
+        echo "    Then open a pull request and merge it."
+        return 0
+    fi
+    if ! command -v gh >/dev/null 2>&1; then
+        echo "PR=1 needs the GitHub CLI (gh), which is not installed." >&2
+        echo "Install it with 'make gh-install', or push and open the PR yourself:" >&2
+        echo "      git push -u origin $$branch" >&2
+        return 1
+    fi
+    if ! gh auth status >/dev/null 2>&1; then
+        echo "PR=1 needs an authenticated gh (run 'gh auth login' first)." >&2
+        echo "The commit is on '$$branch'; push and open the PR yourself:" >&2
+        echo "      git push -u origin $$branch" >&2
+        return 1
+    fi
+    git push -u origin "$$branch" || return 1
+    gh pr create --base main --head "$$branch" --title "$$title" \
+        --body "$$(printf '%s\n\n%s\n' "$$bullets" "$$body")"
+}
+endef
+export wf_flow
+
 .PHONY: workflows workflows-list workflows-install workflows-update
 
 # 'make workflows' alone gives the overview; the old core target of the same
@@ -276,13 +356,30 @@ workflows-list:
 	@$(wf_run) list
 
 workflows-install:
-	@test -n "$(W)" || { echo "Usage: make workflows-install W=\"<name> [<name>...]\"   (names from 'make workflows-list')" >&2; exit 1; }
-	@$(wf_run) install $(W)
-	@echo "Review and commit: git add $(wf_dir)/"
+	@test -n "$(W)" || { echo "Usage: make workflows-install W=\"<name>[,<name>...]\"   (names from 'make workflows-list')" >&2; exit 1; }
+	@names="$$(echo '$(W)' | tr ',' ' ')"; \
+	commit="$(COMMIT)"; pr="$(PR)"; if [ "$$pr" = "1" ]; then commit=1; fi; \
+	if [ "$$commit" != "1" ]; then \
+		$(wf_run) install $$names || exit 1; \
+		echo "Review and commit: git add $(wf_dir)/"; \
+	else \
+		eval "$$wf_flow"; branch="ncmake/ci/workflows-install"; \
+		wf_branch_start "$$branch" || exit 1; \
+		$(wf_run) install $$names || { wf_branch_abort "$$branch"; echo "install failed - branch discarded." >&2; exit 1; }; \
+		wf_branch_finish "$$branch" "ci: install managed CI workflows" "$$wf_install_body" "$$pr"; \
+	fi
 
 workflows-update:
-	@$(wf_run) update
-	@echo "Review and commit: git add $(wf_dir)/"
+	@commit="$(COMMIT)"; pr="$(PR)"; if [ "$$pr" = "1" ]; then commit=1; fi; \
+	if [ "$$commit" != "1" ]; then \
+		$(wf_run) update; \
+		echo "Review and commit: git add $(wf_dir)/"; \
+	else \
+		eval "$$wf_flow"; branch="ncmake/ci/workflow-update"; \
+		wf_branch_start "$$branch" || exit 1; \
+		$(wf_run) update || { wf_branch_abort "$$branch"; echo "update failed - branch discarded." >&2; exit 1; }; \
+		wf_branch_finish "$$branch" "ci: update managed CI workflows from upstream" "$$wf_update_body" "$$pr"; \
+	fi
 
 define help_workflows
 make workflows    (alias for workflows-list)
@@ -305,30 +402,48 @@ API, so new upstream workflows appear without any ncmake update.
 endef
 
 define help_workflows-install
-make workflows-install W="<name> [<name>...]"
+make workflows-install W="<name>[,<name>...]" [COMMIT=1|PR=1]
 
-Fetches the named workflows (the .yml suffix is optional), replaces GitHub's
-template placeholders ($$default-branch from the origin HEAD; unknown ones are
-warned about and left as-is), rewrites the org-scoped runner labels so the
-templates run outside that org (unless your origin owner is wf_runner_org, in
-which case the labels are kept), writes them into .github/workflows/ and records
-source, upstream sha and content hash in .ncmake-workflows.json. A .license
-sidecar next to the lock keeps make reuse green without a REUSE.toml edit. Commit
-the lock and its .license together with the workflows. Reinstalling an existing
-file overwrites it, which also adopts an unmanaged file or discards local
-modifications.
+Fetches the named workflows (the .yml suffix is optional; separate several with
+a comma or a space), replaces GitHub's template placeholders ($$default-branch
+from the origin HEAD; unknown ones are warned about and left as-is), rewrites the
+org-scoped runner labels so the templates run outside that org (unless your
+origin owner is wf_runner_org, in which case the labels are kept), writes them
+into .github/workflows/ and records source, upstream sha and content hash in
+.ncmake-workflows.json. A .license sidecar next to the lock keeps make reuse
+green without a REUSE.toml edit. Commit the lock and its .license together with
+the workflows. Reinstalling an existing file overwrites it, which also adopts an
+unmanaged file or discards local modifications.
+
+Without flags it only writes the files and reminds you to commit. COMMIT=1 runs
+from main, commits the result on branch ncmake/ci/workflows-install (one bullet
+per installed workflow) and prints the push command without pushing - amend it
+first if you like. PR=1 implies COMMIT=1 and additionally pushes and opens the
+pull request via gh. See doc/WORKFLOWS.md.
 
   make workflows-install W=reuse
-  make workflows-install W="lint-php lint-info-xml psalm-matrix"
+  make workflows-install W="lint-php,lint-info-xml,psalm-matrix"
+  make workflows-install W=reuse COMMIT=1
+  make workflows-install W="lint-php psalm-matrix" PR=1
 endef
 
 define help_workflows-update
-make workflows-update
+make workflows-update [COMMIT=1|PR=1]
 
 Brings every managed workflow to the current upstream state: 'update available'
 and 'missing' files are reinstalled, locally modified files are skipped with a
 note, up-to-date files are left alone. Run it from time to time (or after a
 workflows-list showed updates) and commit the result.
+
+Without flags it only writes the files and reminds you to commit - that is what
+the automatic updater relies on. COMMIT=1 runs from main, commits the result on
+branch ncmake/ci/workflow-update (one bullet per updated workflow) and prints the
+push command without pushing. PR=1 implies COMMIT=1 and additionally pushes and
+opens the pull request via gh, the same thing the updater does for you. See
+doc/WORKFLOWS.md.
+
+  make workflows-update COMMIT=1
+  make workflows-update PR=1
 endef
 
 help::
@@ -337,3 +452,4 @@ help::
 	@echo "  $(ct)workflows-list$(c0)       List available workflows (nextcloud templates + ncmake) with status"
 	@echo "  $(ct)workflows-install$(c0) $(cv)W=...$(c0)  Install workflows into .github/workflows/ (names from the list)"
 	@echo "  $(ct)workflows-update$(c0)     Update all managed workflows (locally modified ones are skipped)"
+	@echo "    $(cd)add $(cv)COMMIT=1$(cd) to commit on a branch, or $(cv)PR=1$(cd) to commit and open the PR$(c0)"
