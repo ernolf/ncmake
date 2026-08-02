@@ -7,7 +7,7 @@
 The [workflow updater](AUTOUPDATE_WORKFLOW.md) authenticates with a **GitHub App** rather than a token you paste in. This page explains why, and walks through creating the app, installing it and wiring up its two secrets. For the general background on tokens and secrets, see [GitHub tokens and PAT](GITHUB_PAT.md).
 
 > [!TIP]
-> **TL;DR** — Create a GitHub App with **Contents**, **Pull requests** and **Workflows** set to *Read and write*, install it on your ncmake repositories, and store its **App ID** and **private key** as the secrets **`NCMAKE_UPDATER_APP_ID`** and **`NCMAKE_UPDATER_PRIVATE_KEY`**. The updater mints a fresh one-hour token from them on every run.
+> **TL;DR** — Create a GitHub App with **Contents**, **Pull requests** and **Workflows** set to *Read and write*, install it on your ncmake repositories, and store its **Client ID** and **private key** as the secrets **`NCMAKE_UPDATER_CLIENT_ID`** and **`NCMAKE_UPDATER_PRIVATE_KEY`**. The updater mints a fresh one-hour token from them on every run.
 
 - [Why a GitHub App](#-why-a-github-app)
 - [Creating the app](#-creating-the-app)
@@ -48,7 +48,7 @@ A fine-grained PAT can do the first but **not** the second: commit signing does 
 
 Then **Create GitHub App**. On the app's page afterwards:
 
-1. Under **About**, note the **App ID** (a number). It goes into the `NCMAKE_UPDATER_APP_ID` secret. GitHub also shows a **Client ID** and suggests using it instead; the App ID works just as well with the updater's workflow, so use it.
+1. Under **About**, note the **Client ID** (a 20-character alphanumeric string). It goes into the `NCMAKE_UPDATER_CLIENT_ID` secret. GitHub also shows a shorter, purely numeric **App ID** and still accepts it, but it is being phased out: GitHub itself points you to the Client ID, and `actions/create-github-app-token` marks its `app-id` input deprecated. Both are public identifiers, not secrets (only the private key authenticates), so this is about which one stays supported, not about safety. Use the Client ID.
 2. Scroll to **Private keys** → **Generate a private key**. A `.pem` file downloads. That file is the app's credential and goes into the `NCMAKE_UPDATER_PRIVATE_KEY` secret.
 
 ## 📦 Installing it on your repositories
@@ -61,7 +61,7 @@ In **each** repository where the updater runs (**Settings → Secrets and variab
 
 | Secret name | Value |
 |---|---|
-| `NCMAKE_UPDATER_APP_ID` | the **App ID** (the number from the app's About page) |
+| `NCMAKE_UPDATER_CLIENT_ID` | the **Client ID** (the alphanumeric string from the app's About page) |
 | `NCMAKE_UPDATER_PRIVATE_KEY` | the **full contents** of the downloaded `.pem`, including the `-----BEGIN...` and `-----END...` lines |
 
 Personal repositories cannot share an organization secret, so add both to every repo. (Move to an organization later and org-level secrets cover all of them at once.)

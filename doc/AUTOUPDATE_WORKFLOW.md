@@ -43,7 +43,7 @@ Commit and merge that like any other workflow adoption. From then on `workflow-u
 The updater changes files under `.github/workflows/`, which the automatic `GITHUB_TOKEN` may not push, and its commit must be verified when your branch protection requires signed commits. A **GitHub App** covers both: its token pushes the workflow files, and the pull request is committed as the app's bot with a verified signature. It also triggers your CI checks (a real actor, unlike the `GITHUB_TOKEN`), so you see whether a template update breaks anything before you merge.
 
 > [!IMPORTANT]
-> Set the app up once, following **[A GitHub App for the workflow updater](GITHUB_APP.md)**. It needs Contents, Pull requests and Workflows (each Read and write), installed on the repository, with its App ID and private key stored as the `NCMAKE_UPDATER_APP_ID` and `NCMAKE_UPDATER_PRIVATE_KEY` secrets. Without it the run fails the moment there is a workflow change to push.
+> Set the app up once, following **[A GitHub App for the workflow updater](GITHUB_APP.md)**. It needs Contents, Pull requests and Workflows (each Read and write), installed on the repository, with its Client ID and private key stored as the `NCMAKE_UPDATER_CLIENT_ID` and `NCMAKE_UPDATER_PRIVATE_KEY` secrets. Without it the run fails the moment there is a workflow change to push.
 
 ## ⏰ When it runs
 
