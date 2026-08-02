@@ -304,6 +304,7 @@ Set on the command line (`make build RUNTIME=bare`), in the environment, or pers
 | `keep_extra` | (empty) | additional paths for the shipped file set |
 | `php_build_cmd` | auto-detected | PHP-side build command, empty skips |
 | `node_build_cmd` | auto-detected | frontend build command, empty skips |
+| `NCMAKE` | `$(NCMAKE_DIR)/Makefile-$(NCMAKE_REF)` | path to the core Makefile to include; point it at a local file to bypass the download and run an uncommitted change (development only, see [CONTRIBUTING](CONTRIBUTING.md)) |
 | `NCMAKE_REF` | `main` | branch or tag the stub fetches |
 | `NCMAKE_DIR` | `$XDG_CACHE_HOME/ncmake`, else `~/.cache/ncmake` | cache location of the shared Makefile |
 | `NCMAKE_TTL_MIN` | `1440` | minutes between upstream freshness checks |
