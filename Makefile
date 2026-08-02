@@ -4,11 +4,11 @@
 # ncmake's own Makefile. This repository IS ncmake, not a Nextcloud app, so it
 # needs none of the app targets (build, psalm, dist, rsync, cp, the App Store
 # block, version/changelog/tag - those all assume an app with an info.xml). It
-# manages its own CI workflows through the very workflow module it ships, and
-# runs the same REUSE lint the apps use. Everything below is just the handful of
-# core values those two pieces read, reproduced so this file stays standalone and
-# pulls in nothing else. Consuming apps use the full core Makefile via the
-# bootstrap stub instead.
+# manages its own CI workflows through the very workflow module it ships,
+# installs the GitHub CLI through the gh module, and runs the same REUSE lint the
+# apps use. Everything below is just the handful of core values the workflow
+# module reads, reproduced so this file stays standalone and pulls in nothing
+# else. Consuming apps use the full core Makefile via the bootstrap stub instead.
 
 # == Config ==
 # The values mk/workflows.mk reads from the core Makefile.
@@ -102,6 +102,9 @@ help::
 
 # == Developer module: CI workflow manager ==
 include mk/workflows.mk
+
+# == Developer module: GitHub CLI ==
+include mk/gh.mk
 
 # == Help footer ==
 help::
