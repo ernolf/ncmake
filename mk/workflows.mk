@@ -290,7 +290,21 @@ export wf_update_body
 # or install runs between _start and _finish, since that part differs per target.
 # _finish derives one bullet per actually changed file straight from the staged
 # diff, so install and update share the same shape and a no-op discards cleanly.
+# _start refuses to run when the target branch already exists locally or on
+# origin, so a stale or in-flight branch fails fast with instructions instead of
+# only surfacing as a rejected push after the work is already committed.
 define wf_flow
+wf_require_no_remote_branch() {
+    branch="$$1"
+    if git ls-remote --exit-code --heads origin "$$branch" >/dev/null 2>&1; then
+        echo "Remote branch '$$branch' already exists on origin - not committing or pushing." >&2
+        echo "It may have an open pull request, or be an already merged branch that was never deleted." >&2
+        echo "Inspect it, then merge or close its pull request, or delete the branch:" >&2
+        echo "      git push origin --delete $$branch" >&2
+        echo "and run this target again." >&2
+        return 1
+    fi
+}
 wf_branch_start() {
     branch="$$1"
     cur=$$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
@@ -302,6 +316,7 @@ wf_branch_start() {
         echo "Branch $$branch already exists - delete it (git branch -D $$branch) or push and merge it first." >&2
         return 1
     fi
+    wf_require_no_remote_branch "$$branch" || return 1
     git checkout -b "$$branch"
 }
 wf_branch_abort() {

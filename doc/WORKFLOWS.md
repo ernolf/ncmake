@@ -104,6 +104,8 @@ ci: update managed CI workflows from upstream
 
 Then it **prints the exact `git push` command and stops** — nothing leaves your machine. This is the whole point of the separate flag: you can inspect the commit, `git commit --amend` to add or adjust something, and push when you are ready. If nothing changed, the branch is discarded and `main` is left untouched.
 
+Before it starts, it checks that the branch does not already exist — locally or on `origin`. If it does, it **stops immediately**, without refreshing, committing or pushing, and tells you how to proceed: a branch on `origin` may carry an open pull request, or be a merged one that was never deleted. Either merge or close its pull request, or delete the branch (`git push origin --delete <branch>`), then run the target again. It never deletes a branch for you, since an existing one may well be intentional.
+
 **`PR=1` — commit, push, open the pull request.** It implies `COMMIT=1` (so everything above happens), then pushes the branch and opens the PR with the [GitHub CLI](GITHUB_PAT.md). The commit's first line becomes the PR title; the body is the same bullet list followed by a short description of what ran. `PR=1` needs `gh` installed (`make gh-install`) and authenticated (`gh auth login`); if either is missing you get a clear message and the commit still waiting on its branch with the push command shown, so nothing is lost. After you merge the pull request its `ncmake/ci/…` branch stays around unless you have GitHub remove merged branches for you — see [Automatically deleting merged branches](DELETE_MERGED_BRANCHES.md).
 
 > [!IMPORTANT]
