@@ -47,7 +47,7 @@ The updater changes files under `.github/workflows/`, which the automatic `GITHU
 
 ## ⏰ When it runs
 
-- **On a schedule:** daily at 05:30 UTC (the `cron` line in the workflow). Standard runners are free on public repositories and a run with nothing to do is a quiet no-op, so a daily check costs nothing and picks up an upstream change within a day. Adjust the `cron` if you prefer.
+- **On a schedule:** daily at 05:30 UTC (the `cron` line in the workflow). GitHub runs scheduled workflows on a best-effort basis and [delays them under load](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule), so in practice the run starts a couple of hours after the cron time, not on the minute. That is expected, not a failure: it only needs to catch an upstream change within a day, so the delay does not matter here. A run with nothing to do is a quiet no-op, and standard runners are free on public repositories, so a daily check costs nothing.
 - **On demand:** *Actions* tab → **ncmake workflow update** → **Run workflow** (`workflow_dispatch`).
 
 The manual trigger only appears once the workflow is on your default branch. That is how `workflow_dispatch` works, and it is why installing the updater means merging it to `main` first. It stays idle until the schedule fires or you trigger it.

@@ -18,7 +18,11 @@ name: ncmake workflow update
 
 on:
   schedule:
-    - cron: '30 5 * * *'      # daily 05:30 UTC
+    # Daily at 05:30 UTC. GitHub starts scheduled runs on a best-effort basis and
+    # delays them under load, so expect this a few hours late, not on the minute
+    # (see doc/AUTOUPDATE_WORKFLOW.md). Trigger workflow_dispatch to run without
+    # waiting for the schedule.
+    - cron: '30 5 * * *'
   workflow_dispatch:
 
 permissions:
