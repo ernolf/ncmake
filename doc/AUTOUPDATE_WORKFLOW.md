@@ -62,6 +62,8 @@ If `make workflows-update` changed anything, the updater opens a pull request ti
 
 If nothing changed upstream, no pull request is opened and the run is quiet.
 
+Once you merge that pull request, the updater deletes its own `ncmake/ci/workflow-update` branch right away, so it never leaves a stale branch behind between runs. This is the updater tidying up after *itself* — it is a different mechanism from the repository-wide [Automatically delete head branches](DELETE_MERGED_BRANCHES.md) setting, which removes the head branch of *every* merged pull request. Either one keeps this branch from piling up; enabling both is harmless, as the branch is simply already gone by the time the other would act.
+
 ## 🤝 Why not Dependabot
 
 Dependabot's `github-actions` ecosystem and this updater both change the same files, so running both makes them fight: each edit flags the workflows as locally modified for the other. The upstream templates already keep their action pins current, and `make workflows-update` brings those along, so the updater is the single source of truth. Remove the `github-actions` ecosystem from `dependabot.yml` and let the updater own `.github/workflows/`; keep npm and Composer under Dependabot.
