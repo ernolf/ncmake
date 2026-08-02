@@ -29,6 +29,7 @@ Everything is derived from the app itself, so there is nothing to configure for 
 - [Target reference](#-target-reference)
 - [Requirements](#-requirements)
 - [Show that your app uses ncmake](#-show-that-your-app-uses-ncmake)
+- [Documentation](#-documentation)
 
 ## 🧩 Installation
 
@@ -350,6 +351,18 @@ gh search code 'raw.githubusercontent.com/ernolf/ncmake' --json repository --jq 
 
 > [!NOTE]
 > Both queries hit code-search indexes that only contain public repositories GitHub has already picked up, so a freshly created consumer can take weeks to appear. The bootstrap stub is committed regardless, so a consumer becomes findable the moment its repo is indexed.
+
+## 📚 Documentation
+
+The guides that live in [`doc/`](doc/), collected in one place:
+
+- **[INSTALL.md](doc/INSTALL.md)** — building and deploying an app from source; written for the people who install your app.
+- **[WORKFLOWS.md](doc/WORKFLOWS.md)** — the CI workflows module: sources, status model, the lock file, installing and updating, the `COMMIT`/`PR` flags.
+- **[AUTOUPDATE_WORKFLOW.md](doc/AUTOUPDATE_WORKFLOW.md)** — the workflow updater that opens a pull request when your workflows drift from upstream.
+- **[GITHUB_APP.md](doc/GITHUB_APP.md)** — the GitHub App the workflow updater authenticates with.
+- **[GITHUB_PAT.md](doc/GITHUB_PAT.md)** — the Personal Access Token alternative to the GitHub App.
+- **[APPSTORE.md](doc/APPSTORE.md)** — the App Store module: certificate onboarding, signing and the publish flow.
+- **[DELETE_MERGED_BRANCHES.md](doc/DELETE_MERGED_BRANCHES.md)** — the GitHub setting that removes a branch once its pull request is merged.
 
 ## 📄 License
 
