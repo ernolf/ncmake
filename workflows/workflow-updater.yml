@@ -101,9 +101,18 @@ jobs:
           client-id: ${{ secrets.NCMAKE_UPDATER_CLIENT_ID }}
           private-key: ${{ secrets.NCMAKE_UPDATER_PRIVATE_KEY }}
 
-      - name: Delete the merged updater branch
+      - name: Delete the merged updater branch if it is still there
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          gh api --method DELETE \
-            "repos/${{ github.repository }}/git/refs/heads/ncmake/ci/workflow-update"
+          ref="repos/${{ github.repository }}/git/refs/heads/ncmake/ci/workflow-update"
+          # The repository's "Automatically delete head branches" setting, or a
+          # fast-clicking admin, may have removed the branch already. Only delete
+          # what is still there, and tolerate it vanishing between the check and
+          # the delete, so a redundant run is a quiet no-op, not a failure.
+          if gh api "$ref" >/dev/null 2>&1; then
+            gh api --method DELETE "$ref" \
+              || echo "Branch was removed concurrently; nothing to do."
+          else
+            echo "Branch already deleted; nothing to do."
+          fi
