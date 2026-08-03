@@ -1,0 +1,7 @@
+# SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
+# SPDX-License-Identifier: MIT
+
+# Store and check out every text file with LF, regardless of a contributor's
+# core.autocrlf setting, so line endings never leak into a diff. Binary files
+# are detected by text=auto and left untouched.
+* text=auto eol=lf

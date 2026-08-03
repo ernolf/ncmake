@@ -40,7 +40,7 @@ From another repo, serve it through a CDN that sends the correct SVG content typ
 [![built with ncmake](https://cdn.jsdelivr.net/gh/ernolf/ncmake@main/img/ncmake-badge.svg)](https://github.com/ernolf/ncmake)
 ```
 
-**Inline mark in a sentence** (for example in `doc/INSTALL.md`) — either the bare chevron next to the word, or the whole `ncmake` mark as one image:
+**Inline mark in a sentence** (for example in an app's README) — either the bare chevron next to the word, or the whole `ncmake` mark as one image:
 
 ```markdown
 built and packaged with <img src="img/ncmake-glyph.svg" height="13" alt="ncmake"> **ncmake**

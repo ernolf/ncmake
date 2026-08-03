@@ -402,7 +402,7 @@ make workflows    (alias for workflows-list)
 The CI workflow manager: installs GitHub Actions workflows from their upstream
 sources (nextcloud/.github workflow templates plus ncmake's own) and keeps them
 updatable. See make help-workflows-list, -install, -update and
-doc/WORKFLOWS.md in the ncmake repo for the full picture.
+https://github.com/ernolf/ncmake/wiki/Workflows for the full picture.
 endef
 
 define help_workflows-list
@@ -434,7 +434,8 @@ Without flags it only writes the files and reminds you to commit. COMMIT=1 runs
 from main, commits the result on branch ncmake/ci/workflows-install (one bullet
 per installed workflow) and prints the push command without pushing - amend it
 first if you like. PR=1 implies COMMIT=1 and additionally pushes and opens the
-pull request via gh. See doc/WORKFLOWS.md.
+pull request via gh. See
+https://github.com/ernolf/ncmake/wiki/Workflows.
 
   make workflows-install W=reuse
   make workflows-install W="lint-php,lint-info-xml,psalm-matrix"
@@ -455,7 +456,7 @@ the automatic updater relies on. COMMIT=1 runs from main, commits the result on
 branch ncmake/ci/workflow-update (one bullet per updated workflow) and prints the
 push command without pushing. PR=1 implies COMMIT=1 and additionally pushes and
 opens the pull request via gh, the same thing the updater does for you. See
-doc/WORKFLOWS.md.
+https://github.com/ernolf/ncmake/wiki/Workflows.
 
   make workflows-update COMMIT=1
   make workflows-update PR=1
