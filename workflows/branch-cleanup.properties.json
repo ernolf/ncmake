@@ -1,0 +1,7 @@
+{
+    "name": "ncmake branch cleanup",
+    "description": "Delete a merged pull request's head branch if it still exists (a portable, workflow-shipped equivalent of the repository \"Automatically delete head branches\" setting)",
+    "categories": [
+        "ncmake"
+    ]
+}
