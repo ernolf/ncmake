@@ -532,10 +532,18 @@ self-update:
 # the selected NCMAKE_REF is what lands here, so new modules appear without
 # touching this file. The modules load on every subsequent make run, in every
 # app on this machine; 'make dev-clean' removes them again (the plain user view).
+# Listing them is the one call that goes to the API rather than to raw: anonymous
+# it allows 60 requests per hour and counts them per source IP, which on a hosted
+# CI runner is shared with every other job on that machine and answers 403 every
+# so often. GITHUB_TOKEN or GH_TOKEN, where the environment offers one, raises
+# that to 5000; a workstation usually has neither and does not need one.
 dev-init:
 	@mkdir -p "$(ncmake_cache)"
 	@echo "==> Fetching ncmake developer modules ($(ncmake_ref))..."
-	@names=$$(curl -fsSL -H 'User-Agent: ncmake' "https://api.github.com/repos/ernolf/ncmake/contents/mk?ref=$(ncmake_ref)" \
+	@tok="$${GITHUB_TOKEN:-$$GH_TOKEN}"; \
+	set -- -fsSL -H 'User-Agent: ncmake'; \
+	test -z "$$tok" || set -- "$$@" -H "Authorization: Bearer $$tok"; \
+	names=$$(curl "$$@" "https://api.github.com/repos/ernolf/ncmake/contents/mk?ref=$(ncmake_ref)" \
 		| python3 -c 'import json,sys; [print(e["name"]) for e in json.load(sys.stdin) if e["name"].endswith(".mk")]' 2>/dev/null) \
 		|| { echo "ERROR: could not list the ncmake modules (network? ref '$(ncmake_ref)'?)" >&2; exit 1; }; \
 	test -n "$$names" || { echo "(no modules published for $(ncmake_ref))"; exit 0; }; \
