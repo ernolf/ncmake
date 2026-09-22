@@ -53,6 +53,19 @@ Everything is in the **[wiki](https://github.com/ernolf/ncmake/wiki)**; its side
 - **App Store** → [App Store](https://github.com/ernolf/ncmake/wiki/App-Store)
 - **Installing an ncmake app** (for your app's users) → [Installation](https://github.com/ernolf/ncmake/wiki/Installation)
 
+## Using ncmake with an AI assistant
+
+`skills/ncmake/SKILL.md` is a skill file that teaches an AI coding assistant how ncmake works: what each target does, which command belongs to which job, the order of a release, and the traps that cost time otherwise (`make build` already runs `composer install --no-dev` and `npm ci && npm run build`, so nobody has to invent a build step). It also draws the line between the targets that only read and the ones that commit, tag, push or publish.
+
+Copy it to where your assistant looks for skills, for example:
+
+```sh
+mkdir -p ~/.claude/skills/ncmake
+curl -fsSL https://raw.githubusercontent.com/ernolf/ncmake/main/skills/ncmake/SKILL.md -o ~/.claude/skills/ncmake/SKILL.md
+```
+
+It is plain Markdown with a short YAML front matter, so any assistant that reads project instructions can use it, whether or not it calls them skills.
+
 ## Requirements
 
 GNU make, git, curl, openssl, rsync, python3; optionally `xmllint` (ncmake falls back to `grep` without it). For containerized builds: podman or docker — otherwise `RUNTIME=bare` with composer and npm on the `PATH`.
