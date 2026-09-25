@@ -1,0 +1,7 @@
+{
+    "name": "Lint shell",
+    "description": "Run shellcheck over every tracked shell script, found by extension or by shebang (covers extensionless commands); a repository without shell scripts passes",
+    "categories": [
+        "ncmake"
+    ]
+}

@@ -1,0 +1,135 @@
+# SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
+# SPDX-License-Identifier: MIT
+#
+# Generic PHP syntax check: php -l over every tracked PHP file.
+# https://github.com/ernolf/ncmake
+#
+# The Nextcloud template lint-php.yml cannot run outside a Nextcloud app: it
+# derives its matrix from appinfo/info.xml and calls "composer run lint". This
+# one needs neither, so it fits a plain PHP repository. The name says what it
+# does - only the syntax is checked - and it differs from lint-php.yml on
+# purpose: ncmake wins a name collision, so a generic lint-php.yml here would
+# silently replace the Nextcloud template in every app that installs it.
+#
+# Which PHP versions to check is resolved at run time, in this order:
+#
+#   1. the repository variable PHP_VERSIONS  (gh variable set PHP_VERSIONS -b "8.2 8.4")
+#   2. a .php-version file in the repository
+#   3. PHP_VERSIONS_DEFAULT below
+#
+# so the installed file stays byte-identical in every repository: the lock hash
+# in .github/workflows/.ncmake-workflows.json keeps matching and the workflow
+# updater keeps managing it. A PHP bump is then one edit here that the updater
+# carries into every repository.
+#
+# The matrix is dynamic, so its job names change with the versions. Branch
+# protection must therefore require php-lint-summary, not a matrix leg.
+
+name: Lint php syntax
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lint-php-syntax-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  # Oldest and newest version to check when the repository states nothing.
+  PHP_VERSIONS_DEFAULT: "8.2 8.4"
+
+jobs:
+  versions:
+    name: php-versions
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.resolve.outputs.matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Resolve the version matrix
+        id: resolve
+        env:
+          PHP_VERSIONS_VAR: ${{ vars.PHP_VERSIONS }}
+        run: |
+          versions="$PHP_VERSIONS_VAR"
+          if [ -z "$versions" ] && [ -f .php-version ]; then
+            versions="$(cat .php-version)"
+          fi
+          if [ -z "$versions" ]; then
+            versions="$PHP_VERSIONS_DEFAULT"
+          fi
+          # python3 builds the JSON array: assembling it in the shell would
+          # need unquoted word splitting, which shellcheck rightly flags. It
+          # also falls back to the default once more, so a file or a variable
+          # that holds only separators cannot produce an empty matrix - that
+          # would fail the whole run with "does not contain any values".
+          python3 - "$versions" "$PHP_VERSIONS_DEFAULT" <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import re
+          import sys
+
+          def split(value):
+              return [v for v in re.split(r'[,;\s]+', value.strip()) if v]
+
+          found = split(sys.argv[1]) or split(sys.argv[2])
+          print('matrix=' + json.dumps(found))
+          PY
+          grep '^matrix=' "$GITHUB_OUTPUT" | tail -n 1
+
+  php-lint:
+    name: php-lint ${{ matrix.php-version }}
+    needs: versions
+    runs-on: ubuntu-latest
+    strategy:
+      # Every version reports on its own; one old version failing must not hide
+      # the result of the others.
+      fail-fast: false
+      matrix:
+        php-version: ${{ fromJSON(needs.versions.outputs.matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up php ${{ matrix.php-version }}
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: ${{ matrix.php-version }}
+          coverage: none
+          ini-file: development
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Lint
+        run: |
+          # php -l takes one file per call, so xargs runs it per file; a
+          # repository without PHP files passes instead of failing.
+          if [ -z "$(git ls-files '*.php' '*.phtml')" ]; then
+            echo "No PHP files in this repository; nothing to check."
+            exit 0
+          fi
+          git ls-files -z '*.php' '*.phtml' | xargs -0 -r -n 1 -P 4 php -l
+
+  summary:
+    name: php-lint-summary
+    needs: php-lint
+    if: always()
+    permissions:
+      contents: none
+    runs-on: ubuntu-latest
+    steps:
+      - name: Summary status
+        run: |
+          # The one stable check name for branch protection: the matrix legs are
+          # named after versions and change when the versions change.
+          test "${{ needs.php-lint.result }}" = 'success' || test "${{ needs.php-lint.result }}" = 'skipped'

@@ -1,0 +1,82 @@
+# SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
+# SPDX-License-Identifier: MIT
+#
+# Generic shell linter: shellcheck over every tracked shell script.
+# https://github.com/ernolf/ncmake
+#
+# There is no shellcheck template in nextcloud/.github, so this is ncmake's own.
+# It makes no assumption about where a repository keeps its scripts: the file
+# list comes from git and a file qualifies by extension (*.sh, *.bash) or by its
+# shebang, which is what covers an extensionless command such as sbin/dcm-cli.
+#
+# A repository with no shell script at all passes instead of failing, so the
+# workflow can be installed anywhere without becoming a permanent red cross.
+
+name: Lint shell
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lint-shell-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Collect shell scripts
+        id: collect
+        run: |
+          list="$RUNNER_TEMP/shell-files"
+          : > "$list"
+          # Tracked files only: a checkout carries nothing else worth linting,
+          # and git handles names with spaces through the NUL separator.
+          while IFS= read -r -d '' f; do
+            test -f "$f" || continue
+            case "$f" in
+              *.sh | *.bash)
+                printf '%s\n' "$f" >> "$list"
+                continue
+                ;;
+            esac
+            # Everything else qualifies by shebang. Reading the first two bytes
+            # first keeps binaries out of the pattern match.
+            test "$(head -c 2 "$f")" = '#!' || continue
+            if head -n 1 "$f" | grep -Eq '^#!.*\b(ba|da|k)?sh\b'; then
+              printf '%s\n' "$f" >> "$list"
+            fi
+          done < <(git ls-files -z)
+          count="$(wc -l < "$list")"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "Shell scripts found: $count"
+          cat "$list"
+
+      - name: Install shellcheck if the image does not ship it
+        if: steps.collect.outputs.count != '0'
+        run: |
+          command -v shellcheck >/dev/null && exit 0
+          sudo apt-get -qq update
+          sudo apt-get -qq install -y shellcheck
+
+      - name: Run shellcheck
+        if: steps.collect.outputs.count != '0'
+        run: |
+          # -x follows sourced files, which is what a repository with a shared
+          # library of functions needs; -d '\n' keeps names with spaces intact.
+          xargs -r -d '\n' -a "$RUNNER_TEMP/shell-files" shellcheck --color=always -x
+
+      - name: Nothing to check
+        if: steps.collect.outputs.count == '0'
+        run: echo "No shell scripts in this repository; nothing to check."
