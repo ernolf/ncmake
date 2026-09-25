@@ -1,0 +1,7 @@
+{
+    "name": "Lint php syntax",
+    "description": "Run php -l over every tracked PHP file, without composer or appinfo/info.xml; the version matrix comes from the PHP_VERSIONS variable, a .php-version file or the template default",
+    "categories": [
+        "ncmake"
+    ]
+}
