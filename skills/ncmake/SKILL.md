@@ -1,6 +1,6 @@
 ---
 name: ncmake
-description: Build, package, deploy, version, release and publish a Nextcloud app with ncmake, the generic Makefile, and manage its CI workflows. Use this whenever a repository contains appinfo/info.xml together with an ncmake Makefile, or when the task is a Nextcloud app build, dependency run, version bump, changelog, tag, App Store submission or workflow update.
+description: Build, package, deploy, version, release and publish a Nextcloud app with ncmake, the generic Makefile, and manage its CI workflows. Use this whenever a repository contains appinfo/info.xml together with an ncmake Makefile, or when the task is a Nextcloud app build, dependency run, bundle size analysis, checkout audit, version bump, changelog, tag, App Store submission or workflow update.
 ---
 
 <!--
@@ -59,6 +59,10 @@ Follow these before proposing any command. They are the mistakes that cost the m
 | Frontend tests | `make npm ARGS="run test"` |
 | Frontend lint | `make npm ARGS="run lint"` |
 | Add a frontend dev dependency | `make npm ARGS="install -D vitest"` |
+| What the browser loads per page | `make bundle-report` |
+| Why the bundle is that size | `make build-audit` |
+| Whether the checkout agrees with itself | `make consistency-audit` |
+| Whether the committed build output comes from this source | `make build-verify` |
 | Install the PHP dev tools (psalm, cs) | `make composer ARGS=install` |
 | Static analysis | `make psalm` (or `make psalm ARGS="--show-info=true"`) |
 | Coding style | `make composer ARGS="cs:check"`, `make composer ARGS="cs:fix"` |
@@ -112,7 +116,7 @@ Exactly this order, one step per command, each on the branch it names:
 
 ## Developer modules
 
-The App Store, CI workflow and gh targets are optional modules that live in the ncmake repository under `mk/`. `make dev-init` fetches them into the same per-machine cache as the core Makefile, from where every ncmake app on that machine sees them. The module list is discovered live through the GitHub contents API, so new modules arrive without an ncmake update. `make dev-clean` removes them again, which restores the plain user target set.
+The App Store, CI workflow, bundle analysis, checkout audit and gh targets are optional modules that live in the ncmake repository under `mk/`. `make dev-init` fetches them into the same per-machine cache as the core Makefile, from where every ncmake app on that machine sees them. The module list is discovered live through the GitHub contents API, so new modules arrive without an ncmake update. `make dev-clean` removes them again, which restores the plain user target set.
 
 The anonymous GitHub API allows 60 requests an hour per IP. Exporting `GITHUB_TOKEN` or `GH_TOKEN` raises that to 5000 and is worth doing on a machine that runs `dev-init` or `workflows-list` regularly.
 
@@ -143,9 +147,54 @@ Ongoing:
 
 `publish` always signs the bytes the URL actually serves, never a local file, so the signature can never disagree with the artifact. `GH=1` pre-fills the standard GitHub release asset URL for confirmation and uses `gh` when available, which makes private repositories work. `NIGHTLY=1` publishes into the nightly channel, where the store keeps exactly one nightly per app and does not require an increasing version; for a GitHub asset the release's pre-release flag is cross-checked against `NIGHTLY` and a mismatch asks before publishing.
 
+## Bundle analysis module
+
+Two analysers on one set of measurements, for an app with a frontend. Neither builds, installs nor touches dependencies, and neither writes anything into the app: no configuration to add, no file to commit, no file to ignore.
+
+| Target | Reads | Answers |
+| --- | --- | --- |
+| `make bundle-report` | the built directory (default `js/`) | what a browser downloads when a page of this app opens, and which packages those bytes are |
+| `make build-audit` | the checkout: bundler config, `package.json`, `src/` | why the bundle is the size it is, priced in the bytes the build delivers |
+
+`bundle-report` counts every file that no other file in the built directory imports as an entry, follows the static import graph to its closure, and adds the stylesheet named after that entry with everything it `@import`s, because entry plus stylesheet is the pairing the app makes in PHP with `addScript` and `addStyle`. Each file is compressed on its own, never concatenated, since each is its own HTTP response. Where the build ships source maps, the delivered bytes are charged back to the modules they came from, so the report names the packages the bundle is actually made of; without maps the file sizes still hold and the per-package breakdown does not.
+
+`build-audit` reads the half that never ships and prices what it finds there through the same maps, so a statement about how this app imports something comes with what that costs here. It names only what the app itself can change: the toolchain the checkout is built with, whether the build emits source maps, a page that arrives as one chunk, every package the source imports by its root together with what the build delivers of that package, and moment or a set of statically bound date-fns locales where the source is what pulls them in. What the bundler or a library decides on its own is measured and tabled under `--details` instead of dressed up as a verdict.
+
+Both mark findings `[!]` worth changing, `[i]` worth knowing, `[ok]` nothing found, and each finding says what it is derived from. `ARGS="--details"` adds the tables behind them, `ARGS=--json` emits the whole result for a script. `make help-bundle-report` and `make help-build-audit` list every option.
+
+The analysers are dependency-free ESM files that share their measuring core, so both count the same way. They are fetched into the per-machine ncmake cache on first use, on the same TTL and ETag terms as the modules, and mounted read-only into the throwaway Node container, so the host needs no Node. The fetch happens only when one of the two targets is on the command line, so no other target in any app pays for it.
+
+## Checkout audit module
+
+Two more analysers, in `mk/audit.mk`, about the checkout rather than the bundle. They share the report core with the bundle analysers, so findings read the same way everywhere.
+
+| Target | Reads | Answers |
+| --- | --- | --- |
+| `make consistency-audit` | the metadata: `appinfo/info.xml`, `package.json`, `composer.json`, `.nvmrc`, the installed workflows | whether the checkout agrees with itself, and what a release still needs |
+| `make build-verify` | the tracked source, rebuilt twice outside the app | whether the build output committed to the checkout comes from that source |
+
+`consistency-audit` holds the statements a checkout makes against each other: the version in `appinfo/info.xml` against the one in `package.json`, the PHP floor in `info.xml` against `composer.json`, the Node version in `package.json` against `.nvmrc` and against the installed workflows. A linter checks one file against a rule and cannot see any of that. The second half is what a release needs and a checkout can be missing: the `<repository>` and `<bugs>` links, a `<nextcloud>` range that names servers that exist, one lockfile rather than two, a licence stated the same way everywhere, a linter a script calls while no configuration for it is in the tree. Metadata only, no build, no install, no network, which makes it useful on a fresh clone and on an app that never heard of ncmake. The list of released Nextcloud majors is written into the analyser for that reason, and the report names the month the list is from.
+
+`build-verify` answers the other question: it copies the tracked files into a scratch tree outside the app, installs the locked dependencies there, runs the build - twice - and compares the result against what the checkout carries. Twice, because one build cannot separate a difference of the source from output that is not reproducible: what both builds wrote byte for byte the same is what this source produces, so a difference against the checkout is the checkout's, while a file the two builds disagree on is named and gets no verdict. Hashed file names are paired by content, so `app-3f9c1a2b.mjs` and `app-8b20de41.mjs` are one file under two names and a reference carrying the hash counts as build metadata rather than a difference; a source map is compared as the map it is, by what it was compiled from. The checkout is only read: nothing is installed into it and the scratch tree is removed again.
+
+`build-verify` is the one analyser that installs and builds, so it needs the network and takes minutes rather than a second, and it needs git and npm where it runs. `ARGS=--once` builds once and states the open question instead of answering it, `ARGS=--build=dist` verifies another output directory. `make help-consistency-audit` and `make help-build-verify` list every option.
+
 ## CI workflow manager
 
 `make workflows-list` (alias `make workflows`) shows every workflow the configured sources offer, with source, status and description. Sources are ncmake's own workflows and the `nextcloud/.github` templates; on a name collision ncmake wins. Discovery is live through the GitHub API, so new upstream workflows appear without an ncmake update.
+
+The workflows ncmake ships itself, all of them generic:
+
+| File | What it does |
+| --- | --- |
+| `lint-php-syntax.yml` | `php -l` over every tracked PHP file, without composer and without `appinfo/info.xml`; the version matrix comes from the `PHP_VERSIONS` variable, a `.php-version` file or the template default |
+| `lint-shell.yml` | shellcheck over every tracked shell script, found by extension or by shebang, so extensionless commands are covered; a repository without shell scripts passes |
+| `lint-vue-imports.yml` | fails when a tracked source file imports the `@nextcloud/vue` root instead of a per-component entry point, which pulls the whole library into the module graph before tree shaking; a repository without a hit passes |
+| `branch-cleanup.yml` | deletes a merged pull request's head branch if it still exists, a workflow-shipped equivalent of the repository setting |
+| `release.yml` | builds the release tarball with ncmake and attaches it to the published GitHub release |
+| `workflow-updater.yml` | refreshes the managed workflows on a schedule and opens a pull request when anything changed (see below) |
+
+A further source is a three-line addition to `ncmake.mk`: append a name to `wf_sources` and define `wf_src_<name>_list` (a GitHub contents API URL) and `wf_src_<name>_raw` (the prefix the files are downloaded from). Lookup follows the order of `wf_sources`, so the first source listed wins a name collision.
 
 Status per file: `installed`, `update available`, `modified` (local edits, never overwritten), `missing` (in the lock but deleted locally), `unmanaged` (present but not installed through ncmake), `gone upstream`.
 
@@ -196,6 +245,10 @@ In stub mode the per-machine cache refreshes itself at most once per `NCMAKE_TTL
 | `make version` refuses | not on `main`, or the entered version is not greater than the latest tag |
 | `make tag` refuses | the tag exists, or `CHANGELOG.md` has no section for this version; run `make changelog` |
 | `workflows-install` or `workflows-update` refuses | the branch exists locally or on origin; merge, close or delete it, then run the target again |
+| `could not fetch .../lib/<file> - network?` | the analysers are not in the cache and the download failed; check the network and run the target again |
+| `bundle-report` names no packages | the build ships no source maps, so the bytes cannot be attributed; the per-file sizes still hold |
+| `build-verify` names a file as differing | the committed build output did not come from this source; run `make dist-clean && make build` and commit what the build writes |
+| `build-verify` fails before it builds | it needs git and npm where it runs and the network to install; the default node image carries git and npm, a slim one does not |
 | A target behaves like an older ncmake | `make self-update` |
 
 ## Conventions ncmake assumes
@@ -205,6 +258,6 @@ Conventional commit subjects (the changelog is generated from them), `main` as t
 ## Further reading
 
 * [Getting started](https://github.com/ernolf/ncmake/wiki/Getting-started) and the [step-by-step walkthrough](https://github.com/ernolf/ncmake/wiki/Step-by-step)
-* [How ncmake understands your app](https://github.com/ernolf/ncmake/wiki/How-ncmake-understands-your-app), [Building and packaging](https://github.com/ernolf/ncmake/wiki/Building-and-packaging), [Per-app tuning](https://github.com/ernolf/ncmake/wiki/Per-app-tuning), [Target reference](https://github.com/ernolf/ncmake/wiki/Target-reference)
+* [How ncmake understands your app](https://github.com/ernolf/ncmake/wiki/How-ncmake-understands-your-app), [Building and packaging](https://github.com/ernolf/ncmake/wiki/Building-and-packaging), [Bundle report](https://github.com/ernolf/ncmake/wiki/Bundle-report), [Per-app tuning](https://github.com/ernolf/ncmake/wiki/Per-app-tuning), [Target reference](https://github.com/ernolf/ncmake/wiki/Target-reference)
 * [Releasing](https://github.com/ernolf/ncmake/wiki/Releasing), [App Store](https://github.com/ernolf/ncmake/wiki/App-Store)
 * [Workflows](https://github.com/ernolf/ncmake/wiki/Workflows), [Workflow updater](https://github.com/ernolf/ncmake/wiki/Workflow-updater), [GitHub App](https://github.com/ernolf/ncmake/wiki/GitHub-App), [GitHub PAT](https://github.com/ernolf/ncmake/wiki/GitHub-PAT), [Deleting merged branches](https://github.com/ernolf/ncmake/wiki/Deleting-merged-branches)
