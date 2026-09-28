@@ -1,0 +1,7 @@
+{
+    "name": "Lint Vue imports",
+    "description": "Fail when a tracked source file imports the @nextcloud/vue root instead of a per-component entry point, which pulls the whole library into the module graph before tree shaking; a repository without a hit passes",
+    "categories": [
+        "ncmake"
+    ]
+}
