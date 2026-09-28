@@ -37,6 +37,11 @@ consistency_libs = consistency-audit.mjs report-text.mjs
 # Only what the goals on this command line actually need.
 audit_fetch_libs = $(sort $(if $(filter consistency-audit,$(MAKECMDGOALS)),$(consistency_libs)))
 
+# The app is mounted at /app inside the container, so the mount point cannot tell
+# the analyser what the app directory is called - the one thing it needs the host
+# name for, and the only judgement in the audit that is about the checkout rather
+# than its contents. It is handed in per run, in the recipe below.
+#
 # The analyser tells the reader how to run it again with other options, and has to
 # name the command that was typed rather than the path of the file inside the
 # container, so the invocation is handed in as a template with %s for the options.
@@ -67,7 +72,7 @@ endif
 consistency-audit:
 	@for f in $(consistency_libs); do test -s "$(audit_lib_dir)/$$f" || { echo "ERROR: could not fetch $(ncmake_raw)/lib/$$f - network?" >&2; exit 1; }; done
 	@echo "==> consistency-audit$(if $(strip $(ARGS)), $(ARGS)) (RUNTIME=$(RUNTIME))"
-	@$(audit_run) 'CONSISTENCY_AUDIT_CMDLINE="$(consistency_cmdline)" node $(audit_path)/consistency-audit.mjs $(ARGS)'
+	@$(audit_run) 'CONSISTENCY_AUDIT_CMDLINE="$(consistency_cmdline)" CONSISTENCY_AUDIT_APPDIR="$(notdir $(CURDIR))" node $(audit_path)/consistency-audit.mjs $(ARGS)'
 
 define help_consistency-audit
 make consistency-audit [ARGS="<audit arguments>"]
@@ -103,9 +108,11 @@ ARGS is passed to the analyser; a bare word in it is the checkout to audit
   make consistency-audit                      this app
   make consistency-audit ARGS=--details       every table behind the findings
   make consistency-audit ARGS="--details --top=0"  and no row limit in them
-  make consistency-audit ARGS=../other_app    a checkout next to this one
   make consistency-audit ARGS=--json > audit.json  machine-readable, nothing else
   make consistency-audit ARGS=--help          the analyser's own option list
+
+Only the app itself is mounted into the container, so auditing a checkout outside
+it needs RUNTIME=bare and Node on the host.
 endef
 
 help::
