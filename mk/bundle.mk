@@ -123,19 +123,20 @@ under src/ - and prices what it finds there in the bytes the build delivers, by
 the same measurement and through the same source maps. A finding therefore comes
 with your own numbers instead of a general claim about bundlers.
 
-What it names: which toolchain the checkout is built with, read from the config
-files and the declared packages rather than from anyone's opinion of them;
-whether the build emits source maps, without which nobody can say what the bundle
-consists of; how the payload of a page is split across chunks, and which pages
-arrive as one; every package the source imports by its root, with the names that
-import takes and what the build delivers of that package, because only a package
-that arrives in several modules has anything a per-module import could leave out;
-components of @nextcloud/vue that are delivered although no file in the source
-ever names them, each with its bytes; a translation catalogue that carries every
-language on the static path; moment, with the share of the payload it holds; and
-date-fns locales bound statically where a dynamic import would deliver the one
-the session uses. Findings are marked [!] worth changing, [i] worth knowing,
-[ok] nothing found, and each says what it is derived from.
+What it names is kept to what the app itself can change: which toolchain the
+checkout is built with, read from the config files and the declared packages
+rather than from anyone's opinion of them; whether the build emits source maps,
+without which nobody can say what the bundle consists of; a page that arrives as
+one chunk, which only a dynamic import in the source splits; every package the
+source imports by its root, with the names that import takes and what the build
+delivers of that package, because only a package that arrives in several modules
+has anything a per-module import could leave out; and, where the source is what
+pulls them in, moment or a set of statically bound date-fns locales. What the
+bundler or a library decides on its own - how vite cuts its chunks, that a
+component library ships its translation catalogue whole - is measured and tabled
+under --details instead, because a verdict the app cannot act on is noise.
+Findings are marked [!] worth changing, [i] worth knowing, [ok] nothing found,
+and each says what it is derived from.
 
 Without a build output the source-side findings still hold and the report names
 the figures it is missing, so the audit is useful on a fresh checkout. It reads
