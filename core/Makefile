@@ -555,8 +555,11 @@ dev-init:
 	echo "==> Done. 'make help' now includes the module targets (all apps on this machine)."
 
 # Remove the developer modules from the cache - back to the plain user target set.
+# The analyser libraries the modules fetched beside themselves go too: nothing
+# mounts them once the targets are gone.
 dev-clean:
 	@rm -f $(ncmake_cache)/*.mk-$(ncmake_ref) $(ncmake_cache)/*.mk-$(ncmake_ref).etag
+	@rm -rf "$(ncmake_cache)/lib-$(ncmake_ref)"
 	@echo "Developer modules removed ($(ncmake_cache), ref $(ncmake_ref))."
 
 # == Per-target help ==
@@ -722,8 +725,9 @@ endef
 define help_dev-clean
 make dev-clean
 
-Removes the fetched developer modules from the per-machine cache - make help
-shows the plain user target set again. make dev-init brings them back.
+Removes the fetched developer modules from the per-machine cache, and with them
+the analyser libraries those modules fetched - make help shows the plain user
+target set again. make dev-init brings them back.
 endef
 
 define help_self-update
