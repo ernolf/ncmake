@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
 # SPDX-License-Identifier: MIT
 #
-# ncmake developer module: consistency audit.
+# ncmake developer module: two checks on a checkout.
 #
 # consistency-audit reads the metadata of a checkout and holds the statements it
 # finds against each other: the version in appinfo/info.xml against the one in
@@ -12,6 +12,14 @@
 # exists, a lockfile, a linter that a script calls but no configuration backs.
 # Metadata only: it builds nothing, installs nothing and reads no network.
 #
+# build-verify asks the other question about the same checkout: does the build
+# output in it come from the source beside it. It copies the tracked files into a
+# scratch tree outside the app, installs and builds them there - twice - and
+# compares what came out against what the checkout carries. Twice, because a single
+# build cannot tell a difference of the source from a build that is not
+# reproducible. It installs and builds, so unlike the audit it needs the network
+# and takes minutes, and it writes nothing into the app.
+#
 # This is its own module rather than a third target in mk/bundle.mk because a
 # module file cannot be renamed: the core includes every *.mk-<ref> it finds in the
 # per-machine cache and dev-init only ever adds files, so a renamed bundle.mk would
@@ -20,22 +28,28 @@
 # line bundle.mk carries; the tidy route is a generic lib fetch in core/Makefile,
 # offered there.
 #
+# The same discovery rule is why build-verify is a second target in this file and
+# not a module of its own: a new module file reaches a machine only on the next
+# dev-init, while a target added to a file the cache already holds arrives with the
+# next refresh.
+#
 # Names here must stay distinct from mk/bundle.mk: that file is read after this one
 # and would otherwise overwrite lib_dir, report_libs, audit_libs, analyse_libs,
 # report_cmdline, audit_cmdline, analyse_run and analyse_path without a word.
 
-# == Consistency audit configuration ==
+# == Analyser configuration ==
 # The per-reference directory the bundle analysers use as well, deliberately: the
 # analysers share report-text.mjs, and a shared module is imported by the file next
 # to it, so all of them live in one directory.
 audit_lib_dir = $(ncmake_cache)/lib-$(ncmake_ref)
 
-# What the analyser needs next to it. report-text.mjs prints; the analyser itself
+# What each analyser needs next to it. report-text.mjs prints; the analyser itself
 # decides what is worth saying.
 consistency_libs = consistency-audit.mjs report-text.mjs
+verify_libs      = build-verify.mjs report-text.mjs
 
 # Only what the goals on this command line actually need.
-audit_fetch_libs = $(sort $(if $(filter consistency-audit,$(MAKECMDGOALS)),$(consistency_libs)))
+audit_fetch_libs = $(sort $(if $(filter consistency-audit,$(MAKECMDGOALS)),$(consistency_libs)) $(if $(filter build-verify,$(MAKECMDGOALS)),$(verify_libs)))
 
 # The app is mounted at /app inside the container, so the mount point cannot tell
 # the analyser what the app directory is called - the one thing it needs the host
@@ -48,10 +62,15 @@ audit_fetch_libs = $(sort $(if $(filter consistency-audit,$(MAKECMDGOALS)),$(con
 # The inner quotes are resolved by the shell that runs the analyser.
 consistency_cmdline = make consistency-audit ARGS=\"%s\"
 
+# The verifier prints how to run it again as well, and has nothing to say about the
+# name of the checkout: it names the root it resolved, which inside the container
+# is the mount point, so no second variable is handed in.
+verify_cmdline = make build-verify ARGS=\"%s\"
+
 # Fetched on first use, then refreshed on the same TTL and ETag terms as the core
 # Makefile and the modules: unchanged or offline keeps the cached copy. The list is
-# empty unless the audit is among the goals, so no other target in any app ever
-# pays for a network round trip.
+# empty unless one of the two targets is among the goals, so no other target in any
+# app ever pays for a network round trip.
 ifneq ($(strip $(audit_fetch_libs)),)
   $(shell mkdir -p "$(audit_lib_dir)"; for f in $(audit_fetch_libs); do t="$(audit_lib_dir)/$$f"; u="$(ncmake_raw)/lib/$$f"; if [ ! -s "$$t" ]; then curl -fsSL "$$u" -o "$$t" 2>/dev/null; test -s "$$t" || rm -f "$$t"; elif [ -n "$$(find "$$t" -mmin +$(NCMAKE_TTL_MIN) 2>/dev/null)" ]; then curl -fsSL --etag-compare "$$t.etag" --etag-save "$$t.etag" "$$u" -o "$$t.new" 2>/dev/null; if [ -s "$$t.new" ]; then mv "$$t.new" "$$t"; else rm -f "$$t.new"; fi; touch "$$t"; fi; done)
 endif
@@ -59,20 +78,30 @@ endif
 # The analyser directory is mounted at /ncmake, read-only, alongside the app at
 # /app. With RUNTIME=bare there is no container and the host path is used as it
 # is; with no runtime at all $(node_run) carries the core's "install podman" abort.
+#
+# build-verify runs npm, so it gets the writable cache directory the core hands to
+# every other npm call: the container user has no home of its own.
 ifeq ($(filter $(RUNTIME),bare none),)
   audit_run  = $(container) -v "$(audit_lib_dir)":/ncmake:ro $(node_image) sh -lc
+  verify_run = $(container) -v "$(audit_lib_dir)":/ncmake:ro -e npm_config_cache=/tmp/.npm $(node_image) sh -lc
   audit_path = /ncmake
 else
   audit_run  = $(node_run)
+  verify_run = $(node_run)
   audit_path = $(audit_lib_dir)
 endif
 
-.PHONY: consistency-audit
+.PHONY: consistency-audit build-verify
 
 consistency-audit:
 	@for f in $(consistency_libs); do test -s "$(audit_lib_dir)/$$f" || { echo "ERROR: could not fetch $(ncmake_raw)/lib/$$f - network?" >&2; exit 1; }; done
 	@echo "==> consistency-audit$(if $(strip $(ARGS)), $(ARGS)) (RUNTIME=$(RUNTIME))"
 	@$(audit_run) 'CONSISTENCY_AUDIT_CMDLINE="$(consistency_cmdline)" CONSISTENCY_AUDIT_APPDIR="$(notdir $(CURDIR))" node $(audit_path)/consistency-audit.mjs $(ARGS)'
+
+build-verify:
+	@for f in $(verify_libs); do test -s "$(audit_lib_dir)/$$f" || { echo "ERROR: could not fetch $(ncmake_raw)/lib/$$f - network?" >&2; exit 1; }; done
+	@echo "==> build-verify$(if $(strip $(ARGS)), $(ARGS)) (RUNTIME=$(RUNTIME))"
+	@$(verify_run) 'BUILD_VERIFY_CMDLINE="$(verify_cmdline)" node $(audit_path)/build-verify.mjs $(ARGS)'
 
 define help_consistency-audit
 make consistency-audit [ARGS="<audit arguments>"]
@@ -115,8 +144,52 @@ Only the app itself is mounted into the container, so auditing a checkout outsid
 it needs RUNTIME=bare and Node on the host.
 endef
 
+define help_build-verify
+make build-verify [ARGS="<verify arguments>"]
+
+Answers one question: does the build output in this checkout come from the source
+beside it. It copies the tracked files into a scratch tree outside the app,
+installs the locked dependencies there, runs the build - twice - and compares
+what came out against what the checkout carries.
+
+Twice, because a single build cannot tell the two answers apart. A file that
+differs after one build was either built from another source or is written
+differently every time, and only a second build separates them: what both builds
+wrote byte for byte the same way is what this source produces, so a difference
+against the checkout is the checkout's. A file the two builds disagree on is
+named and gets no verdict, because no build reproduces it. ARGS=--once builds
+once and states the open question instead of answering it.
+
+Hashed file names are paired by content, so app-3f9c1a2b.js and app-8b20de41.js
+are read as one file under two names, and a reference that carries the hash
+counts as build metadata rather than a difference. A source map is compared as
+the map it is: what it was compiled from decides, the directory it records its
+sources under does not.
+
+Findings are marked [!] worth changing, [i] worth knowing, [ok] nothing found.
+The checkout is read and never written to - the build output in it stays where it
+is, nothing is installed into it, and the scratch tree is removed again.
+
+ARGS is passed to the analyser; a bare word in it is the checkout to verify
+(default: the current directory):
+  make build-verify                         this app, js/ and css/
+  make build-verify ARGS=--build=dist       another output directory
+  make build-verify ARGS=--details          every table behind the findings
+  make build-verify ARGS=--once             one build instead of two
+  make build-verify ARGS=--json > verify.json  machine-readable, nothing else
+  make build-verify ARGS=--help             the analyser's own option list
+
+It installs and builds, so unlike consistency-audit it needs the network and
+takes minutes rather than a second. Where it runs it needs git and npm: the
+default node image carries both, a slim one does not. In a container the scratch
+tree lives in the container's own /tmp and goes with it, so ARGS=--keep and the
+log each build step writes only survive with RUNTIME=bare and Node on the host.
+endef
+
 help::
 	@echo ""
-	@echo "$(ch)Consistency audit (developer module):$(c0)"
+	@echo "$(ch)Checkout audit (developer module):$(c0)"
 	@echo "  $(ct)consistency-audit$(c0)    Whether the checkout agrees with itself, and what a release still needs"
 	@echo "    $(cd)optional $(cv)ARGS=\"--details\"$(cd), see $(cv)make help-consistency-audit$(c0)"
+	@echo "  $(ct)build-verify$(c0)         Whether the committed build output comes from the source beside it"
+	@echo "    $(cd)optional $(cv)ARGS=\"--details\"$(cd), see $(cv)make help-build-verify$(c0)"
