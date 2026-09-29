@@ -29,6 +29,11 @@ cert_display  = $(or $(cert_file),$(cert_dir)/$(app_id).crt)
 key_file      = $(cert_dir)/$(app_id).key
 token_file    = $(cert_dir)/appstore_api-token
 
+# Runs after the App Store has accepted the release (200/201) and only then, so a
+# job that failed for an unrelated reason stays re-runnable. Empty unless a module
+# installs a step here; only one module can hold it.
+publish_hook ?= :
+
 # Green check / red cross for the help listing, depending on file existence.
 mark          = $(if $(wildcard $(1)),$(cok)✓$(c0),$(cno)✗$(c0))
 
@@ -194,7 +199,8 @@ publish: check-app
 		401) echo "HTTP 401 — check $(cert_dir)/appstore_api-token"; exit 1;; \
 		403) echo "HTTP 403 — not authorized."; exit 1;; \
 		*)   echo "HTTP $$http:"; cat /tmp/.ncmake_resp; echo; exit 1;; \
-	esac
+	esac; \
+	$(publish_hook)
 
 # List published releases of this app (compact JSON)
 list-releases: check-app fetch-apps

@@ -24,6 +24,11 @@
 # The counterpart, integrity-check, needs no key - it verifies against the
 # certificate inside the file - so it also runs on a release runner, which is what
 # makes it a gate in front of dist rather than a report after it.
+#
+# Hence the release path: the signature is made here at tag time (integrity-tag, the
+# tag hook), reaches the runner through a secret gist named in the signed tag
+# message, and is verified there against the committed certificate before the
+# tarball is packed. The key stays on this machine and CI holds no secret of ours.
 
 # == Signing material ==
 # The same key and certificate mk/appstore.mk resolves: one app, one certificate,
@@ -37,9 +42,28 @@ cert_display ?= $(or $(cert_file),$(cert_dir)/$(app_id).crt)
 key_file     ?= $(cert_dir)/$(app_id).key
 mark         ?= $(if $(wildcard $(1)),$(cok)✓$(c0),$(cno)✗$(c0))
 
+# == The committed certificate ==
+# The public certificate, committed to the repository. It is what marks an app as
+# signed - neither the server nor the App Store keeps that record - and it pins the
+# certificate the release runner holds the signature against, so a file signed with
+# any other key is caught there. It lies outside the keep model and never ships.
+integrity_certificate = .ncmake/certificate.crt
+
+# The tag message line naming the gist that carries this release's signature.json.
+# Written by integrity-tag, read by the release workflow and by integrity-gist-drop.
+integrity_trailer = ncmake-signature
+
+# The two hooks core and appstore.mk offer: the signature is produced between the
+# confirmation and the tag, the gist is dropped once the App Store has the release.
+# Plain '=' - both are declared ':' with '?=' and are meant to be taken over.
+tag_hook     = $(MAKE) --no-print-directory integrity-tag
+publish_hook = $(MAKE) --no-print-directory integrity-gist-drop
+
 # Signing is the maintainer's step and fails loudly when the material is missing:
 # a tarball that silently lost its signature is the state this module exists to end.
-integrity_require = @test -n "$(cert_file)" || { echo "ERROR: certificate not found: $(cert_display) - 'make csr' starts the issuing." >&2; exit 1; }; test -f "$(key_file)" || { echo "ERROR: key not found: $(key_file)" >&2; exit 1; }
+# Split in two so the same test can run inside a recipe line that is already a shell.
+integrity_check_material = test -n "$(cert_file)" || { echo "ERROR: certificate not found: $(cert_display) - 'make csr' starts the issuing." >&2; exit 1; }; test -f "$(key_file)" || { echo "ERROR: key not found: $(key_file)" >&2; exit 1; }
+integrity_require = @$(integrity_check_material)
 
 # What to sign or check: the staged tree by default, DIR=<path> for a tree that
 # already exists elsewhere - a deployed app, an unpacked release. TARBALL=<file>
@@ -117,6 +141,11 @@ def openssl(arguments, stdin=None):
     return result.stdout
 
 
+def fingerprint(certificate):
+    text = openssl(['x509', '-in', certificate, '-noout', '-fingerprint', '-sha256'])
+    return text.decode('ascii', 'replace').strip().split('=', 1)[-1].upper()
+
+
 def common_name(certificate):
     subject = openssl(['x509', '-in', certificate, '-noout', '-subject', '-nameopt', 'RFC2253'])
     found = re.search(r'CN=([^,]+)', subject.decode('utf-8', 'replace'))
@@ -147,7 +176,7 @@ def sign(root, app_id, key, certificate):
     print('Signed %d files -> %s' % (len(hashes), target))
 
 
-def check(root, app_id):
+def check(root, app_id, pinned=None):
     path = os.path.join(root, 'appinfo', 'signature.json')
     if not os.path.isfile(path):
         fail('%s not found - the app would not be integrity-checked at all' % path)
@@ -169,6 +198,11 @@ def check(root, app_id):
         name = common_name(certificate)
         if name != app_id:
             problems.append(('CERTIFICATE_CN', '%s, expected %s' % (name, app_id)))
+        # Against the committed certificate: the hashes and the signature agree with
+        # each other in any self-signed file, so only the pin says the key was the
+        # app's own. It is the check the release runner is there for.
+        if pinned and fingerprint(certificate) != fingerprint(pinned):
+            problems.append(('CERTIFICATE_MISMATCH', 'not the certificate in %s' % pinned))
         public_key = os.path.join(scratch, 'certificate.pub')
         with open(public_key, 'wb') as handle:
             handle.write(openssl(['x509', '-in', certificate, '-pubkey', '-noout']))
@@ -196,11 +230,12 @@ def check(root, app_id):
 
 
 if len(sys.argv) < 4:
-    sys.exit('usage: ncmake_integrity.py sign|check <root> <app id> [<key> <certificate>]')
+    sys.exit('usage: ncmake_integrity.py sign <root> <app id> <key> <certificate>\n'
+             '       ncmake_integrity.py check <root> <app id> [<pinned certificate>]')
 if sys.argv[1] == 'sign':
     sign(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5])
 elif sys.argv[1] == 'check':
-    check(sys.argv[2], sys.argv[3])
+    check(sys.argv[2], sys.argv[3], sys.argv[4] if len(sys.argv) > 4 else None)
 else:
     sys.exit('unknown command: %s' % sys.argv[1])
 endef
@@ -208,7 +243,7 @@ export integrity_tool
 
 integrity_run = mkdir -p "$(cache_dir)" && printf '%s\n' "$$integrity_tool" > "$(cache_dir)/ncmake_integrity.py" && python3 "$(cache_dir)/ncmake_integrity.py"
 
-.PHONY: integrity-sign integrity-check dist-signed
+.PHONY: integrity-sign integrity-check dist-signed integrity-enable integrity-tag integrity-gist-drop
 
 # DIR= points at a tree that already exists, so only the default case needs stage.
 integrity-sign: check-app $(if $(DIR),,stage)
@@ -225,7 +260,47 @@ integrity-check: check-app $(if $(or $(DIR),$(TARBALL)),,stage)
 	else \
 		root="$(integrity_dir)"; \
 	fi; \
-	$(integrity_run) check "$$root" "$(app_id)"
+	$(integrity_run) check "$$root" "$(app_id)" $(wildcard $(integrity_certificate))
+
+# Puts the public certificate in the repository, which is what marks the app as
+# signed: from here on 'make tag' offers the signature and the release workflow
+# refuses a release that names none.
+integrity-enable: check-app
+	$(integrity_require)
+	@mkdir -p "$(dir $(integrity_certificate))"
+	@cp "$(cert_file)" "$(integrity_certificate)"
+	@echo "Wrote $(integrity_certificate) - it belongs in the repository:"
+	@echo "  git add $(integrity_certificate) && git commit -s -m 'build(release): pin the code signing certificate'"
+
+# The tag hook: runs after the confirmation in 'make tag' and before the tag exists.
+# Signs the staged tree, holds it against the committed certificate, puts the file
+# in a secret gist and names that gist in the tag message, where the tag's own GPG
+# signature covers the line. The key stays on this machine; the runner needs nothing
+# but the gist id, which anyone holding it can read and nobody can guess.
+integrity-tag: check-app
+	@test -f "$(integrity_certificate)" || exit 0; \
+	printf 'Generate appinfo/signature.json for this release? [Y/n] '; read yn; \
+	case "$$yn" in \
+		n|N) echo "No signature for v$(version) - the tarball ships without appinfo/signature.json, and $(app_id) is then not integrity-checked on any server."; exit 0;; \
+	esac; \
+	$(integrity_check_material); \
+	command -v gh >/dev/null 2>&1 || { echo "ERROR: gh not found - it uploads the signature gist." >&2; exit 1; }; \
+	$(MAKE) --no-print-directory stage || exit 1; \
+	$(integrity_run) sign "$(stage_dir)/$(app_id)" "$(app_id)" "$(key_file)" "$(cert_file)" || exit 1; \
+	$(integrity_run) check "$(stage_dir)/$(app_id)" "$(app_id)" "$(integrity_certificate)" || exit 1; \
+	id=$$(gh gist create -d "$(app_id) v$(version) appinfo/signature.json" "$(stage_dir)/$(app_id)/appinfo/signature.json" | tail -1 | sed 's#.*/##'); \
+	test -n "$$id" || { echo "ERROR: gh gist create returned no gist id." >&2; exit 1; }; \
+	printf '\n%s: %s\n' "$(integrity_trailer)" "$$id" >> "$(tag_message)"; \
+	echo "Signature uploaded as the secret gist $$id and named in the tag message."
+
+# The publish hook: the gist has done its job once the App Store has the release, so
+# it is dropped there and not earlier - a job that failed for an unrelated reason
+# has to stay re-runnable, and a re-run needs the file again.
+integrity-gist-drop: check-app
+	@id=$$(git tag -l --format='%(contents)' "v$(version)" 2>/dev/null | sed -n 's/^$(integrity_trailer): *//p' | head -1); \
+	test -n "$$id" || exit 0; \
+	command -v gh >/dev/null 2>&1 || { echo "WARNING: gh not found - drop the signature gist with 'gh gist delete $$id --yes'." >&2; exit 0; }; \
+	gh gist delete "$$id" --yes && echo "Signature gist $$id deleted." || echo "WARNING: could not delete the signature gist $$id - drop it with 'gh gist delete $$id --yes'." >&2
 
 # Left to right, and stage exactly once: stage wipes its directory, so it has to
 # be the first of the three to reach it - signing a tree that dist then rebuilds
@@ -269,6 +344,10 @@ the file carries. Differences are reported in the classes Checker::verify uses -
 EXTRA_FILE, FILE_MISSING, INVALID_HASH - plus a CN that is not the app id and a
 signature that does not match. Any of them exits non-zero.
 
+While $(integrity_certificate) is committed, the certificate in the file is
+also held against it (CERTIFICATE_MISMATCH): hashes and signature agree with each
+other in any self-signed file, so only that pin says the key was the app's own.
+
 It needs no private key, only openssl and python3, so it runs wherever the
 tarball goes - on a release runner as a gate in front of dist, or against an app
 already installed on a server.
@@ -295,10 +374,61 @@ The three steps are ordered by their position in the prerequisite list and stage
 runs once for all of them, so this target is not parallel-safe; run it without
 -j, as 'make release'.
 
-Its place in a release is a fallback. The normal path keeps the key out of CI
-and lets the runner build and pack, which is what #64 describes; dist-signed is
-the way out when the runner build cannot be repaired quickly and the tarball has
-to be produced by hand.
+Its place in a release is a fallback. The normal path signs at tag time and lets
+the runner build, verify and pack; dist-signed is the way out when the runner
+build cannot be repaired quickly and the tarball has to be produced here and
+attached by hand.
+endef
+
+define help_integrity-enable
+make integrity-enable    (maintainer, once per app)
+
+Copies the App Store certificate to $(integrity_certificate) and leaves it
+for you to commit. That file is what marks the app as signed: nothing else keeps
+that record - not the server, which skips an app without signature.json in
+silence, and not the App Store, which verifies the tarball signature and knows
+nothing about this one.
+
+Committed, it does two things: 'make tag' offers to produce the signature, and
+the release workflow refuses to attach a tarball for a release whose tag names no
+signature. It also pins the certificate every verification is held against, so a
+file signed with another key fails as CERTIFICATE_MISMATCH.
+
+It is the public certificate; it carries no key material. It sits outside the
+keep model, so it is not part of the tarball.
+
+To stop signing, remove the file from the repository. The next release then ships
+unsigned, which costs the integrity check and nothing else.
+endef
+
+define help_integrity-tag
+make integrity-tag    (the tag hook, not called by hand)
+
+Installed as $$(tag_hook), so it runs inside 'make tag' between the confirmation
+and the tag. Does nothing while $(integrity_certificate) is absent.
+
+Otherwise it asks, stages, signs the staged tree, holds it against the committed
+certificate, uploads appinfo/signature.json as a secret gist and writes
+
+  $(integrity_trailer): <gist id>
+
+into the tag message, where the tag's GPG signature covers it. The key never
+leaves this machine: the runner reads the gist without any token, since a secret
+gist is readable by anyone holding its id and findable by nobody.
+
+Answering n skips the signature for this release, with no further question.
+endef
+
+define help_integrity-gist-drop
+make integrity-gist-drop    (the publish hook, not called by hand)
+
+Installed as $$(publish_hook), so it runs at the end of 'make publish' once the
+App Store has answered 200 or 201. Reads the gist id out of the tag message of
+v$(version) and deletes that gist.
+
+Not earlier: a release job that failed for an unrelated reason has to stay
+re-runnable, and a re-run needs the file again. Called by hand it is harmless -
+without an id in the tag message it does nothing.
 endef
 
 help::
@@ -306,7 +436,10 @@ help::
 	@echo "$(ch)Integrity signature (developer module)$(c0)  $(cd)(cert dir: $(cert_dir))$(c0)"
 	@printf "           %b cert:  %s\n" "$(call mark,$(cert_file))" "$(cert_display)"
 	@printf "           %b key:   %s\n" "$(call mark,$(key_file))" "$(key_file)"
+	@printf "           %b app:   %s\n" "$(call mark,$(integrity_certificate))" "$(integrity_certificate)$(if $(wildcard $(integrity_certificate)),, - $(app_id) is not marked as signed)"
 	@echo ""
+	@echo "  $(ct)integrity-enable$(c0)     Commit the certificate - marks $(app_id) as signed  $(cm)[m]$(c0)"
+	@echo "                       $(cd)Then 'make tag' offers the signature and the runner verifies it.$(c0)"
 	@echo "  $(ct)integrity-sign$(c0)       Write appinfo/signature.json into the staged tree  $(cm)[m]$(c0)"
 	@echo "                       $(cv)DIR=<path>$(c0) signs a tree that already exists (a deployed app)."
 	@echo "  $(ct)integrity-check$(c0)      Hold a tree against its signature.json - hashes and signature"
