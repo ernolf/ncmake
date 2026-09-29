@@ -13,23 +13,21 @@
 # costs. Neither builds, installs or touches dependencies.
 #
 # The analysers are dependency-free ESM files that share their measuring core, so
-# both count the same way. They live together in a per-reference directory of the
-# per-machine ncmake cache, fetched and refreshed exactly like the modules, and
-# that directory is mounted read-only into the throwaway Node container - one
-# directory, because a shared module is imported by the file next to it. Nothing
-# is ever written into the app: no file to commit, no file to ignore, no file for
+# both count the same way. The core Makefile fetches them into the per-machine
+# ncmake cache and mounts them read-only into the throwaway Node container; this
+# module names which of them a goal needs and nothing else about it. Nothing is
+# ever written into the app: no file to commit, no file to ignore, no file for
 # 'make clean' to remove.
 
 # == Bundle analysis configuration ==
-lib_dir = $(ncmake_cache)/lib-$(ncmake_ref)
-
 # What each analyser needs next to it. built-assets.mjs measures, report-text.mjs
 # prints; the analyser itself decides what is worth saying.
 report_libs = bundle-report.mjs built-assets.mjs report-text.mjs
 audit_libs  = build-audit.mjs built-assets.mjs report-text.mjs
 
-# Only what the goals on this command line actually need, each file once.
-analyse_libs = $(sort $(if $(filter bundle-report,$(MAKECMDGOALS)),$(report_libs)) $(if $(filter build-audit,$(MAKECMDGOALS)),$(audit_libs)))
+# What the goals on this command line need, handed to the core's analyser library
+# section: appended, never set, because every analyser module adds its own.
+ncmake_libs += $(if $(filter bundle-report,$(MAKECMDGOALS)),$(report_libs)) $(if $(filter build-audit,$(MAKECMDGOALS)),$(audit_libs))
 
 # An analyser tells the reader how to run it again with other options. It must
 # name the command that was typed, not the path of the file inside the container,
@@ -38,36 +36,25 @@ analyse_libs = $(sort $(if $(filter bundle-report,$(MAKECMDGOALS)),$(report_libs
 report_cmdline = make bundle-report ARGS=\"%s\"
 audit_cmdline  = make build-audit ARGS=\"%s\"
 
-# Fetched on first use, then refreshed on the same TTL and ETag terms as the core
-# Makefile and the modules: unchanged or offline keeps the cached copy. The list is
-# empty unless an analyser is among the goals, so no other target in any app ever
-# pays for a network round trip.
-ifneq ($(strip $(analyse_libs)),)
-  $(shell mkdir -p "$(lib_dir)"; for f in $(analyse_libs); do t="$(lib_dir)/$$f"; u="$(ncmake_raw)/lib/$$f"; if [ ! -s "$$t" ]; then curl -fsSL "$$u" -o "$$t" 2>/dev/null; test -s "$$t" || rm -f "$$t"; elif [ -n "$$(find "$$t" -mmin +$(NCMAKE_TTL_MIN) 2>/dev/null)" ]; then curl -fsSL --etag-compare "$$t.etag" --etag-save "$$t.etag" "$$u" -o "$$t.new" 2>/dev/null; if [ -s "$$t.new" ]; then mv "$$t.new" "$$t"; else rm -f "$$t.new"; fi; touch "$$t"; fi; done)
-endif
-
-# The analyser directory is mounted at /ncmake, read-only, alongside the app at
-# /app. With RUNTIME=bare there is no container and the host path is used as it
-# is; with no runtime at all $(node_run) carries the core's "install podman" abort.
-ifeq ($(filter $(RUNTIME),bare none),)
-  analyse_run  = $(container) -v "$(lib_dir)":/ncmake:ro $(node_image) sh -lc
-  analyse_path = /ncmake
-else
-  analyse_run  = $(node_run)
-  analyse_path = $(lib_dir)
-endif
+# A module is refreshed on its own terms, and an app that carries a committed core
+# Makefile refreshes that one by hand - so the core here can be older than the
+# analyser section this module expects. Say which side is behind rather than run an
+# empty command.
+analyse_core = $(if $(ncmake_lib_run),:,echo "ERROR: this module needs a newer ncmake core - run 'make self-update'" >&2; exit 1)
 
 .PHONY: bundle-report build-audit
 
 bundle-report:
-	@for f in $(report_libs); do test -s "$(lib_dir)/$$f" || { echo "ERROR: could not fetch $(ncmake_raw)/lib/$$f - network?" >&2; exit 1; }; done
+	@$(analyse_core)
+	@$(call ncmake_lib_need,$(report_libs))
 	@echo "==> bundle-report$(if $(strip $(ARGS)), $(ARGS)) (RUNTIME=$(RUNTIME))"
-	@$(analyse_run) 'BUNDLE_REPORT_CMDLINE="$(report_cmdline)" node $(analyse_path)/bundle-report.mjs $(ARGS)'
+	@$(ncmake_lib_run) 'BUNDLE_REPORT_CMDLINE="$(report_cmdline)" node $(ncmake_lib_path)/bundle-report.mjs $(ARGS)'
 
 build-audit:
-	@for f in $(audit_libs); do test -s "$(lib_dir)/$$f" || { echo "ERROR: could not fetch $(ncmake_raw)/lib/$$f - network?" >&2; exit 1; }; done
+	@$(analyse_core)
+	@$(call ncmake_lib_need,$(audit_libs))
 	@echo "==> build-audit$(if $(strip $(ARGS)), $(ARGS)) (RUNTIME=$(RUNTIME))"
-	@$(analyse_run) 'BUILD_AUDIT_CMDLINE="$(audit_cmdline)" node $(analyse_path)/build-audit.mjs $(ARGS)'
+	@$(ncmake_lib_run) 'BUILD_AUDIT_CMDLINE="$(audit_cmdline)" node $(ncmake_lib_path)/build-audit.mjs $(ARGS)'
 
 define help_bundle-report
 make bundle-report [ARGS="<report arguments>"]

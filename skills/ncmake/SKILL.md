@@ -249,6 +249,7 @@ In stub mode the per-machine cache refreshes itself at most once per `NCMAKE_TTL
 | `bundle-report` names no packages | the build ships no source maps, so the bytes cannot be attributed; the per-file sizes still hold |
 | `build-verify` names a file as differing | the committed build output did not come from this source; run `make dist-clean && make build` and commit what the build writes |
 | `build-verify` fails before it builds | it needs git and npm where it runs and the network to install; the default node image carries git and npm, a slim one does not |
+| `this module needs a newer ncmake core` | a cached analyser module expects the core's analyser library section; `make self-update` fetches the current core |
 | A target behaves like an older ncmake | `make self-update` |
 
 ## Conventions ncmake assumes

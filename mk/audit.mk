@@ -24,9 +24,8 @@
 # module file cannot be renamed: the core includes every *.mk-<ref> it finds in the
 # per-machine cache and dev-init only ever adds files, so a renamed bundle.mk would
 # stay behind in every existing cache and define its targets a second time. The
-# price of the separate file is the parse-time fetch line below, which is the same
-# line bundle.mk carries; the tidy route is a generic lib fetch in core/Makefile,
-# offered there.
+# separate file costs nothing beyond its own header: fetching the analysers is the
+# core's, under "Analyser libraries" there.
 #
 # The same discovery rule is why build-verify is a second target in this file and
 # not a module of its own: a new module file reaches a machine only on the next
@@ -34,22 +33,19 @@
 # next refresh.
 #
 # Names here must stay distinct from mk/bundle.mk: that file is read after this one
-# and would otherwise overwrite lib_dir, report_libs, audit_libs, analyse_libs,
-# report_cmdline, audit_cmdline, analyse_run and analyse_path without a word.
+# and would otherwise overwrite this module's variables without a word. ncmake_libs
+# is the exception and is appended to rather than set - it is the core's list, and
+# every analyser module adds to it.
 
 # == Analyser configuration ==
-# The per-reference directory the bundle analysers use as well, deliberately: the
-# analysers share report-text.mjs, and a shared module is imported by the file next
-# to it, so all of them live in one directory.
-audit_lib_dir = $(ncmake_cache)/lib-$(ncmake_ref)
-
 # What each analyser needs next to it. report-text.mjs prints; the analyser itself
 # decides what is worth saying.
 consistency_libs = consistency-audit.mjs report-text.mjs
 verify_libs      = build-verify.mjs report-text.mjs
 
-# Only what the goals on this command line actually need.
-audit_fetch_libs = $(sort $(if $(filter consistency-audit,$(MAKECMDGOALS)),$(consistency_libs)) $(if $(filter build-verify,$(MAKECMDGOALS)),$(verify_libs)))
+# What the goals on this command line need, handed to the core's analyser library
+# section: appended, never set, because every analyser module adds its own.
+ncmake_libs += $(if $(filter consistency-audit,$(MAKECMDGOALS)),$(consistency_libs)) $(if $(filter build-verify,$(MAKECMDGOALS)),$(verify_libs))
 
 # The app is mounted at /app inside the container, so the mount point cannot tell
 # the analyser what the app directory is called - the one thing it needs the host
@@ -67,41 +63,25 @@ consistency_cmdline = make consistency-audit ARGS=\"%s\"
 # is the mount point, so no second variable is handed in.
 verify_cmdline = make build-verify ARGS=\"%s\"
 
-# Fetched on first use, then refreshed on the same TTL and ETag terms as the core
-# Makefile and the modules: unchanged or offline keeps the cached copy. The list is
-# empty unless one of the two targets is among the goals, so no other target in any
-# app ever pays for a network round trip.
-ifneq ($(strip $(audit_fetch_libs)),)
-  $(shell mkdir -p "$(audit_lib_dir)"; for f in $(audit_fetch_libs); do t="$(audit_lib_dir)/$$f"; u="$(ncmake_raw)/lib/$$f"; if [ ! -s "$$t" ]; then curl -fsSL "$$u" -o "$$t" 2>/dev/null; test -s "$$t" || rm -f "$$t"; elif [ -n "$$(find "$$t" -mmin +$(NCMAKE_TTL_MIN) 2>/dev/null)" ]; then curl -fsSL --etag-compare "$$t.etag" --etag-save "$$t.etag" "$$u" -o "$$t.new" 2>/dev/null; if [ -s "$$t.new" ]; then mv "$$t.new" "$$t"; else rm -f "$$t.new"; fi; touch "$$t"; fi; done)
-endif
-
-# The analyser directory is mounted at /ncmake, read-only, alongside the app at
-# /app. With RUNTIME=bare there is no container and the host path is used as it
-# is; with no runtime at all $(node_run) carries the core's "install podman" abort.
-#
-# build-verify runs npm, so it gets the writable cache directory the core hands to
-# every other npm call: the container user has no home of its own.
-ifeq ($(filter $(RUNTIME),bare none),)
-  audit_run  = $(container) -v "$(audit_lib_dir)":/ncmake:ro $(node_image) sh -lc
-  verify_run = $(container) -v "$(audit_lib_dir)":/ncmake:ro -e npm_config_cache=/tmp/.npm $(node_image) sh -lc
-  audit_path = /ncmake
-else
-  audit_run  = $(node_run)
-  verify_run = $(node_run)
-  audit_path = $(audit_lib_dir)
-endif
+# A module is refreshed on its own terms, and an app that carries a committed core
+# Makefile refreshes that one by hand - so the core here can be older than the
+# analyser section this module expects. Say which side is behind rather than run an
+# empty command.
+audit_core = $(if $(ncmake_lib_run),:,echo "ERROR: this module needs a newer ncmake core - run 'make self-update'" >&2; exit 1)
 
 .PHONY: consistency-audit build-verify
 
 consistency-audit:
-	@for f in $(consistency_libs); do test -s "$(audit_lib_dir)/$$f" || { echo "ERROR: could not fetch $(ncmake_raw)/lib/$$f - network?" >&2; exit 1; }; done
+	@$(audit_core)
+	@$(call ncmake_lib_need,$(consistency_libs))
 	@echo "==> consistency-audit$(if $(strip $(ARGS)), $(ARGS)) (RUNTIME=$(RUNTIME))"
-	@$(audit_run) 'CONSISTENCY_AUDIT_CMDLINE="$(consistency_cmdline)" CONSISTENCY_AUDIT_APPDIR="$(notdir $(CURDIR))" node $(audit_path)/consistency-audit.mjs $(ARGS)'
+	@$(ncmake_lib_run) 'CONSISTENCY_AUDIT_CMDLINE="$(consistency_cmdline)" CONSISTENCY_AUDIT_APPDIR="$(notdir $(CURDIR))" node $(ncmake_lib_path)/consistency-audit.mjs $(ARGS)'
 
 build-verify:
-	@for f in $(verify_libs); do test -s "$(audit_lib_dir)/$$f" || { echo "ERROR: could not fetch $(ncmake_raw)/lib/$$f - network?" >&2; exit 1; }; done
+	@$(audit_core)
+	@$(call ncmake_lib_need,$(verify_libs))
 	@echo "==> build-verify$(if $(strip $(ARGS)), $(ARGS)) (RUNTIME=$(RUNTIME))"
-	@$(verify_run) 'BUILD_VERIFY_CMDLINE="$(verify_cmdline)" node $(audit_path)/build-verify.mjs $(ARGS)'
+	@$(ncmake_lib_run) 'BUILD_VERIFY_CMDLINE="$(verify_cmdline)" node $(ncmake_lib_path)/build-verify.mjs $(ARGS)'
 
 define help_consistency-audit
 make consistency-audit [ARGS="<audit arguments>"]
