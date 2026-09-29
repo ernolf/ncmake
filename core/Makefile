@@ -325,12 +325,26 @@ changelog: check-app
 
 # Freeze the current HEAD as a signed release tag. Everything that belongs in the
 # release must already be committed (CHANGELOG and all content). Refuses to re-tag.
+# The tag message: the release subject, plus whatever tag_hook appends below it.
+# It is written to the build cache because the hook runs between the confirmation
+# and the tag, and has to be able to add to it.
+tag_message = $(cache_dir)/tag-message
+
+# Runs after the confirmation and before the tag is created, and may append lines
+# to $(tag_message). Empty unless a module installs a step here; only one module
+# can hold it.
+tag_hook ?= :
+
 tag: check-app
 	@ver="$(version)"; \
 	latest=$$(git tag --list 'v*' --sort=-v:refname | head -1 | sed 's/^v//'); \
 	latest=$${latest:-0.0.0}; \
 	high=$$(printf '%s\n%s\n' "$$latest" "$$ver" | sort -V | tail -1); \
 	if [ "$$ver" = "$$latest" ] || [ "$$high" != "$$ver" ]; then echo "info.xml version $$ver is not greater than the latest tag $$latest - run 'make version' first" >&2; exit 1; fi; \
+	if [ -n "$$(git status --porcelain)" ]; then \
+		echo "ERROR: the working tree is not clean, untracked files included - the release is packed from the checkout, so anything only this machine has would reach the tarball and nothing else." >&2; \
+		git status --short >&2; exit 1; \
+	fi; \
 	echo "############################################################################"; \
 	echo "##  About to create the signed tag v$$ver at the CURRENT commit."; \
 	echo "##  EVERYTHING that belongs in this release MUST be committed NOW:"; \
@@ -341,7 +355,9 @@ tag: check-app
 	fi; \
 	printf 'Create and push the signed tag v%s now? [y/N] ' "$$ver"; read yn; \
 	if [ "$$yn" = y ] || [ "$$yn" = Y ]; then \
-		git tag -s "v$$ver" -m "Release $$ver" && git push origin "v$$ver"; \
+		mkdir -p "$(cache_dir)"; printf 'Release %s\n' "$$ver" > "$(tag_message)"; \
+		$(tag_hook) || exit 1; \
+		git tag -s "v$$ver" -F "$(tag_message)" && git push origin "v$$ver"; \
 	else \
 		echo "Aborted. To do it manually:"; \
 		echo "  git tag -s v$$ver -m \"Release $$ver\" && git push origin v$$ver"; \
@@ -707,9 +723,14 @@ endef
 define help_tag
 make tag    (maintainer, on main after the merge)
 
-Refuses to re-tag, refuses when CHANGELOG.md has no "## [X.Y.Z]" section, then
-creates and pushes the signed vX.Y.Z tag after confirmation. Publishing the
-release triggers the release workflow, which attaches the tarball asset.
+Refuses to re-tag, refuses a working tree that is not clean (untracked files
+included - the release is packed from the checkout), refuses when CHANGELOG.md
+has no "## [X.Y.Z]" section, then creates and pushes the signed vX.Y.Z tag after
+confirmation. Publishing the release triggers the release workflow, which
+attaches the tarball asset.
+
+Between the confirmation and the tag, $$(tag_hook) may add lines to the tag
+message; the integrity module installs its signature step there.
 endef
 
 define help_dev-init
