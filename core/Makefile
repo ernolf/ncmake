@@ -559,7 +559,7 @@ dev-init:
 # mounts them once the targets are gone.
 dev-clean:
 	@rm -f $(ncmake_cache)/*.mk-$(ncmake_ref) $(ncmake_cache)/*.mk-$(ncmake_ref).etag
-	@rm -rf "$(ncmake_cache)/lib-$(ncmake_ref)"
+	@rm -rf "$(ncmake_lib_dir)"
 	@echo "Developer modules removed ($(ncmake_cache), ref $(ncmake_ref))."
 
 # == Per-target help ==
@@ -792,6 +792,43 @@ help::
 # core rules, so module help:: sections print between the core help and the
 # footer below, and modules may extend core variables.
 -include $(ncmake_modules)
+
+# == Analyser libraries ==
+# A module whose target runs a Node analyser fetches it from lib/ in the ncmake
+# repo, and everything around that is the same for all of them: one per-reference
+# directory in the per-machine cache - one, because a shared module is imported by
+# the file next to it - fetched and refreshed exactly like the modules themselves,
+# and mounted read-only into the throwaway Node container. So it lives here and a
+# module only states which files the goals on this command line need, by appending
+# them to ncmake_libs. That declaration is what this section works on, which is why
+# it stands after the module include.
+ncmake_lib_dir = $(ncmake_cache)/lib-$(ncmake_ref)
+
+# Fetched on first use, then refreshed on the same TTL and ETag terms as this file
+# and the modules: unchanged or offline keeps the cached copy. The list is empty
+# unless an analyser is among the goals, so no other target in any app ever pays
+# for a network round trip.
+ifneq ($(strip $(ncmake_libs)),)
+  $(shell mkdir -p "$(ncmake_lib_dir)"; for f in $(sort $(ncmake_libs)); do t="$(ncmake_lib_dir)/$$f"; u="$(ncmake_raw)/lib/$$f"; if [ ! -s "$$t" ]; then curl -fsSL "$$u" -o "$$t" 2>/dev/null; test -s "$$t" || rm -f "$$t"; elif [ -n "$$(find "$$t" -mmin +$(NCMAKE_TTL_MIN) 2>/dev/null)" ]; then curl -fsSL --etag-compare "$$t.etag" --etag-save "$$t.etag" "$$u" -o "$$t.new" 2>/dev/null; if [ -s "$$t.new" ]; then mv "$$t.new" "$$t"; else rm -f "$$t.new"; fi; touch "$$t"; fi; done)
+endif
+
+# The first fetch fails silently on a machine that is offline, so a target states
+# what is missing instead of letting node report a path: $(call ncmake_lib_need,
+# <files>) as its first recipe line.
+ncmake_lib_need = for f in $(1); do test -s "$(ncmake_lib_dir)/$$f" || { echo "ERROR: could not fetch $(ncmake_raw)/lib/$$f - network?" >&2; exit 1; }; done
+
+# The library directory is mounted at /ncmake, read-only, alongside the app at
+# /app, and gets the writable npm cache every other npm call here gets: an
+# analyser that builds runs npm, and the container user has no home of its own.
+# With RUNTIME=bare there is no container and the host path is used as it is; with
+# no runtime at all $(node_run) carries the "install podman" abort.
+ifeq ($(filter $(RUNTIME),bare none),)
+  ncmake_lib_run  = $(container) -v "$(ncmake_lib_dir)":/ncmake:ro -e npm_config_cache=/tmp/.npm $(node_image) sh -lc
+  ncmake_lib_path = /ncmake
+else
+  ncmake_lib_run  = $(node_run)
+  ncmake_lib_path = $(ncmake_lib_dir)
+endif
 
 help::
 	@echo ""
