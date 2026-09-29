@@ -47,13 +47,13 @@ analyse_core = $(if $(ncmake_lib_run),:,echo "ERROR: this module needs a newer n
 bundle-report:
 	@$(analyse_core)
 	@$(call ncmake_lib_need,$(report_libs))
-	@echo "==> bundle-report$(if $(strip $(ARGS)), $(ARGS)) (RUNTIME=$(RUNTIME))"
+	@echo "==> bundle-report$(if $(strip $(ARGS)), $(ARGS)) (RUNTIME=$(RUNTIME))" >&2
 	@$(ncmake_lib_run) 'BUNDLE_REPORT_CMDLINE="$(report_cmdline)" node $(ncmake_lib_path)/bundle-report.mjs $(ARGS)'
 
 build-audit:
 	@$(analyse_core)
 	@$(call ncmake_lib_need,$(audit_libs))
-	@echo "==> build-audit$(if $(strip $(ARGS)), $(ARGS)) (RUNTIME=$(RUNTIME))"
+	@echo "==> build-audit$(if $(strip $(ARGS)), $(ARGS)) (RUNTIME=$(RUNTIME))" >&2
 	@$(ncmake_lib_run) 'BUILD_AUDIT_CMDLINE="$(audit_cmdline)" node $(ncmake_lib_path)/build-audit.mjs $(ARGS)'
 
 define help_bundle-report

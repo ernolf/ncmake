@@ -74,13 +74,13 @@ audit_core = $(if $(ncmake_lib_run),:,echo "ERROR: this module needs a newer ncm
 consistency-audit:
 	@$(audit_core)
 	@$(call ncmake_lib_need,$(consistency_libs))
-	@echo "==> consistency-audit$(if $(strip $(ARGS)), $(ARGS)) (RUNTIME=$(RUNTIME))"
+	@echo "==> consistency-audit$(if $(strip $(ARGS)), $(ARGS)) (RUNTIME=$(RUNTIME))" >&2
 	@$(ncmake_lib_run) 'CONSISTENCY_AUDIT_CMDLINE="$(consistency_cmdline)" CONSISTENCY_AUDIT_APPDIR="$(notdir $(CURDIR))" node $(ncmake_lib_path)/consistency-audit.mjs $(ARGS)'
 
 build-verify:
 	@$(audit_core)
 	@$(call ncmake_lib_need,$(verify_libs))
-	@echo "==> build-verify$(if $(strip $(ARGS)), $(ARGS)) (RUNTIME=$(RUNTIME))"
+	@echo "==> build-verify$(if $(strip $(ARGS)), $(ARGS)) (RUNTIME=$(RUNTIME))" >&2
 	@$(ncmake_lib_run) 'BUILD_VERIFY_CMDLINE="$(verify_cmdline)" node $(ncmake_lib_path)/build-verify.mjs $(ARGS)'
 
 define help_consistency-audit
