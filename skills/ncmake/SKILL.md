@@ -1,6 +1,6 @@
 ---
 name: ncmake
-description: Build, package, deploy, version, release and publish a Nextcloud app with ncmake, the generic Makefile, and manage its CI workflows. Use this whenever a repository contains appinfo/info.xml together with an ncmake Makefile, or when the task is a Nextcloud app build, dependency run, bundle size analysis, checkout audit, version bump, changelog, tag, App Store submission or workflow update.
+description: Build, package, deploy, version, release and publish a Nextcloud app with ncmake, the generic Makefile, and manage its CI workflows. Use this whenever a repository contains appinfo/info.xml together with an ncmake Makefile, or when the task is a Nextcloud app build, dependency run, bundle size analysis, checkout audit, version bump, changelog, tag, integrity signature, App Store submission or workflow update.
 ---
 
 <!--
@@ -10,7 +10,7 @@ description: Build, package, deploy, version, release and publish a Nextcloud ap
 
 # ncmake
 
-ncmake is one generic `Makefile` that covers the whole life of a Nextcloud app: build, packaging, deployment, version bump, changelog, signed tag, App Store signing and publishing, and managed GitHub Actions workflows.
+ncmake is one generic `Makefile` that covers the whole life of a Nextcloud app: build, packaging, deployment, version bump, changelog, signed tag, the server-side integrity signature, App Store signing and publishing, and managed GitHub Actions workflows.
 
 Its central property: **nothing is configured**. App id, version, PHP floor, Node version, what has to be built and what gets shipped are all derived from `appinfo/info.xml`, `composer.json`, `package.json` and `.gitignore`. Composer and npm run in throwaway containers, so the host needs neither PHP nor Node, only podman or docker.
 
@@ -31,11 +31,12 @@ Follow these before proposing any command. They are the mistakes that cost the m
 3. **Do not add build configuration.** No wrapper scripts, no extra make targets, no CI build steps that duplicate `make build`. A genuine deviation belongs in `ncmake.mk` (plain make syntax, one variable per line).
 4. **Never edit the version by hand** in `info.xml`, `composer.json` or `package.json`. `make version` does the bump, the validation and the lockfile sync.
 5. **Never write a CHANGELOG section by hand.** `make changelog` generates it from the conventional commits.
-6. **Maintainer targets change the world.** `version`, `changelog`, `tag`, `csr`, `register`, `sign`, `release`, `publish`, `delete-release`, `dev-init` and every `COMMIT=1` / `PR=1` variant write commits, tags, branches, pull requests or App Store entries. Run them only when the user explicitly asks for that step, one step at a time. Read-only targets (`build`, `dist`, `psalm`, `reuse`, `composer`, `npm`, `list-releases`, `workflows-list`, `help`) are free to run.
+6. **Maintainer targets change the world.** `version`, `changelog`, `tag`, `csr`, `register`, `sign`, `release`, `publish`, `delete-release`, `integrity-enable`, `integrity-sign`, `dist-signed`, `dev-init` and every `COMMIT=1` / `PR=1` variant write commits, tags, branches, pull requests, App Store entries or signatures. Run them only when the user explicitly asks for that step, one step at a time. Read-only targets (`build`, `dist`, `psalm`, `reuse`, `composer`, `npm`, `integrity-check`, `bundle-report`, `build-audit`, `consistency-audit`, `build-verify`, `list-releases`, `workflows-list`, `help`) are free to run.
 7. **`build/` is generated.** Never edit, never commit, never reference a file in it as source. `make clean` removes it.
 8. **The host needs no toolchain.** Do not tell anyone to install composer, PHP or Node. podman (preferred) or docker is enough. `RUNTIME=bare` exists for hosts that deliberately run the tools directly.
 9. **The checkout directory name is not the app id.** The id comes from `appinfo/info.xml` and the two often differ.
 10. **Quote `ARGS`.** `make composer ARGS="install --no-dev"`. Without `ARGS`, `make composer` and `make npm` print their usage and exit 1 on purpose.
+11. **`appinfo/signature.json` is produced at tag time, on the maintainer's machine.** Never propose `occ integrity:sign-app` (it needs a server with the app already installed), never propose writing the file into the checkout, and never propose putting the signing key into a repository secret so a workflow can sign. The signature travels to the runner, the key does not.
 
 ## What ncmake reads
 
@@ -46,7 +47,8 @@ Follow these before proposing any command. They are the mistakes that cost the m
 | `package.json` | an npm step is needed when `scripts.build` exists; `engines.node` picks the Node image; the version is bumped here too |
 | `.gitignore` | classifies `js/` and `vendor/`: ignored means build output that must be built before shipping, committed means a fresh checkout is already dist ready |
 | `.nextcloudignore` | optional, rsync exclude syntax, filters within the shipped file set |
-| `ncmake.mk` | optional, overrides single variables (`keep_extra`, `php_build_cmd`, `node_build_cmd`, `web_user`, image names, `gh_key_fprs`, ...) |
+| `.ncmake/certificate.crt` | optional, the committed public certificate that marks the app as signed and pins every verification against it |
+| `ncmake.mk` | optional, overrides single variables (`keep_extra`, `php_build_cmd`, `node_build_cmd`, `web_user`, image names, `gh_key_fprs`, `integrity_certificate`, ...) |
 
 ## Which command for which job
 
@@ -71,6 +73,9 @@ Follow these before proposing any command. They are the mistakes that cost the m
 | Resolve against the PHP support floor | add `PHP=min` to the composer call |
 | License compliance | `make reuse` |
 | Release tarball | `make build && make dist` |
+| Mark the app as signed (once per app) | `make integrity-enable` |
+| Verify a tree or a tarball against its signature | `make integrity-check DIR=<path>`, `make integrity-check TARBALL=<file>` |
+| Signed tarball without the runner | `make dist-signed` |
 | Deploy to a test instance | `make build && make rsync TARGET=/var/www/nextcloud/apps OCC=1` |
 | Deploy over ssh | `make build && make rsync TARGET=deploy@host:/var/www/nextcloud/apps OCC=1` |
 | Deploy into a running container (All-in-One) | `make build && make cp TARGET=nextcloud-aio-nextcloud:/var/www/html/custom_apps OCC=1` |
@@ -110,13 +115,13 @@ Exactly this order, one step per command, each on the branch it names:
 1. On `main`, with a clean tree: `make version`. It prompts for the new version, validates that it is greater than the latest tag (`sort -V`), creates the branch `ncmake/release/X.Y.Z`, bumps `info.xml`, `composer.json` and `package.json`, re-syncs the lockfiles in the containers and commits the bump with `-s`. It warns when the composer or package description has drifted away from the `info.xml` summary.
 2. On that branch: `make changelog`. It generates the `## [X.Y.Z]` section from the conventional commits since the last tag (`feat` to Added, `fix` to Fixed, `perf` to Changed; `build`, `ci`, `test`, `chore`, `docs`, `refactor`, `style`, merges and the Transifex `fix(l10n)` commits are skipped), inserts it together with its `[X.Y.Z]:` link reference and prints the exact commit command. While the bump commit is still unpushed that command is `git commit --amend --no-edit`, so a release stays one commit. Rerunning the target is safe. An app-provided `cliff.toml` overrides the built-in configuration.
 3. Push the branch, open the pull request, let CI pass, merge it.
-4. `git checkout main && git pull`, then `make tag`. It refuses to re-tag, refuses when `CHANGELOG.md` has no section for the version, and creates and pushes the signed tag after a confirmation prompt.
-5. Publish the GitHub release for that tag. The shipped `release.yml` workflow builds and attaches the tarball.
+4. `git checkout main && git pull`, then `make tag`. It refuses to re-tag, refuses when `CHANGELOG.md` has no section for the version, refuses a working tree that is not clean (untracked files included, because the release is packed from the checkout), and creates and pushes the signed tag after a confirmation prompt. For an app marked as signed it offers the signature between the confirmation and the tag (see below).
+5. Publish the GitHub release for that tag. The shipped `release.yml` workflow builds and attaches the tarball, verifying the signature before it packs when the app is signed.
 6. App Store: `make publish GH=1` (see below).
 
 ## Developer modules
 
-The App Store, CI workflow, bundle analysis, checkout audit and gh targets are optional modules that live in the ncmake repository under `mk/`. `make dev-init` fetches them into the same per-machine cache as the core Makefile, from where every ncmake app on that machine sees them. The module list is discovered live through the GitHub contents API, so new modules arrive without an ncmake update. `make dev-clean` removes them again, which restores the plain user target set.
+The App Store, CI workflow, bundle analysis, checkout audit, integrity signature and gh targets are optional modules that live in the ncmake repository under `mk/`. `make dev-init` fetches them into the same per-machine cache as the core Makefile, from where every ncmake app on that machine sees them. The module list is discovered live through the GitHub contents API, so new modules arrive without an ncmake update. `make dev-clean` removes them again, which restores the plain user target set.
 
 The anonymous GitHub API allows 60 requests an hour per IP. Exporting `GITHUB_TOKEN` or `GH_TOKEN` raises that to 5000 and is worth doing on a machine that runs `dev-init` or `workflows-list` regularly.
 
@@ -146,6 +151,33 @@ Ongoing:
 | `make ratings` | the app ratings |
 
 `publish` always signs the bytes the URL actually serves, never a local file, so the signature can never disagree with the artifact. `GH=1` pre-fills the standard GitHub release asset URL for confirmation and uses `gh` when available, which makes private repositories work. `NIGHTLY=1` publishes into the nightly channel, where the store keeps exactly one nightly per app and does not require an increasing version; for a GitHub asset the release's pre-release flag is cross-checked against `NIGHTLY` and a mismatch asks before publishing.
+
+## Integrity signature module
+
+`appinfo/signature.json` is the per-file hash list a Nextcloud **server** reads to tell an installed app apart from a modified one. It is not the App Store signature: `make sign` proves to the store where a tarball came from, this file lets a server verify an installation. An app without it is not integrity-checked at all, and the server says so only at `-vvv`.
+
+The module writes the file itself, from `mk/integrity.mk` plus a Python helper, against the format in the server's `lib/private/IntegrityCheck/Checker.php`: a sha512 per file keyed by the app-root-relative path, signed with RSA-PSS (digest sha1, MGF1 sha512, salt length 0, which makes it deterministic and therefore byte-identical to what `occ` produces). It needs only `openssl` and `python3` - no Nextcloud installation, which is the reason it exists, since the documented route is `occ integrity:sign-app` on a server that already has the app.
+
+It uses the App Store certificate and key from `cert_dir`, so an app is onboarded to the store first.
+
+| Target | Effect |
+| --- | --- |
+| `make integrity-enable` | copies the public certificate to `.ncmake/certificate.crt` and prints the commit command; that committed file is the whole switch |
+| `make integrity-sign [DIR=<path>]` | writes `appinfo/signature.json` into the staged tree, or into a tree that already exists; refuses the checkout itself |
+| `make integrity-check [DIR=<path>] [TARBALL=<file>]` | holds a tree or a packed release against its own `signature.json`; needs no key, which is why the runner can run it |
+| `make dist-signed` | stage, sign, check, pack - the tarball the runner would have produced, for a release attached by hand |
+| `make integrity-tag` | the step `make tag` runs; not called by hand |
+| `make integrity-gist-drop` | the step `make publish` runs; not called by hand |
+
+**`.ncmake/certificate.crt` does two things.** It marks the app as signed, so `make tag` offers the signature and the release workflow fails a release that carries none; and it pins the certificate every verification is held against. It holds no key material, and it lies outside the keep model, so it never reaches the tarball. Removing it from the repository stops the signing; the next release then ships unsigned.
+
+**How a signed release runs.** After the confirmation in `make tag`, and before the tag exists, ncmake asks `Generate appinfo/signature.json for this release? [Y/n]`. On yes it stages, signs, verifies the result against the pinned certificate, uploads the file as a **secret gist** and writes one line into the tag message, `ncmake-signature: <gist id>`, which the tag's own GPG signature then covers. The release workflow reads that id back, fetches the gist into `appinfo/signature.json` **without a token** (a secret gist is readable by anyone holding its id, and `GITHUB_TOKEN` cannot read gists at all), and runs `make integrity-check` before `make dist`, so nothing is packed that did not verify. No id while `.ncmake/certificate.crt` is committed fails the job. `make publish` deletes the gist once the store has answered 200 or 201 - not earlier, because a failed release job has to stay re-runnable.
+
+That detour is the point: the signature travels to CI, the signing key never does.
+
+**What gets hashed is the staged tree**, never the checkout, so the hashed file set is the shipped file set. That also makes build reproducibility a release gate - the hashes were taken over a build on the maintainer's machine, so a runner build that does not reproduce it fails with `INVALID_HASH` instead of shipping. `make build-verify` is the target that asks that question ahead of time.
+
+`integrity-check` reports `EXTRA_FILE`, `FILE_MISSING` and `INVALID_HASH` (the classes `Checker::verify()` itself uses), plus `CERTIFICATE_CN` when the certificate's CN is not the app id, `CERTIFICATE_MISMATCH` when the signature was made with a certificate other than the pinned one, and `INVALID_SIGNATURE`. It does not check the certificate chain: that the certificate was issued by Nextcloud is what the server verifies against its own `resources/codesigning/root.crt`.
 
 ## Bundle analysis module
 
@@ -243,13 +275,16 @@ In stub mode the per-machine cache refreshes itself at most once per `NCMAKE_TTL
 | Usage message from `composer` or `npm` | `ARGS` was empty; it is mandatory |
 | `dev-init` or `workflows-list` hits a rate limit | anonymous API budget exhausted; export `GITHUB_TOKEN` or `GH_TOKEN` |
 | `make version` refuses | not on `main`, or the entered version is not greater than the latest tag |
-| `make tag` refuses | the tag exists, or `CHANGELOG.md` has no section for this version; run `make changelog` |
+| `make tag` refuses | the tag exists, `CHANGELOG.md` has no section for this version (run `make changelog`), or the working tree is not clean - commit, stash or remove what `git status --short` lists, untracked files included |
 | `workflows-install` or `workflows-update` refuses | the branch exists locally or on origin; merge, close or delete it, then run the target again |
 | `could not fetch .../lib/<file> - network?` | the analysers are not in the cache and the download failed; check the network and run the target again |
 | `bundle-report` names no packages | the build ships no source maps, so the bytes cannot be attributed; the per-file sizes still hold |
 | `build-verify` names a file as differing | the committed build output did not come from this source; run `make dist-clean && make build` and commit what the build writes |
 | `build-verify` fails before it builds | it needs git and npm where it runs and the network to install; the default node image carries git and npm, a slim one does not |
 | `this module needs a newer ncmake core` | a cached analyser module expects the core's analyser library section; `make self-update` fetches the current core |
+| `integrity-check` reports `CERTIFICATE_MISMATCH` | the signature was made with a different certificate than the committed `.ncmake/certificate.crt`; sign again with the key belonging to that certificate, or re-run `make integrity-enable` if the certificate was legitimately reissued |
+| The release job fails with no signature id | the app is marked as signed but the tag message carries no `ncmake-signature:` line, so the signature step was declined or the tag predates it; `make dist-signed` and attach the tarball by hand, or re-tag |
+| `integrity-check` reports `INVALID_HASH` in the runner for untouched files | the runner's build output differs from the one the signature was taken over; `make build-verify` locates it, `make dist-signed` gets the release out meanwhile |
 | A target behaves like an older ncmake | `make self-update` |
 
 ## Conventions ncmake assumes
@@ -260,5 +295,5 @@ Conventional commit subjects (the changelog is generated from them), `main` as t
 
 * [Getting started](https://github.com/ernolf/ncmake/wiki/Getting-started) and the [step-by-step walkthrough](https://github.com/ernolf/ncmake/wiki/Step-by-step)
 * [How ncmake understands your app](https://github.com/ernolf/ncmake/wiki/How-ncmake-understands-your-app), [Building and packaging](https://github.com/ernolf/ncmake/wiki/Building-and-packaging), [Bundle analysis](https://github.com/ernolf/ncmake/wiki/Bundle-analysis), [Checkout audit](https://github.com/ernolf/ncmake/wiki/Checkout-audit), [Per-app tuning](https://github.com/ernolf/ncmake/wiki/Per-app-tuning), [Target reference](https://github.com/ernolf/ncmake/wiki/Target-reference)
-* [Releasing](https://github.com/ernolf/ncmake/wiki/Releasing), [App Store](https://github.com/ernolf/ncmake/wiki/App-Store)
+* [Releasing](https://github.com/ernolf/ncmake/wiki/Releasing), [App Store](https://github.com/ernolf/ncmake/wiki/App-Store), [Integrity signature](https://github.com/ernolf/ncmake/wiki/Integrity-signature)
 * [Workflows](https://github.com/ernolf/ncmake/wiki/Workflows), [Workflow updater](https://github.com/ernolf/ncmake/wiki/Workflow-updater), [GitHub App](https://github.com/ernolf/ncmake/wiki/GitHub-App), [GitHub PAT](https://github.com/ernolf/ncmake/wiki/GitHub-PAT), [Deleting merged branches](https://github.com/ernolf/ncmake/wiki/Deleting-merged-branches)
