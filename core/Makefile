@@ -141,7 +141,14 @@ no_runtime   = sh -c 'echo >&2; echo "ERROR: no container runtime found (podman/
 #                    analysed PHP level stays pinned through psalm.xml, so the image's fixed
 #                    PHP version does not affect the result.
 # The Node image comes from package.json's engines.node.
-php_min     = $(shell xmllint --xpath 'string(//dependencies/php/@min-version)' appinfo/info.xml 2>/dev/null || grep -oPm1 '(?<=<php min-version=")[^"]+' appinfo/info.xml 2>/dev/null)
+# An info.xml without <php> still has a PHP floor: the one its oldest declared server
+# refuses to run below. Each server states it in its own lib/versioncheck.php, read
+# here from its stable branch, or from master for a major that has none yet.
+nc_server_raw = https://raw.githubusercontent.com/nextcloud/server
+php_declared  = $(shell xmllint --xpath 'string(//dependencies/php/@min-version)' appinfo/info.xml 2>/dev/null || grep -oPm1 '(?<=<php min-version=")[^"]+' appinfo/info.xml 2>/dev/null)
+nc_min        = $(firstword $(subst ., ,$(shell xmllint --xpath 'string(//dependencies/nextcloud/@min-version)' appinfo/info.xml 2>/dev/null || grep -oPm1 '(?<=<nextcloud min-version=")[^"]+' appinfo/info.xml 2>/dev/null)))
+nc_php_floor  = $(shell { curl -fsSL "$(nc_server_raw)/stable$(1)/lib/versioncheck.php" 2>/dev/null || curl -fsSL "$(nc_server_raw)/master/lib/versioncheck.php" 2>/dev/null; } | sed -n 's/.*PHP_VERSION_ID < \([0-9]*\).*/\1/p' | head -1 | awk '{ printf "%d.%d", $$1 / 10000, $$1 % 10000 / 100 }')
+php_min       = $(or $(php_declared),$(call nc_php_floor,$(nc_min)),$(error No PHP floor: appinfo/info.xml declares no php min-version and lib/versioncheck.php of Nextcloud $(nc_min) could not be read))
 node_major  = $(shell python3 -c 'import json,re;print(re.search(r"[0-9]+", json.load(open("package.json"))["engines"]["node"]).group())' 2>/dev/null)
 php_image      ?= ghcr.io/nextcloud/continuous-integration-php$(php_min):latest
 analysis_image ?= docker.io/library/composer:2
