@@ -112,10 +112,11 @@ named as not stated instead of being guessed at - with one exception, the list o
 released Nextcloud majors, which is written into the analyser because the audit
 reads no network, and the report names the month that list is from.
 
-It reads metadata only: no build, no install, no dependency tree, no bytes. That
-makes it useful on a fresh clone, and on an app that never heard of ncmake. The
-analyser runs in the throwaway Node container, so the host needs no Node, and it
-is mounted in from the ncmake cache, so nothing is written into the app.
+It reads metadata only: no build, no install, no installed dependency tree, no
+bytes. That makes it useful on a fresh clone, and on an app that never heard of
+ncmake. The analyser runs in the throwaway Node container, so the host needs no
+Node, and it is mounted in from the ncmake cache, so nothing is written into the
+app.
 
 ARGS is passed to the analyser; a bare word in it is the checkout to audit
 (default: the current directory):
