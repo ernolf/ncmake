@@ -63,7 +63,9 @@ Reports what a browser downloads when a page of this app opens. Every file in th
 built directory that no other file there imports counts as an entry; from each
 entry the static import graph is followed to its closure - that is what the
 browser fetches on page open - while dynamically imported files are listed
-separately because they only arrive when the code asks for them. A split
+separately because they only arrive when the code asks for them. A chunk the
+webpack or rspack runtime of a page loads counts as one of its dynamic imports,
+including the chunks only a lookup table in that runtime names. A split
 stylesheet holds nothing but @import lines, so the stylesheet named after an
 entry is resolved the same way and counted with it: entry plus stylesheet is one
 page, the pairing the app makes in PHP with addScript and addStyle. Each file is
@@ -116,7 +118,8 @@ What it names is kept to what the app itself can change: which toolchain the
 checkout is built with, read from the config files and the declared packages
 rather than from anyone's opinion of them; whether the build emits source maps,
 without which nobody can say what the bundle consists of; a page that arrives as
-one chunk, which only a dynamic import in the source splits; every package the
+one chunk, which only a dynamic import in the source splits, counted with webpack
+and rspack together with what the page's runtime loads later; every package the
 source imports by its root, with the names that import takes and what the build
 delivers of that package, because only a package that arrives in several modules
 has anything a per-module import could leave out; and, where the source is what
@@ -128,7 +131,9 @@ Findings are marked [!] worth changing, [i] worth knowing, [ok] nothing found,
 and each says what it is derived from.
 
 Without a build output the source-side findings still hold and the report names
-the figures it is missing, so the audit is useful on a fresh checkout. It reads
+the figures it is missing, so the audit is useful on a fresh checkout. A js/
+without package.json and without a bundler is taken as written by hand, and no
+finding about source maps, module format or splitting is made about it. It reads
 the checkout only: no build, no install, no network. The analyser runs in the
 throwaway Node container, so the host needs no Node.
 
