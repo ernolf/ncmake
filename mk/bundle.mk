@@ -83,9 +83,11 @@ says what it is derived from. Behind it, --details adds the per-file, per-packag
 and per-module tables, and --json emits the whole result, findings included, for
 a script to read.
 
-It reads the directory only. Build first (make build), then report. The analyser
-runs in the throwaway Node container, so the host needs no Node, and it is mounted
-in from the ncmake cache, so nothing is written into the app.
+It reads the directory, and for a stylesheet in css/ that no page loads it looks
+up whether lib/ and templates/ load it from PHP or a file in src/ imports it.
+Build first (make build), then report. The analyser runs in the throwaway Node
+container, so the host needs no Node, and it is mounted in from the ncmake cache,
+so nothing is written into the app.
 
 ARGS is passed to the analyser; a bare word in it is the directory to read
 (default: js):
