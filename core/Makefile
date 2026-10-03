@@ -415,10 +415,11 @@ npm: check-app
 	@$(node_run) 'npm $(ARGS)'
 
 # REUSE compliance check (https://reuse.software) with the official fsfe/reuse
-# container image; RUNTIME=bare expects the reuse tool on the host.
+# container image; RUNTIME=bare expects the reuse tool on the host. ARGS is
+# forwarded to reuse lint, e.g. --json for a machine-readable report.
 reuse: check-app
 	@echo "==> reuse lint (RUNTIME=$(RUNTIME))"
-	@$(reuse_run) lint
+	@$(reuse_run) lint $(ARGS)
 
 # Abort (do not ship a broken file set) when a build output is missing. Only
 # gitignored outputs are demanded: a committed js/ or vendor/ ships as-is.
@@ -656,11 +657,14 @@ Examples:
 endef
 
 define help_reuse
-make reuse
+make reuse [ARGS="<reuse lint arguments>"]
 
 Runs the REUSE compliance check (reuse.software) in the fsfe/reuse container:
 every file must carry a license, via an SPDX header or a REUSE.toml annotation.
-RUNTIME=bare expects the reuse tool on the host.
+RUNTIME=bare expects the reuse tool on the host. ARGS is forwarded to reuse lint.
+
+  make reuse                 check
+  make reuse ARGS=--json     the report as JSON
 endef
 
 define help_dist
