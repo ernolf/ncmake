@@ -63,6 +63,11 @@ consistency_cmdline = make consistency-audit ARGS=\"%s\"
 # is the mount point, so no second variable is handed in.
 verify_cmdline = make build-verify ARGS=\"%s\"
 
+# In a container the scratch tree is in the container's own /tmp and goes with it,
+# so the verifier must neither offer to keep it nor name it as kept. The condition
+# is the one under which the core runs the analysers in a container.
+verify_transient = $(if $(filter $(RUNTIME),bare none),,BUILD_VERIFY_TRANSIENT=1)
+
 # A module is refreshed on its own terms, and an app that carries a committed core
 # Makefile refreshes that one by hand - so the core here can be older than the
 # analyser section this module expects. Say which side is behind rather than run an
@@ -81,7 +86,7 @@ build-verify:
 	@$(audit_core)
 	@$(call ncmake_lib_need,$(verify_libs))
 	@echo "==> build-verify$(if $(strip $(ARGS)), $(ARGS)) (RUNTIME=$(RUNTIME))" >&2
-	@$(ncmake_lib_run) 'BUILD_VERIFY_CMDLINE="$(verify_cmdline)" node $(ncmake_lib_path)/build-verify.mjs $(ARGS)'
+	@$(ncmake_lib_run) '$(verify_transient) BUILD_VERIFY_CMDLINE="$(verify_cmdline)" node $(ncmake_lib_path)/build-verify.mjs $(ARGS)'
 
 define help_consistency-audit
 make consistency-audit [ARGS="<audit arguments>"]
@@ -164,6 +169,8 @@ takes minutes rather than a second. Where it runs it needs git and npm: the
 default node image carries both, a slim one does not. In a container the scratch
 tree lives in the container's own /tmp and goes with it, so ARGS=--keep and the
 log each build step writes only survive with RUNTIME=bare and Node on the host.
+Where a step fails, the last lines of its output and of its error output are
+printed apart, which in a container is the only record of why.
 endef
 
 help::
