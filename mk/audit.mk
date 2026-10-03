@@ -142,8 +142,10 @@ differs after one build was either built from another source or is written
 differently every time, and only a second build separates them: what both builds
 wrote byte for byte the same way is what this source produces, so a difference
 against the checkout is the checkout's. A file the two builds disagree on is
-named and gets no verdict, because no build reproduces it. ARGS=--once builds
-once and states the open question instead of answering it.
+named and gets no verdict, because no build reproduces it. The second build runs
+in another directory, so output that depends on where the build ran counts as
+not reproducible too. ARGS=--once builds once and states the open question
+instead of answering it.
 
 Hashed file names are paired by content, so app-3f9c1a2b.js and app-8b20de41.js
 are read as one file under two names, and a reference that carries the hash
