@@ -26,7 +26,7 @@ The `Makefile` must sit in the repository root. Everything derives from `$(CURDI
 
 Follow these before proposing any command. They are the mistakes that cost the most time.
 
-1. **`make build` is the complete build.** It already runs `composer install --no-dev --no-scripts --prefer-dist --no-progress` when `composer.json` declares real runtime requirements, and `npm ci && npm run build` when `package.json` has a `scripts.build`. Never propose `make npm ARGS=ci` or `make npm ARGS="run build"` as a build step, and never propose them as a preparation for `make build`.
+1. **`make build` is the complete build.** It already runs `composer install --no-dev --prefer-dist --no-progress`, with the app's own `post-install-cmd`, when `composer.json` declares real runtime requirements (anything besides `php`, `ext-*` and `bamarni/composer-bin-plugin`), and `npm ci && npm run build` when `package.json` has a `scripts.build`. Never propose `make npm ARGS=ci` or `make npm ARGS="run build"` as a build step, and never propose them as a preparation for `make build`.
 2. **`make help-<target>` is the authoritative reference.** Every target has extended help with its exact options and examples. Run it instead of guessing an option name.
 3. **Do not add build configuration.** No wrapper scripts, no extra make targets, no CI build steps that duplicate `make build`. A genuine deviation belongs in `ncmake.mk` (plain make syntax, one variable per line).
 4. **Never edit the version by hand** in `info.xml`, `composer.json` or `package.json`. `make version` does the bump, the validation and the lockfile sync.

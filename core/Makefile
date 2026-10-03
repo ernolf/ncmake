@@ -95,9 +95,11 @@ stage_excludes = $(if $(wildcard .nextcloudignore),--exclude-from=.nextcloudigno
 
 # == Build heuristics ==
 # composer runs when composer.json declares real runtime requirements (anything
-# besides php/ext-*); npm runs when package.json has a build script. Both are
-# overridable in ncmake.mk (set to empty to skip).
-need_composer = $(shell python3 -c 'import json;d=json.load(open("composer.json"));print(1 if [k for k in d.get("require",{}) if k!="php" and not k.startswith("ext-")] else "")' 2>/dev/null)
+# besides php/ext-* and bamarni/composer-bin-plugin, a composer plugin that
+# installs tools into vendor-bin/ and nothing the app loads); npm runs when
+# package.json has a build script. Both are overridable in ncmake.mk (set to
+# empty to skip).
+need_composer = $(shell python3 -c 'import json;d=json.load(open("composer.json"));print(1 if [k for k in d.get("require",{}) if k not in ("php","bamarni/composer-bin-plugin") and not k.startswith("ext-")] else "")' 2>/dev/null)
 need_npm      = $(shell python3 -c 'import json;d=json.load(open("package.json"));print(1 if "build" in d.get("scripts",{}) else "")' 2>/dev/null)
 # .gitignore classifies the outputs: an ignored js/ or vendor/ is a build
 # artifact that must be built before shipping; a committed one (apps that ship
@@ -107,7 +109,9 @@ need_npm      = $(shell python3 -c 'import json;d=json.load(open("package.json")
 # even while the directory does not exist yet (fresh checkout before the build).
 js_ignored     = $(shell git check-ignore -q js/ 2>/dev/null && echo 1)
 vendor_ignored = $(shell git check-ignore -q vendor/ 2>/dev/null && echo 1)
-php_build_cmd  ?= $(if $(need_composer),composer install --no-dev --no-scripts --prefer-dist --no-progress)
+# The app's own post-install-cmd runs with the install: it is where an app moves
+# dependencies into a prefixed namespace under lib/Vendor.
+php_build_cmd  ?= $(if $(need_composer),composer install --no-dev --prefer-dist --no-progress)
 node_build_cmd ?= $(if $(need_npm),npm ci && npm run build)
 
 # == Container runtime (used by 'make version' and 'make build') ==
