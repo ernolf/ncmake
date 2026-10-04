@@ -157,7 +157,10 @@ nc_server_raw = https://raw.githubusercontent.com/nextcloud/server
 php_declared  = $(shell xmllint --xpath 'string(//dependencies/php/@min-version)' appinfo/info.xml 2>/dev/null || grep -oPm1 '(?<=<php min-version=")[^"]+' appinfo/info.xml 2>/dev/null)
 nc_min        = $(firstword $(subst ., ,$(shell xmllint --xpath 'string(//dependencies/nextcloud/@min-version)' appinfo/info.xml 2>/dev/null || grep -oPm1 '(?<=<nextcloud min-version=")[^"]+' appinfo/info.xml 2>/dev/null)))
 nc_php_floor  = $(shell { curl -fsSL "$(nc_server_raw)/stable$(1)/lib/versioncheck.php" 2>/dev/null || curl -fsSL "$(nc_server_raw)/master/lib/versioncheck.php" 2>/dev/null; } | sed -n 's/.*PHP_VERSION_ID < \([0-9]*\).*/\1/p' | head -1 | awk '{ printf "%d.%d", $$1 / 10000, $$1 % 10000 / 100 }')
-php_min       = $(or $(php_declared),$(call nc_php_floor,$(nc_min)),$(error No PHP floor: appinfo/info.xml declares no php min-version and lib/versioncheck.php of Nextcloud $(nc_min) could not be read))
+# The CI images are tagged by major and minor, so a declared "8" means 8.0 and a
+# patch level is dropped.
+php_major_minor = $(if $(1),$(word 1,$(subst ., ,$(1))).$(or $(word 2,$(subst ., ,$(1))),0))
+php_min       = $(or $(call php_major_minor,$(php_declared)),$(call nc_php_floor,$(nc_min)),$(error No PHP floor: appinfo/info.xml declares no php min-version and lib/versioncheck.php of Nextcloud $(nc_min) could not be read))
 node_major  = $(shell python3 -c 'import json,re;print(re.search(r"[0-9]+", json.load(open("package.json"))["engines"]["node"]).group())' 2>/dev/null)
 php_image      ?= ghcr.io/nextcloud/continuous-integration-php$(php_min):latest
 analysis_image ?= docker.io/library/composer:2
