@@ -112,6 +112,11 @@ vendor_ignored = $(shell git check-ignore -q vendor/ 2>/dev/null && echo 1)
 # The app's own post-install-cmd runs with the install: it is where an app moves
 # dependencies into a prefixed namespace under lib/Vendor.
 php_build_cmd  ?= $(if $(need_composer),composer install --no-dev --prefer-dist --no-progress)
+# Composer resolves against every extension the build runtime loads, so a locked
+# package that conflicts with one the image carries but nothing requires (as
+# symfony/cache does with ext-redis < 6.1) would fail the build. The extensions
+# that neither composer.json nor a locked package requires are ignored instead.
+php_unrequired_ext = php -r "\$$r = []; foreach ([\"composer.json\", \"composer.lock\"] as \$$f) { \$$j = json_decode((string) @file_get_contents(\$$f), true) ?: []; \$$r += \$$j[\"platform\"] ?? []; foreach (array_merge([\$$j], \$$j[\"packages\"] ?? [], \$$j[\"packages-dev\"] ?? []) as \$$p) { \$$r += \$$p[\"require\"] ?? []; } } \$$x = []; foreach (get_loaded_extensions() as \$$e) { \$$n = \"ext-\" . str_replace(\" \", \"-\", strtolower(\$$e)); if (!isset(\$$r[\$$n])) { \$$x[] = \$$n; } } echo implode(\",\", \$$x);"
 node_build_cmd ?= $(if $(need_npm),npm ci && npm run build)
 
 # == Container runtime (used by 'make version' and 'make build') ==
@@ -383,7 +388,8 @@ build: PHP := min
 build: check-app
 	@echo "==> Building via RUNTIME=$(RUNTIME)"
 	@if [ -n "$(php_build_cmd)" ]; then \
-		echo "+ $(php_build_cmd)"; $(php_run) '$(php_build_cmd)' || exit 1; \
+		echo "+ $(php_build_cmd)"; \
+		$(php_run) 'export COMPOSER_IGNORE_PLATFORM_REQ="$$($(php_unrequired_ext))"; $(php_build_cmd)' || exit 1; \
 	else echo "(composer: nothing to build)"; fi
 	@if [ -n "$(node_build_cmd)" ]; then \
 		echo "+ $(node_build_cmd)"; $(node_run) '$(node_build_cmd)' || exit 1; \
@@ -602,7 +608,9 @@ Builds the PHP dependencies and the frontend, each in a throwaway container, so
 the host needs neither PHP nor Node. What runs is detected from your files:
   composer install --no-dev    when composer.json declares runtime requirements
   npm ci && npm run build      when package.json has a build script
-A side that does not apply is skipped; override in ncmake.mk (php_build_cmd,
+Composer ignores the PHP extensions the build image loads but neither
+composer.json nor a locked package requires, so the build fails only on what the
+app requires. A side that does not apply is skipped; override in ncmake.mk (php_build_cmd,
 node_build_cmd). RUNTIME= selects the container (podman, docker, docker-rootless,
 bare).
 
