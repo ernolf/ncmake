@@ -469,7 +469,9 @@ stable-branch: check-app
 	echo "    - Release from it: on $$branch, make version, make changelog, make tag. When you"; \
 	echo "      publish the GitHub release, untick 'Set as the latest release'."; \
 	echo "    - The workflows on $$branch stay as they were at $$base; comment and scheduled"; \
-	echo "      events run the workflows of the default branch."
+	echo "      events run the workflows of the default branch. A workflow main gained later,"; \
+	echo "      for example one whose check your rules require, comes over on $$branch with:"; \
+	echo "        make workflows-install W=<name> PR=1"
 
 # == Build ==
 
@@ -862,7 +864,8 @@ tag of the line, not at main. Before it is created, the Nextcloud and PHP ranges
 at that tag are shown next to those of main, with a note when the line still
 reaches into the Nextcloud versions main covers. After confirmation it creates
 and pushes the branch and prints the next steps: protection, backports through
-PRs against the branch, releases with make version, make changelog, make tag.
+PRs against the branch, releases with make version, make changelog, make tag,
+and workflows main gained later (make workflows-install on the branch).
 endef
 
 define help_dev-init

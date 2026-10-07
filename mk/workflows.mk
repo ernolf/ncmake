@@ -270,6 +270,8 @@ wf_run = mkdir -p "$(cache_dir)" && printf '%s\n' "$$wf_tool" > "$(cache_dir)/nc
 # what the workflow updater relies on, so it stays flag-free. COMMIT=1 puts the
 # refresh on its own branch and commits it (like 'make version') without pushing;
 # PR=1 additionally pushes and opens the pull request via gh, and implies COMMIT=1.
+# Both run on main or on a stable* maintenance branch: a line keeps the workflows
+# of the tag it started from, and the updater only ever runs on the default branch.
 COMMIT ?= 0
 PR     ?= 0
 
@@ -293,6 +295,8 @@ export wf_update_body
 # _start refuses to run when the target branch already exists locally or on
 # origin, so a stale or in-flight branch fails fast with instructions instead of
 # only surfacing as a rejected push after the work is already committed.
+# _start sets $base (the branch it starts from) and $branch: on stableX.Y the
+# line is appended, so it never collides with an in-flight branch for main.
 define wf_flow
 wf_require_no_remote_branch() {
     branch="$$1"
@@ -306,12 +310,13 @@ wf_require_no_remote_branch() {
     fi
 }
 wf_branch_start() {
-    branch="$$1"
-    cur=$$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
-    if [ "$$cur" != "main" ]; then
-        echo "COMMIT=1/PR=1 must run on 'main' (you are on '$$cur')." >&2
-        return 1
-    fi
+    base=$$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+    case "$$base" in
+        main) branch="$$1" ;;
+        stable*) branch="$$1-$$base" ;;
+        *) echo "COMMIT=1/PR=1 must run on 'main' or a 'stable*' branch (you are on '$$base')." >&2
+           return 1 ;;
+    esac
     if git rev-parse --verify --quiet "refs/heads/$$branch" >/dev/null; then
         echo "Branch $$branch already exists - delete it (git branch -D $$branch) or push and merge it first." >&2
         return 1
@@ -327,7 +332,7 @@ wf_branch_finish() {
     branch="$$1"; title="$$2"; body="$$3"; pr="$$4"
     git add "$(wf_dir)"
     if git diff --cached --quiet; then
-        echo "==> Nothing to commit - everything is already current. Branch discarded, main untouched."
+        echo "==> Nothing to commit - everything is already current. Branch discarded, $$base untouched."
         wf_branch_abort "$$branch"
         return 0
     fi
@@ -355,7 +360,7 @@ wf_branch_finish() {
         return 1
     fi
     git push -u origin "$$branch" || return 1
-    gh pr create --base main --head "$$branch" --title "$$title" \
+    gh pr create --base "$$base" --head "$$branch" --title "$$title" \
         --body "$$(printf '%s\n\n%s\n' "$$bullets" "$$body")"
 }
 endef
@@ -378,8 +383,8 @@ workflows-install:
 		$(wf_run) install $$names || exit 1; \
 		echo "Review and commit: git add $(wf_dir)/"; \
 	else \
-		eval "$$wf_flow"; branch="ncmake/ci/workflows-install"; \
-		wf_branch_start "$$branch" || exit 1; \
+		eval "$$wf_flow"; \
+		wf_branch_start ncmake/ci/workflows-install || exit 1; \
 		$(wf_run) install $$names || { wf_branch_abort "$$branch"; echo "install failed - branch discarded." >&2; exit 1; }; \
 		wf_branch_finish "$$branch" "ci: install managed CI workflows" "$$wf_install_body" "$$pr"; \
 	fi
@@ -390,8 +395,8 @@ workflows-update:
 		$(wf_run) update; \
 		echo "Review and commit: git add $(wf_dir)/"; \
 	else \
-		eval "$$wf_flow"; branch="ncmake/ci/workflow-update"; \
-		wf_branch_start "$$branch" || exit 1; \
+		eval "$$wf_flow"; \
+		wf_branch_start ncmake/ci/workflow-update || exit 1; \
 		$(wf_run) update || { wf_branch_abort "$$branch"; echo "update failed - branch discarded." >&2; exit 1; }; \
 		wf_branch_finish "$$branch" "ci: update managed CI workflows from upstream" "$$wf_update_body" "$$pr"; \
 	fi
@@ -431,10 +436,12 @@ the workflows. Reinstalling an existing file overwrites it, which also adopts an
 unmanaged file or discards local modifications.
 
 Without flags it only writes the files and reminds you to commit. COMMIT=1 runs
-from main, commits the result on branch ncmake/ci/workflows-install (one bullet
-per installed workflow) and prints the push command without pushing - amend it
-first if you like. PR=1 implies COMMIT=1 and additionally pushes and opens the
-pull request via gh. See
+from main or a stable* branch, commits the result on branch
+ncmake/ci/workflows-install (on stableX.Y: ncmake/ci/workflows-install-stableX.Y,
+one bullet per installed workflow) and prints the push command without pushing -
+amend it first if you like. PR=1 implies COMMIT=1 and additionally pushes and
+opens the pull request via gh, against the branch it started from. On a stable*
+branch this brings a workflow that main gained later to the line. See
 https://github.com/ernolf/ncmake/wiki/Workflows.
 
   make workflows-install W=reuse
@@ -452,10 +459,13 @@ note, up-to-date files are left alone. Run it from time to time (or after a
 workflows-list showed updates) and commit the result.
 
 Without flags it only writes the files and reminds you to commit - that is what
-the automatic updater relies on. COMMIT=1 runs from main, commits the result on
-branch ncmake/ci/workflow-update (one bullet per updated workflow) and prints the
-push command without pushing. PR=1 implies COMMIT=1 and additionally pushes and
-opens the pull request via gh, the same thing the updater does for you. See
+the automatic updater relies on. COMMIT=1 runs from main or a stable* branch,
+commits the result on branch ncmake/ci/workflow-update (on stableX.Y:
+ncmake/ci/workflow-update-stableX.Y, one bullet per updated workflow) and prints
+the push command without pushing. PR=1 implies COMMIT=1 and additionally pushes
+and opens the pull request via gh, against the branch it started from - the same
+thing the updater does for you on the default branch. A stable* branch is never
+reached by the updater, so run it there by hand. See
 https://github.com/ernolf/ncmake/wiki/Workflows.
 
   make workflows-update COMMIT=1
