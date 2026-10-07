@@ -249,30 +249,36 @@ check-app:
 
 # == Release versioning (maintainer only) ==
 
-# Open the next release (maintainer only - needs repo write access). Runs from main, explains
-# itself, and warns when a manifest description drifts from the info.xml summary (the
-# single source of truth - absent description fields are fine and never warned about).
-# Prompts + validates the version (> latest tag, empty = abort), then branches off into
-# ncmake/release/X.Y.Z (branches created by ncmake carry the ncmake/ prefix) and commits the
-# bump there: info.xml/composer.json/package.json plus the
-# re-synced lockfiles (via RUNTIME). 'main' is protected, so the bump lands through that branch
-# and a PR, not a direct push. Fill the CHANGELOG on the branch; after the PR is merged, run
-# 'make tag' on main.
+# Open the next release (maintainer only - needs repo write access). Runs from main or from a
+# stable* maintenance branch, explains itself, and warns when a manifest description drifts
+# from the info.xml summary (the single source of truth - absent description fields are fine
+# and never warned about).
+# Prompts + validates the version (empty = abort): greater than the newest tag reachable from
+# HEAD, so each release line counts only its own tags; on stable* also the same major.minor;
+# and no existing tag anywhere. Then branches off into ncmake/release/X.Y.Z (branches created
+# by ncmake carry the ncmake/ prefix), records the branch it started from as ncmake-base in the
+# git config of the release branch, and commits the bump there: info.xml/composer.json/
+# package.json plus the re-synced lockfiles (via RUNTIME). The base branch is protected, so the
+# bump lands through that branch and a PR, not a direct push. Fill the CHANGELOG on the branch;
+# after the PR is merged, run 'make tag' on the base branch.
 version: check-app
 	@cur=$$(git rev-parse --abbrev-ref HEAD 2>/dev/null); \
-	if [ "$$cur" != "main" ]; then echo "make version must run on 'main' (you are on '$$cur')." >&2; exit 1; fi; \
+	case "$$cur" in main|stable*) ;; *) echo "make version must run on 'main' or a 'stable*' branch (you are on '$$cur')." >&2; exit 1;; esac; \
 	echo "Maintainer target: opens a release branch with the version bump for a PR"; \
-	echo "(main is protected, no direct push); after the merge you tag it with 'make tag'."; \
-	latest=$$(git tag --list 'v*' --sort=-v:refname | head -1 | sed 's/^v//'); \
+	echo "($$cur is protected, no direct push); after the merge you tag it with 'make tag'."; \
+	latest=$$(git tag --list 'v*' --merged HEAD --sort=-v:refname | head -1 | sed 's/^v//'); \
 	latest=$${latest:-0.0.0}; \
-	printf 'New version (latest tag: %s, empty = abort): ' "$$latest"; read new; \
+	printf 'New version (latest tag on %s: %s, empty = abort): ' "$$cur" "$$latest"; read new; \
 	[ -z "$$new" ] && { echo "Aborted."; exit 0; }; \
 	echo "$$new" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$$' || { echo "Not a X.Y.Z version: $$new" >&2; exit 1; }; \
+	git rev-parse --verify --quiet "refs/tags/v$$new" >/dev/null && { echo "Tag v$$new already exists - pick another version." >&2; exit 1; }; \
 	high=$$(printf '%s\n%s\n' "$$latest" "$$new" | sort -V | tail -1); \
-	if [ "$$new" = "$$latest" ] || [ "$$high" != "$$new" ]; then echo "Version $$new must be greater than the latest tag $$latest" >&2; exit 1; fi; \
+	if [ "$$new" = "$$latest" ] || [ "$$high" != "$$new" ]; then echo "Version $$new must be greater than the latest tag $$latest on $$cur" >&2; exit 1; fi; \
+	case "$$cur" in stable*) [ "$${new%.*}" = "$${latest%.*}" ] || { echo "On $$cur the version must stay at $${latest%.*}.x - a new minor or major belongs on main." >&2; exit 1; };; esac; \
 	branch="ncmake/release/$$new"; \
 	git rev-parse --verify --quiet "refs/heads/$$branch" >/dev/null && { echo "Branch $$branch already exists - delete it or pick another version." >&2; exit 1; }; \
 	git checkout -b "$$branch" || exit 1; \
+	git config "branch.$$branch.ncmake-base" "$$cur"; \
 	sed -i -E "s|<version>[0-9.]+</version>|<version>$$new</version>|" appinfo/info.xml; \
 	[ -f composer.json ] && sed -i -E "s|(\"version\"[[:space:]]*:[[:space:]]*)\"[0-9.]+\"|\1\"$$new\"|" composer.json || true; \
 	[ -f package.json ] && sed -i -E "s|(\"version\"[[:space:]]*:[[:space:]]*)\"[0-9.]+\"|\1\"$$new\"|" package.json || true; \
@@ -296,11 +302,13 @@ version: check-app
 	echo "    the exact commit command (folded into this bump commit while it is unpushed)."; \
 	echo "    Then:"; \
 	echo "      git push -u origin $$branch"; \
-	echo "    Open a PR and merge it; afterwards on main: git pull && make tag"
+	echo "    Open a PR against $$cur and merge it; afterwards on $$cur: git pull && make tag"
 
 # Generate the '## [X.Y.Z]' CHANGELOG section for the current info.xml version
-# from the conventional commits since the last tag (git-cliff via npx, in the
-# node container). The section is inserted above the previous release, followed
+# from the conventional commits since the newest tag reachable from HEAD
+# (git-cliff via npx, in the node container). --use-branch-tags keeps the tags
+# of other release lines out, since --unreleased alone starts at the newest tag
+# of the whole repository. The section is inserted above the previous release, followed
 # by its '[X.Y.Z]:' link reference to the GitHub release tag; the rest of the
 # file - header, preamble and hand-written or hand-extended sections - is
 # never touched, so generated entries can be freely edited before committing.
@@ -314,8 +322,10 @@ changelog: check-app
 	fi; \
 	mkdir -p "$(cache_dir)"; \
 	if [ -f cliff.toml ]; then cfg="cliff.toml"; else cfg="build/cache/cliff.toml"; printf '%s\n' "$$cliff_config" > "$$cfg"; fi; \
-	echo "==> Generating changelog for $$ver from commits since the last tag ($(RUNTIME))..."; \
-	$(node_run) "git config --global --add safe.directory /app 2>/dev/null; npx --yes git-cliff@2 --config $$cfg --unreleased --tag v$$ver --strip all" > "$(cache_dir)/changelog_new.md" || { echo "git-cliff failed" >&2; exit 1; }; \
+	base=$$(git config "branch.$$(git rev-parse --abbrev-ref HEAD).ncmake-base" 2>/dev/null || echo main); \
+	since=$$(git tag --list 'v*' --merged HEAD --sort=-v:refname | head -1); \
+	echo "==> Generating changelog for $$ver from commits since $${since:-the first commit} ($(RUNTIME))..."; \
+	$(node_run) "git config --global --add safe.directory /app 2>/dev/null; npx --yes git-cliff@2 --config $$cfg --unreleased --use-branch-tags --tag v$$ver --strip all" > "$(cache_dir)/changelog_new.md" || { echo "git-cliff failed" >&2; exit 1; }; \
 	if ! grep -q '[^[:space:]]' "$(cache_dir)/changelog_new.md" || ! grep -q '^### ' "$(cache_dir)/changelog_new.md"; then \
 		echo "No undocumented user-visible changes since the last tag (only skipped commit types)."; \
 		echo "Add a hand-written '## [$$ver]' section if this release still warrants an entry (e.g. translation updates)."; \
@@ -337,7 +347,7 @@ changelog: check-app
 		echo "    which folds the changelog into the unpushed bump commit - one commit per release."; \
 		echo "    Then:"; \
 		echo "      git push -u origin $$(git rev-parse --abbrev-ref HEAD)"; \
-		echo "    Open a PR and merge it; afterwards on main: git pull && make tag"; \
+		echo "    Open a PR against $$base and merge it; afterwards on $$base: git pull && make tag"; \
 	else \
 		echo "      git add CHANGELOG.md && git commit -s -m 'build(release): update changelog for $$ver'"; \
 	fi
@@ -356,10 +366,11 @@ tag_hook ?= :
 
 tag: check-app
 	@ver="$(version)"; \
-	latest=$$(git tag --list 'v*' --sort=-v:refname | head -1 | sed 's/^v//'); \
+	git rev-parse --verify --quiet "refs/tags/v$$ver" >/dev/null && { echo "Tag v$$ver already exists - run 'make version' first" >&2; exit 1; }; \
+	latest=$$(git tag --list 'v*' --merged HEAD --sort=-v:refname | head -1 | sed 's/^v//'); \
 	latest=$${latest:-0.0.0}; \
 	high=$$(printf '%s\n%s\n' "$$latest" "$$ver" | sort -V | tail -1); \
-	if [ "$$ver" = "$$latest" ] || [ "$$high" != "$$ver" ]; then echo "info.xml version $$ver is not greater than the latest tag $$latest - run 'make version' first" >&2; exit 1; fi; \
+	if [ "$$ver" = "$$latest" ] || [ "$$high" != "$$ver" ]; then echo "info.xml version $$ver is not greater than the latest tag $$latest on this branch - run 'make version' first" >&2; exit 1; fi; \
 	if [ -n "$$(git status --porcelain)" ]; then \
 		echo "ERROR: the working tree is not clean, untracked files included - the release is packed from the checkout, so anything only this machine has would reach the tarball and nothing else." >&2; \
 		git status --short >&2; exit 1; \
@@ -376,7 +387,11 @@ tag: check-app
 	if [ "$$yn" = y ] || [ "$$yn" = Y ]; then \
 		mkdir -p "$(cache_dir)"; printf 'Release %s\n' "$$ver" > "$(tag_message)"; \
 		$(tag_hook) || exit 1; \
-		git tag -s "v$$ver" -F "$(tag_message)" && git push origin "v$$ver"; \
+		git tag -s "v$$ver" -F "$(tag_message)" && git push origin "v$$ver" || exit 1; \
+		case "$$(git rev-parse --abbrev-ref HEAD)" in stable*) \
+			echo "==> v$$ver belongs to a maintenance line: when you publish its GitHub release,"; \
+			echo "    untick 'Set as the latest release', or GitHub shows it above the newer line on main.";; \
+		esac; \
 	else \
 		echo "Aborted. To do it manually:"; \
 		echo "  git tag -s v$$ver -m \"Release $$ver\" && git push origin v$$ver"; \
@@ -725,20 +740,22 @@ disable/chown/enable cycle inside the container.
 endef
 
 define help_version
-make version    (maintainer, on main)
+make version    (maintainer, on main or a stable* branch)
 
-Prompts for the new version, validates it is greater than the latest tag,
-branches off into ncmake/release/X.Y.Z and commits the bump there (info.xml,
+Prompts for the new version and validates it: greater than the newest tag
+reachable from the current branch, on a stable* branch also the same
+major.minor, and no tag of that name anywhere. Branches off into
+ncmake/release/X.Y.Z and commits the bump there (info.xml,
 composer.json/package.json and the re-synced lockfiles). Then run make changelog,
-push the branch and open a PR. RUNTIME= selects the container for the lockfile
-sync.
+push the branch and open a PR against the branch you started from. RUNTIME=
+selects the container for the lockfile sync.
 endef
 
 define help_changelog
 make changelog    (maintainer, on the release branch)
 
 Generates the "## [X.Y.Z]" CHANGELOG section from the conventional commits since
-the last tag (feat to Added, fix to Fixed, perf to Changed; build/ci/test/chore/
+the newest tag reachable from HEAD (feat to Added, fix to Fixed, perf to Changed; build/ci/test/chore/
 docs/refactor/style, merges and Transifex bot commits are skipped) and inserts it
 with its link reference. Prints the exact commit command: while the version bump
 is still unpushed it folds in via git commit --amend --no-edit (one commit per
@@ -747,13 +764,14 @@ config.
 endef
 
 define help_tag
-make tag    (maintainer, on main after the merge)
+make tag    (maintainer, on main or the stable* branch after the merge)
 
 Refuses to re-tag, refuses a working tree that is not clean (untracked files
 included - the release is packed from the checkout), refuses when CHANGELOG.md
 has no "## [X.Y.Z]" section, then creates and pushes the signed vX.Y.Z tag after
 confirmation. Publishing the release triggers the release workflow, which
-attaches the tarball asset.
+attaches the tarball asset. A release from a stable* branch must not be marked
+as the latest release on GitHub; make tag reminds of it.
 
 Between the confirmation and the tag, $$(tag_hook) may add lines to the tag
 message; the integrity module installs its signature step there.
@@ -798,7 +816,7 @@ help::
 	@echo "$(ch)Release versioning (maintainer only):$(c0)"
 	@echo "  $(ct)version$(c0)              Open a release branch with the version bump for a PR (prompts)  $(cm)[m]$(c0)"
 	@echo "  $(ct)changelog$(c0)            Generate the '## [version]' CHANGELOG section from the commits  $(cm)[m]$(c0)"
-	@echo "  $(ct)tag$(c0)                  Tag the release commit on main, signed, and push it  $(cm)[m]$(c0)"
+	@echo "  $(ct)tag$(c0)                  Tag the release commit on main or stable*, signed, and push it  $(cm)[m]$(c0)"
 	@echo ""
 	@echo "  $(cd)Container runtime for 'version' (lockfile sync) and 'build': $(c0)$(cv)RUNTIME=...$(c0)$(cd) (now: $(RUNTIME))$(c0)"
 	@echo "    $(cd)podman | docker | docker-rootless | bare   (auto-detected, podman preferred)$(c0)"
