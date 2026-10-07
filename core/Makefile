@@ -197,7 +197,7 @@ ifeq ($(filter $(RUNTIME),bare none),)
   reuse_run = $(container) $(reuse_image)
 endif
 
-.PHONY: all version changelog tag build check-app check-build stage dist rsync cp composer npm reuse psalm \
+.PHONY: all version changelog tag stable-branch build check-app check-build stage dist rsync cp composer npm reuse psalm \
         clean dist-clean self-update dev-init dev-clean help
 
 # == Changelog configuration (git-cliff) ==
@@ -396,6 +396,80 @@ tag: check-app
 		echo "Aborted. To do it manually:"; \
 		echo "  git tag -s v$$ver -m \"Release $$ver\" && git push origin v$$ver"; \
 	fi
+
+# Open a stable* maintenance branch for an older release line (maintainer only). Runs on main
+# with no uncommitted changes. Lists the release lines that exist as tags, prompts for one
+# (empty = abort) and validates it: it has a tag, it is older than the current line of main,
+# and stableX.Y exists neither locally nor on origin. The branch starts at the newest tag of
+# the line, never at main. Before it is created, the Nextcloud and PHP ranges at that tag are
+# shown next to those of main, with a note when the line still reaches into the Nextcloud
+# versions main covers. After confirmation it creates and pushes the branch and prints what
+# comes next. Stale remote branches are pruned in a fetch of their own: --prune together with
+# --tags would also delete local tags that origin does not have.
+stable-branch: check-app
+	@cur=$$(git rev-parse --abbrev-ref HEAD 2>/dev/null); \
+	[ "$$cur" = main ] || { echo "make stable-branch must run on 'main' (you are on '$$cur')." >&2; exit 1; }; \
+	if [ -n "$$(git status --porcelain --untracked-files=no)" ]; then \
+		echo "ERROR: uncommitted changes would move to the new branch - commit or stash them first." >&2; \
+		git status --short --untracked-files=no >&2; exit 1; \
+	fi; \
+	echo "Maintainer target: opens a stable* branch for an older release line, which then"; \
+	echo "gets its own releases through make version, make changelog and make tag."; \
+	{ git fetch --quiet --prune origin && git fetch --quiet --tags origin; } || { echo "ERROR: git fetch from origin failed (network?)" >&2; exit 1; }; \
+	current=$$(git tag --list 'v*' --merged HEAD --sort=-v:refname | head -1 | sed 's/^v//'); \
+	[ -n "$$current" ] || { echo "No release tag on main yet - there is no older line to maintain." >&2; exit 1; }; \
+	cline=$${current%.*}; \
+	newest=$$(git tag --list 'v[0-9]*' --sort=-v:refname | sed 's/^v//' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$$' | awk -F. '!seen[$$1 "." $$2]++'); \
+	echo "Release lines (newest tag):"; \
+	for t in $$newest; do \
+		l=$${t%.*}; note=""; \
+		[ "$$l" = "$$cline" ] && note="current line on main"; \
+		git rev-parse --verify --quiet "refs/remotes/origin/stable$$l" >/dev/null && note="stable$$l exists"; \
+		printf '  %-8s v%-10s %s\n' "$$l" "$$t" "$$note"; \
+	done; \
+	suggest=$$(for t in $$newest; do echo "$${t%.*}"; done | grep -vxF "$$cline" | head -1); \
+	printf 'Release line to maintain (X.Y%s, empty = abort): ' "$${suggest:+, e.g. $$suggest}"; read line; \
+	[ -z "$$line" ] && { echo "Aborted."; exit 0; }; \
+	echo "$$line" | grep -qE '^[0-9]+\.[0-9]+$$' || { echo "Not a X.Y release line: $$line" >&2; exit 1; }; \
+	base=$$(git tag --list "v$$line.*" --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | head -1); \
+	[ -n "$$base" ] || { echo "There is no tag v$$line.x - no release line $$line to maintain." >&2; exit 1; }; \
+	[ "$$line" = "$$cline" ] && { echo "$$line is the current line on main and is released from there." >&2; exit 1; }; \
+	older=$$(printf '%s\n%s\n' "$$line" "$$cline" | sort -V | head -1); \
+	[ "$$older" = "$$line" ] || { echo "$$line is newer than the current line $$cline on main." >&2; exit 1; }; \
+	branch="stable$$line"; \
+	git rev-parse --verify --quiet "refs/heads/$$branch" >/dev/null && { echo "Branch $$branch already exists locally: git switch $$branch" >&2; exit 1; }; \
+	git ls-remote --exit-code --heads origin "$$branch" >/dev/null 2>&1; rc=$$?; \
+	[ "$$rc" = 0 ] && { echo "Branch $$branch already exists on origin: git switch $$branch" >&2; exit 1; }; \
+	[ "$$rc" = 2 ] || { echo "ERROR: could not query origin for $$branch (network?)" >&2; exit 1; }; \
+	deps='import sys, xml.etree.ElementTree as E; d = E.parse(sys.stdin).getroot().find("dependencies"); g = lambda t, a: (d.find(t).get(a) if d is not None and d.find(t) is not None else None) or "-"; print(g("nextcloud", "min-version"), g("nextcloud", "max-version"), g("php", "min-version"), g("php", "max-version"))'; \
+	set -- $$(git show "$$base:appinfo/info.xml" | python3 -c "$$deps" 2>/dev/null); lnmin=$${1:--}; lnmax=$${2:--}; lpmin=$${3:--}; lpmax=$${4:--}; \
+	set -- $$(git show "HEAD:appinfo/info.xml" | python3 -c "$$deps" 2>/dev/null); mnmin=$${1:--}; mnmax=$${2:--}; mpmin=$${3:--}; mpmax=$${4:--}; \
+	echo "==> $$branch starts at $$base, the newest tag of the line (not at main)."; \
+	printf '    %-10s %-14s %s\n' "" "Nextcloud" "PHP" "$$base" "$$lnmin - $$lnmax" "$$lpmin - $$lpmax" "main" "$$mnmin - $$mnmax" "$$mpmin - $$mpmax"; \
+	case "$$mnmin" in [0-9]*) \
+		cap=$$(( $${mnmin%%.*} - 1 )); \
+		case "$$lnmax" in [0-9]*) over=$$([ "$${lnmax%%.*}" -gt "$$cap" ] && echo 1);; *) over=1;; esac; \
+		if [ -n "$$over" ]; then \
+			echo "Note: main requires Nextcloud $${mnmin%%.*}, so $$line usually ends at $$cap. Set max-version=\"$$cap\""; \
+			echo "      on <nextcloud> in appinfo/info.xml with the first PR against $$branch."; \
+		fi;; \
+	esac; \
+	printf 'Create %s from %s and push it to origin? [y/N] ' "$$branch" "$$base"; read yn; \
+	if [ "$$yn" != y ] && [ "$$yn" != Y ]; then \
+		echo "Aborted. To do it manually:"; \
+		echo "  git switch -c $$branch $$base && git push -u origin $$branch"; exit 0; \
+	fi; \
+	git switch -c "$$branch" "$$base" || exit 1; \
+	git push -u origin "$$branch" || exit 1; \
+	echo "==> $$branch is on origin and checked out. Next:"; \
+	echo "    - Protect it like main: $(if $(gh_slug),https://github.com/$(gh_slug)/settings/rules,in the repository settings)"; \
+	echo "    - Changes reach $$branch through PRs against it. A backport:"; \
+	echo "        git switch -c <branch> $$branch && git cherry-pick -x <commit>"; \
+	echo "      -x records the original commit in the message."; \
+	echo "    - Release from it: on $$branch, make version, make changelog, make tag. When you"; \
+	echo "      publish the GitHub release, untick 'Set as the latest release'."; \
+	echo "    - The workflows on $$branch stay as they were at $$base; comment and scheduled"; \
+	echo "      events run the workflows of the default branch."
 
 # == Build ==
 
@@ -777,6 +851,20 @@ Between the confirmation and the tag, $$(tag_hook) may add lines to the tag
 message; the integrity module installs its signature step there.
 endef
 
+define help_stable-branch
+make stable-branch    (maintainer, on main)
+
+Opens a stable* maintenance branch for an older release line, e.g. stable0.7
+while main is at 0.8. Lists the release lines from the tags and prompts for one
+(X.Y). Refuses a line without a tag, the current line of main, a newer one, and
+a stableX.Y that exists locally or on origin. The branch starts at the newest
+tag of the line, not at main. Before it is created, the Nextcloud and PHP ranges
+at that tag are shown next to those of main, with a note when the line still
+reaches into the Nextcloud versions main covers. After confirmation it creates
+and pushes the branch and prints the next steps: protection, backports through
+PRs against the branch, releases with make version, make changelog, make tag.
+endef
+
 define help_dev-init
 make dev-init    (maintainer, once per machine)
 
@@ -817,6 +905,7 @@ help::
 	@echo "  $(ct)version$(c0)              Open a release branch with the version bump for a PR (prompts)  $(cm)[m]$(c0)"
 	@echo "  $(ct)changelog$(c0)            Generate the '## [version]' CHANGELOG section from the commits  $(cm)[m]$(c0)"
 	@echo "  $(ct)tag$(c0)                  Tag the release commit on main or stable*, signed, and push it  $(cm)[m]$(c0)"
+	@echo "  $(ct)stable-branch$(c0)        Open a stable* maintenance branch for an older release line     $(cm)[m]$(c0)"
 	@echo ""
 	@echo "  $(cd)Container runtime for 'version' (lockfile sync) and 'build': $(c0)$(cv)RUNTIME=...$(c0)$(cd) (now: $(RUNTIME))$(c0)"
 	@echo "    $(cd)podman | docker | docker-rootless | bare   (auto-detected, podman preferred)$(c0)"

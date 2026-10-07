@@ -31,7 +31,7 @@ Follow these before proposing any command. They are the mistakes that cost the m
 3. **Do not add build configuration.** No wrapper scripts, no extra make targets, no CI build steps that duplicate `make build`. A genuine deviation belongs in `ncmake.mk` (plain make syntax, one variable per line).
 4. **Never edit the version by hand** in `info.xml`, `composer.json` or `package.json`. `make version` does the bump, the validation and the lockfile sync.
 5. **Never write a CHANGELOG section by hand.** `make changelog` generates it from the conventional commits.
-6. **Maintainer targets change the world.** `version`, `changelog`, `tag`, `csr`, `register`, `sign`, `release`, `publish`, `delete-release`, `integrity-enable`, `integrity-sign`, `dist-signed`, `dev-init` and every `COMMIT=1` / `PR=1` variant write commits, tags, branches, pull requests, App Store entries or signatures. Run them only when the user explicitly asks for that step, one step at a time. Read-only targets (`build`, `dist`, `psalm`, `reuse`, `composer`, `npm`, `integrity-check`, `bundle-report`, `build-audit`, `consistency-audit`, `build-verify`, `list-releases`, `workflows-list`, `help`) are free to run.
+6. **Maintainer targets change the world.** `version`, `changelog`, `tag`, `stable-branch`, `csr`, `register`, `sign`, `release`, `publish`, `delete-release`, `integrity-enable`, `integrity-sign`, `dist-signed`, `dev-init` and every `COMMIT=1` / `PR=1` variant write commits, tags, branches, pull requests, App Store entries or signatures. Run them only when the user explicitly asks for that step, one step at a time. Read-only targets (`build`, `dist`, `psalm`, `reuse`, `composer`, `npm`, `integrity-check`, `bundle-report`, `build-audit`, `consistency-audit`, `build-verify`, `list-releases`, `workflows-list`, `help`) are free to run.
 7. **`build/` is generated.** Never edit, never commit, never reference a file in it as source. `make clean` removes it.
 8. **The host needs no toolchain.** Do not tell anyone to install composer, PHP or Node. podman (preferred) or docker is enough. `RUNTIME=bare` exists for hosts that deliberately run the tools directly.
 9. **The checkout directory name is not the app id.** The id comes from `appinfo/info.xml` and the two often differ.
@@ -118,6 +118,15 @@ Exactly this order, one step per command, each on the branch it names:
 4. `git checkout main && git pull`, then `make tag`. It refuses to re-tag, refuses when `CHANGELOG.md` has no section for the version, refuses a working tree that is not clean (untracked files included, because the release is packed from the checkout), and creates and pushes the signed tag after a confirmation prompt. For an app marked as signed it offers the signature between the confirmation and the tag (see below).
 5. Publish the GitHub release for that tag. The shipped `release.yml` workflow builds and attaches the tarball, verifying the signature before it packs when the app is signed.
 6. App Store: `make publish GH=1` (see below).
+
+### Maintenance lines
+
+An older release line, for example 0.7 while `main` is at 0.8, gets its own `stable*` branch and its own releases:
+
+1. On `main`: `make stable-branch`. It lists the release lines from the tags, prompts for one (`X.Y`) and refuses a line without a tag, the current line of `main`, a newer one, and a `stableX.Y` that already exists locally or on origin. The branch starts at the newest tag of the line, never at `main`. Before it is created, it shows the Nextcloud and PHP ranges at that tag next to those of `main` and notes when the line still reaches into the Nextcloud versions `main` covers; capping `max-version` is then the first PR against the branch. After a confirmation it creates and pushes the branch.
+2. Protect the branch on GitHub like `main`.
+3. Changes reach the branch only through PRs against it. A backport: `git switch -c <branch> stableX.Y && git cherry-pick -x <commit>`.
+4. Release from it exactly as from `main`, with `stableX.Y` in place of `main`: `make version` keeps the major.minor of the line and compares against the tags reachable from the branch, `make changelog` counts only the commits since the line's own last tag, and `make tag` runs on `stableX.Y` after the merge. When publishing the GitHub release, untick "Set as the latest release".
 
 ## Developer modules
 
@@ -274,7 +283,8 @@ In stub mode the per-machine cache refreshes itself at most once per `NCMAKE_TTL
 | `make psalm` reports a missing `vendor/bin/psalm` | the dev tools are not installed; run `make composer ARGS=install` |
 | Usage message from `composer` or `npm` | `ARGS` was empty; it is mandatory |
 | `dev-init` or `workflows-list` hits a rate limit | anonymous API budget exhausted; export `GITHUB_TOKEN` or `GH_TOKEN` |
-| `make version` refuses | not on `main`, or the entered version is not greater than the latest tag |
+| `make version` refuses | not on `main` or a `stable*` branch, the tag exists, the entered version is not greater than the newest tag reachable from the branch, or on a `stable*` branch it leaves the major.minor of the line |
+| `make stable-branch` refuses | not on `main`, uncommitted changes, the line has no tag, is the current or a newer line, or `stableX.Y` exists locally or on origin (then `git switch stableX.Y`) |
 | `make tag` refuses | the tag exists, `CHANGELOG.md` has no section for this version (run `make changelog`), or the working tree is not clean - commit, stash or remove what `git status --short` lists, untracked files included |
 | `workflows-install` or `workflows-update` refuses | the branch exists locally or on origin; merge, close or delete it, then run the target again |
 | `could not fetch .../lib/<file> - network?` | the analysers are not in the cache and the download failed; check the network and run the target again |
