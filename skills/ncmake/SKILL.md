@@ -126,7 +126,8 @@ An older release line, for example 0.7 while `main` is at 0.8, gets its own `sta
 1. On `main`: `make stable-branch`. It lists the release lines from the tags, prompts for one (`X.Y`) and refuses a line without a tag, the current line of `main`, a newer one, and a `stableX.Y` that already exists locally or on origin. The branch starts at the newest tag of the line, never at `main`. Before it is created, it shows the Nextcloud and PHP ranges at that tag next to those of `main` and notes when the line still reaches into the Nextcloud versions `main` covers; capping `max-version` is then the first PR against the branch. After a confirmation it creates and pushes the branch.
 2. Protect the branch on GitHub like `main`.
 3. Changes reach the branch only through PRs against it. A backport: `git switch -c <branch> stableX.Y && git cherry-pick -x <commit>`.
-4. Release from it exactly as from `main`, with `stableX.Y` in place of `main`: `make version` keeps the major.minor of the line and compares against the tags reachable from the branch, `make changelog` counts only the commits since the line's own last tag, and `make tag` runs on `stableX.Y` after the merge. When publishing the GitHub release, untick "Set as the latest release".
+4. A workflow that `main` gained after the line's tag, for example one whose check the repository rules require, comes over on `stableX.Y` with `make workflows-install W=<name> PR=1`. The workflow updater never reaches a `stable*` branch, so `make workflows-update PR=1` runs there by hand.
+5. Release from it exactly as from `main`, with `stableX.Y` in place of `main`: `make version` keeps the major.minor of the line and compares against the tags reachable from the branch, `make changelog` counts only the commits since the line's own last tag, and `make tag` runs on `stableX.Y` after the merge. When publishing the GitHub release, untick "Set as the latest release".
 
 ## Developer modules
 
@@ -246,7 +247,7 @@ Status per file: `installed`, `update available`, `modified` (local edits, never
 
 On install, GitHub's template placeholders are substituted (`$default-branch` from the origin HEAD; unknown ones are reported and left as they are) and the org-scoped runner labels are rewritten (`ubuntu-latest-low` to `ubuntu-latest`) unless the origin owner is `wf_runner_org`, default `nextcloud`. Source, upstream sha and content hash go into `.github/workflows/.ncmake-workflows.json`, accompanied by a `.license` sidecar that keeps `make reuse` green without a `REUSE.toml` edit. Commit the lock and its sidecar together with the workflows.
 
-Both targets take `COMMIT=1` and `PR=1`. They must run on `main`. `COMMIT=1` opens the branch (`ncmake/ci/workflows-install` or `ncmake/ci/workflow-update`), commits with `Signed-off-by` and one bullet per changed file, and prints the push command without pushing. `PR=1` implies `COMMIT=1` and additionally pushes and opens the pull request through `gh`. Both refuse when the branch already exists locally or on origin, and discard the branch again when there was nothing to commit.
+Both targets take `COMMIT=1` and `PR=1`. They must run on `main` or a `stable*` branch. `COMMIT=1` opens the branch (`ncmake/ci/workflows-install` or `ncmake/ci/workflow-update`; on `stableX.Y` with the line appended, for example `ncmake/ci/workflows-install-stable0.7`), commits with `Signed-off-by` and one bullet per changed file, and prints the push command without pushing. `PR=1` implies `COMMIT=1` and additionally pushes and opens the pull request through `gh`, against the branch the target started from. Both refuse when the branch already exists locally or on origin, and discard the branch again when there was nothing to commit.
 
 ## Workflow updater and the rebase comment command
 
@@ -286,7 +287,7 @@ In stub mode the per-machine cache refreshes itself at most once per `NCMAKE_TTL
 | `make version` refuses | not on `main` or a `stable*` branch, the tag exists, the entered version is not greater than the newest tag reachable from the branch, or on a `stable*` branch it leaves the major.minor of the line |
 | `make stable-branch` refuses | not on `main`, uncommitted changes, the line has no tag, is the current or a newer line, or `stableX.Y` exists locally or on origin (then `git switch stableX.Y`) |
 | `make tag` refuses | the tag exists, `CHANGELOG.md` has no section for this version (run `make changelog`), or the working tree is not clean - commit, stash or remove what `git status --short` lists, untracked files included |
-| `workflows-install` or `workflows-update` refuses | the branch exists locally or on origin; merge, close or delete it, then run the target again |
+| `workflows-install` or `workflows-update` refuses | with `COMMIT=1`/`PR=1` not on `main` or a `stable*` branch, or the branch exists locally or on origin; merge, close or delete it, then run the target again |
 | `could not fetch .../lib/<file> - network?` | the analysers are not in the cache and the download failed; check the network and run the target again |
 | `bundle-report` names no packages | the build ships no source maps, so the bytes cannot be attributed; the per-file sizes still hold |
 | `build-verify` names a file as differing | the committed build output did not come from this source; run `make dist-clean && make build` and commit what the build writes |
