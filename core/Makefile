@@ -125,7 +125,10 @@ php_build_cmd  ?= $(if $(need_composer),composer install --no-dev --prefer-dist 
 # package that conflicts with one the image carries but nothing requires (as
 # symfony/cache does with ext-redis < 6.1) would fail the build. The extensions
 # that neither composer.json nor a locked package requires are ignored instead.
-php_unrequired_ext = php -r "\$$r = []; foreach ([\"composer.json\", \"composer.lock\"] as \$$f) { \$$j = json_decode((string) @file_get_contents(\$$f), true) ?: []; \$$r += \$$j[\"platform\"] ?? []; foreach (array_merge([\$$j], \$$j[\"packages\"] ?? [], \$$j[\"packages-dev\"] ?? []) as \$$p) { \$$r += \$$p[\"require\"] ?? []; } } \$$x = []; foreach (get_loaded_extensions() as \$$e) { \$$n = \"ext-\" . str_replace(\" \", \"-\", strtolower(\$$e)); if (!isset(\$$r[\$$n])) { \$$x[] = \$$n; } } echo implode(\",\", \$$x);"
+# The reverse case stops it as well: a required extension the image lacks (the CI
+# images ship neither bcmath nor soap). Installing the dependencies does not load
+# it, the server that runs the app does, so it is ignored too, and named.
+php_ignored_ext = php -r "\$$r = []; foreach ([\"composer.json\", \"composer.lock\"] as \$$f) { \$$j = json_decode((string) @file_get_contents(\$$f), true) ?: []; \$$r += \$$j[\"platform\"] ?? []; foreach (array_merge([\$$j], \$$j[\"packages\"] ?? [], \$$j[\"packages-dev\"] ?? []) as \$$p) { \$$r += \$$p[\"require\"] ?? []; } } \$$r = array_change_key_case(\$$r); \$$l = []; foreach (get_loaded_extensions() as \$$e) { \$$l[\"ext-\" . str_replace(\" \", \"-\", strtolower(\$$e))] = true; } \$$m = array_values(array_filter(array_keys(array_diff_key(\$$r, \$$l)), fn(\$$n) => strncmp(\$$n, \"ext-\", 4) === 0)); if (\$$m) { fwrite(STDERR, \"composer: ignoring \" . implode(\", \", \$$m) . \" - required, but missing from the build image\" . PHP_EOL); } echo implode(\",\", array_merge(array_keys(array_diff_key(\$$l, \$$r)), \$$m));"
 node_build_cmd ?= $(if $(need_npm),npm ci && npm run build)
 
 # == Container runtime (used by 'make version' and 'make build') ==
@@ -510,7 +513,7 @@ build: check-app
 	@echo "==> Building via RUNTIME=$(RUNTIME)"
 	@if [ -n "$(php_build_cmd)" ]; then \
 		echo "+ $(php_build_cmd)"; \
-		$(php_run) 'export COMPOSER_IGNORE_PLATFORM_REQ="$$($(php_unrequired_ext))"; $(php_build_cmd)' || exit 1; \
+		$(php_run) 'export COMPOSER_IGNORE_PLATFORM_REQ="$$($(php_ignored_ext))"; $(php_build_cmd)' || exit 1; \
 	else echo "(composer: nothing to build)"; fi
 	@if [ -n "$(node_build_cmd)" ]; then \
 		echo "+ $(node_build_cmd)"; $(node_run) '$(node_build_cmd)' || exit 1; \
