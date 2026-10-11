@@ -26,7 +26,7 @@ The `Makefile` must sit in the repository root. Everything derives from `$(CURDI
 
 Follow these before proposing any command. They are the mistakes that cost the most time.
 
-1. **`make build` is the complete build.** It already runs `composer install --no-dev --prefer-dist --no-progress`, with the app's own `post-install-cmd`, when `composer.json` declares real runtime requirements (anything besides `php`, `ext-*` and `bamarni/composer-bin-plugin`) or the app has `composer/autoload.php`, and `npm ci && npm run build` when `package.json` has a `scripts.build`. Never propose `make npm ARGS=ci` or `make npm ARGS="run build"` as a build step, and never propose them as a preparation for `make build`.
+1. **`make build` is the complete build.** It already runs `composer install --no-dev --prefer-dist --no-progress`, with the app's own `post-install-cmd`, when `composer.json` declares real runtime requirements (anything besides `php`, `ext-*` and `bamarni/composer-bin-plugin`) or the app has `composer/autoload.php`, and `npm ci && npm run build` when `package.json` has a `scripts.build` (with `pnpm-lock.yaml` or `yarn.lock` the same through pnpm or yarn via corepack; without any lock file `npm install`, and the build says it is not reproducible). Never propose `make npm ARGS=ci` or `make npm ARGS="run build"` as a build step, and never propose them as a preparation for `make build`.
 2. **`make help-<target>` is the authoritative reference.** Every target has extended help with its exact options and examples. Run it instead of guessing an option name.
 3. **Do not add build configuration.** No wrapper scripts, no extra make targets, no CI build steps that duplicate `make build`. A genuine deviation belongs in `ncmake.mk` (plain make syntax, one variable per line).
 4. **Never edit the version by hand** in `info.xml`, `composer.json` or `package.json`. `make version` does the bump, the validation and the lockfile sync.
@@ -44,7 +44,7 @@ Follow these before proposing any command. They are the mistakes that cost the m
 | --- | --- |
 | `appinfo/info.xml` | `<id>` (app id, tarball and stage directory name), `<version>`, `<dependencies><php min-version>` (the build image) |
 | `composer.json` | a composer step is needed when `require` holds anything besides `php` and `ext-*`, or when `composer/autoload.php` exists; the version is bumped here too when the key exists |
-| `package.json` | an npm step is needed when `scripts.build` exists; `engines.node` picks the Node image; the version is bumped here too |
+| `package.json` | an npm step is needed when `scripts.build` exists; the lock file picks npm, pnpm or yarn; `engines.node` picks the Node image; the version is bumped here too |
 | `.gitignore` | classifies `js/` and `vendor/`: ignored means build output that must be built before shipping, committed means a fresh checkout is already dist ready |
 | `.nextcloudignore` | optional, rsync exclude syntax, filters within the shipped file set |
 | `.ncmake/certificate.crt` | optional, the committed public certificate that marks the app as signed and pins every verification against it |
