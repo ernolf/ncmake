@@ -270,39 +270,51 @@ check-app:
 
 # == Release versioning (maintainer only) ==
 
+# A pre-release is X.Y.Z with one of the suffixes the Nextcloud release process
+# names: X.Y.Z-alpha.N, -beta.N, -rc.N. It is tagged and published like any
+# release; the server offers a version with a '-' only to the beta, daily and git
+# channels or with --allow-unstable.
+prerelease_re = (alpha|beta|rc)\.[0-9]+
+# git and sort -V rank 1.2.0-rc.1 above 1.2.0, PHP version_compare (the server
+# and the App Store) below it. versionsort.suffix gives git that order, and so
+# does a tilde for sort -V, which sorts it before the end of the string.
+git_tags     = git -c versionsort.suffix=-alpha -c versionsort.suffix=-beta -c versionsort.suffix=-rc tag
+version_sort = sed 's/-/~/' | sort -V | sed 's/~/-/'
+
 # Open the next release (maintainer only - needs repo write access). Runs from main or from a
 # stable* maintenance branch, explains itself, and warns when a manifest description drifts
 # from the info.xml summary (the single source of truth - absent description fields are fine
 # and never warned about).
-# Prompts + validates the version (empty = abort): greater than the newest tag reachable from
-# HEAD, so each release line counts only its own tags; on stable* also the same major.minor;
-# and no existing tag anywhere. Then branches off into ncmake/release/X.Y.Z (branches created
-# by ncmake carry the ncmake/ prefix), records the branch it started from as ncmake-base in the
-# git config of the release branch, and commits the bump there: info.xml/composer.json/
-# package.json plus the re-synced lockfiles (via RUNTIME). The base branch is protected, so the
-# bump lands through that branch and a PR, not a direct push. Fill the CHANGELOG on the branch;
-# after the PR is merged, run 'make tag' on the base branch.
+# Prompts + validates the version (empty = abort): X.Y.Z or a pre-release of it, greater than
+# the newest tag reachable from HEAD, so each release line counts only its own tags; on
+# stable* also the same major.minor; and no existing tag anywhere. Then branches off into
+# ncmake/release/X.Y.Z (branches created by ncmake carry the ncmake/ prefix), records the
+# branch it started from as ncmake-base in the git config of the release branch, and commits
+# the bump there: info.xml/composer.json/package.json plus the re-synced lockfiles (via
+# RUNTIME). The base branch is protected, so the bump lands through that branch and a PR, not
+# a direct push. Fill the CHANGELOG on the branch; after the PR is merged, run 'make tag' on
+# the base branch.
 version: check-app
 	@cur=$$(git rev-parse --abbrev-ref HEAD 2>/dev/null); \
 	case "$$cur" in main|stable*) ;; *) echo "make version must run on 'main' or a 'stable*' branch (you are on '$$cur')." >&2; exit 1;; esac; \
 	echo "Maintainer target: opens a release branch with the version bump for a PR"; \
 	echo "($$cur is protected, no direct push); after the merge you tag it with 'make tag'."; \
-	latest=$$(git tag --list 'v*' --merged HEAD --sort=-v:refname | head -1 | sed 's/^v//'); \
+	latest=$$($(git_tags) --list 'v*' --merged HEAD --sort=-v:refname | head -1 | sed 's/^v//'); \
 	latest=$${latest:-0.0.0}; \
 	printf 'New version (latest tag on %s: %s, empty = abort): ' "$$cur" "$$latest"; read new; \
 	[ -z "$$new" ] && { echo "Aborted."; exit 0; }; \
-	echo "$$new" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$$' || { echo "Not a X.Y.Z version: $$new" >&2; exit 1; }; \
+	echo "$$new" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-$(prerelease_re))?$$' || { echo "Not a X.Y.Z or X.Y.Z-alpha.N/-beta.N/-rc.N version: $$new" >&2; exit 1; }; \
 	git rev-parse --verify --quiet "refs/tags/v$$new" >/dev/null && { echo "Tag v$$new already exists - pick another version." >&2; exit 1; }; \
-	high=$$(printf '%s\n%s\n' "$$latest" "$$new" | sort -V | tail -1); \
+	high=$$(printf '%s\n%s\n' "$$latest" "$$new" | $(version_sort) | tail -1); \
 	if [ "$$new" = "$$latest" ] || [ "$$high" != "$$new" ]; then echo "Version $$new must be greater than the latest tag $$latest on $$cur" >&2; exit 1; fi; \
-	case "$$cur" in stable*) [ "$${new%.*}" = "$${latest%.*}" ] || { echo "On $$cur the version must stay at $${latest%.*}.x - a new minor or major belongs on main." >&2; exit 1; };; esac; \
+	case "$$cur" in stable*) line=$$(echo "$$latest" | cut -d. -f1,2); [ "$$(echo "$$new" | cut -d. -f1,2)" = "$$line" ] || { echo "On $$cur the version must stay at $$line.x - a new minor or major belongs on main." >&2; exit 1; };; esac; \
 	branch="ncmake/release/$$new"; \
 	git rev-parse --verify --quiet "refs/heads/$$branch" >/dev/null && { echo "Branch $$branch already exists - delete it or pick another version." >&2; exit 1; }; \
 	git checkout -b "$$branch" || exit 1; \
 	git config "branch.$$branch.ncmake-base" "$$cur"; \
-	sed -i -E "s|<version>[0-9.]+</version>|<version>$$new</version>|" appinfo/info.xml; \
-	[ -f composer.json ] && sed -i -E "s|(\"version\"[[:space:]]*:[[:space:]]*)\"[0-9.]+\"|\1\"$$new\"|" composer.json || true; \
-	[ -f package.json ] && sed -i -E "s|(\"version\"[[:space:]]*:[[:space:]]*)\"[0-9.]+\"|\1\"$$new\"|" package.json || true; \
+	sed -i -E "s|<version>[0-9A-Za-z.+-]+</version>|<version>$$new</version>|" appinfo/info.xml; \
+	[ -f composer.json ] && sed -i -E "s|(\"version\"[[:space:]]*:[[:space:]]*)\"[0-9A-Za-z.+-]+\"|\1\"$$new\"|" composer.json || true; \
+	[ -f package.json ] && sed -i -E "s|(\"version\"[[:space:]]*:[[:space:]]*)\"[0-9A-Za-z.+-]+\"|\1\"$$new\"|" package.json || true; \
 	if [ -f composer.json ] && [ -f composer.lock ]; then echo "==> Syncing composer.lock ($(RUNTIME))..."; $(php_run) 'composer update --lock' || { echo "composer.lock sync failed" >&2; exit 1; }; fi; \
 	if [ -f package.json ] && [ -f package-lock.json ]; then echo "==> Syncing package-lock.json ($(RUNTIME))..."; $(node_run) 'npm install --package-lock-only' || { echo "package-lock.json sync failed" >&2; exit 1; }; fi; \
 	git add appinfo/info.xml; \
@@ -335,6 +347,8 @@ version: check-app
 # never touched, so generated entries can be freely edited before committing.
 # Refuses to duplicate an existing section; reports when there is nothing to
 # document. An app-provided cliff.toml overrides the built-in configuration.
+# A pre-release gets a section of its own, and the release after it lists what
+# came since that pre-release.
 changelog: check-app
 	@ver="$(version)"; \
 	test -f CHANGELOG.md || { echo "ERROR: no CHANGELOG.md - create it once (Keep a Changelog header), then rerun." >&2; exit 1; }; \
@@ -344,7 +358,7 @@ changelog: check-app
 	mkdir -p "$(cache_dir)"; \
 	if [ -f cliff.toml ]; then cfg="cliff.toml"; else cfg="build/cache/cliff.toml"; printf '%s\n' "$$cliff_config" > "$$cfg"; fi; \
 	base=$$(git config "branch.$$(git rev-parse --abbrev-ref HEAD).ncmake-base" 2>/dev/null || echo main); \
-	since=$$(git tag --list 'v*' --merged HEAD --sort=-v:refname | head -1); \
+	since=$$($(git_tags) --list 'v*' --merged HEAD --sort=-v:refname | head -1); \
 	echo "==> Generating changelog for $$ver from commits since $${since:-the first commit} ($(RUNTIME))..."; \
 	$(node_run) "git config --global --add safe.directory /app 2>/dev/null; npx --yes git-cliff@2 --config $$cfg --unreleased --use-branch-tags --tag v$$ver --strip all" > "$(cache_dir)/changelog_new.md" || { echo "git-cliff failed" >&2; exit 1; }; \
 	if ! grep -q '[^[:space:]]' "$(cache_dir)/changelog_new.md" || ! grep -q '^### ' "$(cache_dir)/changelog_new.md"; then \
@@ -388,9 +402,9 @@ tag_hook ?= :
 tag: check-app
 	@ver="$(version)"; \
 	git rev-parse --verify --quiet "refs/tags/v$$ver" >/dev/null && { echo "Tag v$$ver already exists - run 'make version' first" >&2; exit 1; }; \
-	latest=$$(git tag --list 'v*' --merged HEAD --sort=-v:refname | head -1 | sed 's/^v//'); \
+	latest=$$($(git_tags) --list 'v*' --merged HEAD --sort=-v:refname | head -1 | sed 's/^v//'); \
 	latest=$${latest:-0.0.0}; \
-	high=$$(printf '%s\n%s\n' "$$latest" "$$ver" | sort -V | tail -1); \
+	high=$$(printf '%s\n%s\n' "$$latest" "$$ver" | $(version_sort) | tail -1); \
 	if [ "$$ver" = "$$latest" ] || [ "$$high" != "$$ver" ]; then echo "info.xml version $$ver is not greater than the latest tag $$latest on this branch - run 'make version' first" >&2; exit 1; fi; \
 	if [ -n "$$(git status --porcelain)" ]; then \
 		echo "ERROR: the working tree is not clean, untracked files included - the release is packed from the checkout, so anything only this machine has would reach the tarball and nothing else." >&2; \
@@ -412,6 +426,11 @@ tag: check-app
 		case "$$(git rev-parse --abbrev-ref HEAD)" in stable*) \
 			echo "==> v$$ver belongs to a maintenance line: when you publish its GitHub release,"; \
 			echo "    untick 'Set as the latest release', or GitHub shows it above the newer line on main.";; \
+		esac; \
+		case "$$ver" in *-*) \
+			echo "==> v$$ver is a pre-release: tick 'Set as a pre-release' when you publish its GitHub"; \
+			echo "    release. It goes to the App Store as a regular release, not as a nightly; servers"; \
+			echo "    get it only on the beta, daily or git channel or with --allow-unstable.";; \
 		esac; \
 	else \
 		echo "Aborted. To do it manually:"; \
@@ -439,9 +458,9 @@ stable-branch: check-app
 	echo "Maintainer target: opens a stable* branch for an older release line, which then"; \
 	echo "gets its own releases through make version, make changelog and make tag."; \
 	{ git fetch --quiet --prune origin && git fetch --quiet --tags origin; } || { echo "ERROR: git fetch from origin failed (network?)" >&2; exit 1; }; \
-	current=$$(git tag --list 'v*' --merged HEAD --sort=-v:refname | head -1 | sed 's/^v//'); \
+	current=$$($(git_tags) --list 'v*' --merged HEAD --sort=-v:refname | head -1 | sed 's/^v//'); \
 	[ -n "$$current" ] || { echo "No release tag on main yet - there is no older line to maintain." >&2; exit 1; }; \
-	cline=$${current%.*}; \
+	cline=$$(echo "$$current" | cut -d. -f1,2); \
 	newest=$$(git tag --list 'v[0-9]*' --sort=-v:refname | sed 's/^v//' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$$' | awk -F. '!seen[$$1 "." $$2]++'); \
 	echo "Release lines (newest tag):"; \
 	for t in $$newest; do \
@@ -871,10 +890,11 @@ endef
 define help_version
 make version    (maintainer, on main or a stable* branch)
 
-Prompts for the new version and validates it: greater than the newest tag
-reachable from the current branch, on a stable* branch also the same
-major.minor, and no tag of that name anywhere. Branches off into
-ncmake/release/X.Y.Z and commits the bump there (info.xml,
+Prompts for the new version and validates it: X.Y.Z or a pre-release
+X.Y.Z-alpha.N, -beta.N or -rc.N, greater than the newest tag reachable from the
+current branch (ordered as PHP version_compare orders them, so 1.2.0-rc.1 comes
+before 1.2.0), on a stable* branch also the same major.minor, and no tag of that
+name anywhere. Branches off into ncmake/release/X.Y.Z and commits the bump there (info.xml,
 composer.json/package.json and the re-synced lockfiles). Then run make changelog,
 push the branch and open a PR against the branch you started from. RUNTIME=
 selects the container for the lockfile sync.
@@ -888,8 +908,9 @@ the newest tag reachable from HEAD (feat to Added, fix to Fixed, perf to Changed
 docs/refactor/style, merges and Transifex bot commits are skipped) and inserts it
 with its link reference. Prints the exact commit command: while the version bump
 is still unpushed it folds in via git commit --amend --no-edit (one commit per
-release). Rerunning is safe; an app-provided cliff.toml overrides the built-in
-config.
+release). A pre-release gets a section of its own, and the release after it lists
+what came since that pre-release. Rerunning is safe; an app-provided cliff.toml
+overrides the built-in config.
 endef
 
 define help_tag
@@ -900,7 +921,8 @@ included - the release is packed from the checkout), refuses when CHANGELOG.md
 has no "## [X.Y.Z]" section, then creates and pushes the signed vX.Y.Z tag after
 confirmation. Publishing the release triggers the release workflow, which
 attaches the tarball asset. A release from a stable* branch must not be marked
-as the latest release on GitHub; make tag reminds of it.
+as the latest release on GitHub, and a pre-release (X.Y.Z-rc.N) must be marked as
+a pre-release; make tag reminds of both.
 
 Between the confirmation and the tag, $$(tag_hook) may add lines to the tag
 message; the integrity module installs its signature step there.

@@ -147,6 +147,10 @@ register: check-app
 # per app (a new one replaces the previous) and does not require an increasing
 # version. When the URL is a GitHub asset and gh is available, the release's
 # pre-release flag is cross-checked against NIGHTLY and a mismatch asks first.
+# A tagged pre-release version (vX.Y.Z-rc.N) is no nightly: it carries the GitHub
+# pre-release flag and goes to the store as a regular release, which offers it
+# only to the beta, daily and git channels. As a nightly, the Nextcloud release
+# process warns, installations could not update from it, so that asks first.
 publish: check-app
 	$(require_cert_dir)
 	@set -e; \
@@ -167,7 +171,11 @@ publish: check-app
 	fi; \
 	if [ -n "$$gh_ok" ]; then \
 		pre=$$(gh release view "$$tag" -R "$$slug" --json isPrerelease -q .isPrerelease 2>/dev/null); \
-		if [ "$$pre" = true ] && [ -z "$(NIGHTLY)" ]; then \
+		case "$$tag" in *-*) prever=1;; *) prever=;; esac; \
+		if [ -n "$$prever" ] && [ -n "$(NIGHTLY)" ]; then \
+			read -p "$$tag is a pre-release version, which belongs in the store as a regular release - as a nightly, installations cannot update from it. Publish as NIGHTLY anyway? [y/N] " yn; \
+			[ "$$yn" = y ] || [ "$$yn" = Y ] || { echo "Aborted."; exit 0; }; \
+		elif [ "$$pre" = true ] && [ -z "$(NIGHTLY)" ] && [ -z "$$prever" ]; then \
 			read -p "GitHub marks $$tag as a pre-release, but NIGHTLY=1 is not set. Publish as STABLE anyway? [y/N] " yn; \
 			[ "$$yn" = y ] || [ "$$yn" = Y ] || { echo "Aborted."; exit 0; }; \
 		elif [ "$$pre" = false ] && [ -n "$(NIGHTLY)" ]; then \
@@ -292,6 +300,11 @@ nightly per app (a new one replaces the previous) and does not require an
 increasing version. For a GitHub asset the release's pre-release flag is
 cross-checked against NIGHTLY and a mismatch asks before publishing. Delete a
 nightly with make delete-release NIGHTLY=1.
+
+A pre-release (vX.Y.Z-alpha.N, -beta.N, -rc.N) is published without NIGHTLY:
+its GitHub pre-release flag is expected, and the store offers it only to the
+beta, daily and git channels. NIGHTLY=1 on such a version asks first, because
+installations could not update from it.
 endef
 
 help::
