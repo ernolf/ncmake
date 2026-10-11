@@ -50,10 +50,15 @@ endif
 
 # App id and version come from appinfo/info.xml - the checkout directory name is
 # NOT the app id (they often differ), so it is never used for anything.
-# xmllint is preferred but not always present (e.g. minimal CI runners); fall
-# back to grep so 'make' works on any host without libxml2-utils.
-app_id        = $(shell xmllint --xpath 'string(/info/id)' appinfo/info.xml 2>/dev/null || grep -oPm1 '(?<=<id>)[^<]+' appinfo/info.xml 2>/dev/null)
-version       = $(shell xmllint --xpath 'string(/info/version)' appinfo/info.xml 2>/dev/null || grep -oPm1 '(?<=<version>)[^<]+' appinfo/info.xml 2>/dev/null)
+# $(call info_xml,<path below info>,<attribute or empty>,<pattern>) reads one value.
+# xmllint is preferred but not always present (e.g. minimal CI runners); python3's
+# ElementTree, which ncmake needs anyway, stands in for it. Both parse the XML, so an
+# <id> inside a comment is never taken for the real one, as it was by a plain grep.
+# Only a value that matches the pattern as a whole comes back: nothing read from
+# info.xml can carry shell syntax into a recipe.
+info_xml      = $(shell { xmllint --xpath 'string(/info/$(1)$(if $(2),/@$(2)))' appinfo/info.xml 2>/dev/null || python3 -c 'import sys, xml.etree.ElementTree as E; e = E.parse("appinfo/info.xml").getroot().find(sys.argv[1]); v = None if e is None else (e.get(sys.argv[2]) if len(sys.argv) > 2 else e.text); print((v or "").strip())' $(1) $(2) 2>/dev/null; } | grep -xE '$(3)')
+app_id        = $(call info_xml,id,,[a-z][a-z0-9_]*[a-z0-9])
+version       = $(call info_xml,version,,[0-9A-Za-z.+-]+)
 dist_dir      = $(CURDIR)/build/artifacts/dist
 stage_dir     = $(CURDIR)/build/stage
 cache_dir     = $(CURDIR)/build/cache
@@ -158,8 +163,8 @@ no_runtime   = sh -c 'echo >&2; echo "ERROR: no container runtime found (podman/
 # refuses to run below. Each server states it in its own lib/versioncheck.php, read
 # here from its stable branch, or from master for a major that has none yet.
 nc_server_raw = https://raw.githubusercontent.com/nextcloud/server
-php_declared  = $(shell xmllint --xpath 'string(//dependencies/php/@min-version)' appinfo/info.xml 2>/dev/null || grep -oPm1 '(?<=<php min-version=")[^"]+' appinfo/info.xml 2>/dev/null)
-nc_min        = $(firstword $(subst ., ,$(shell xmllint --xpath 'string(//dependencies/nextcloud/@min-version)' appinfo/info.xml 2>/dev/null || grep -oPm1 '(?<=<nextcloud min-version=")[^"]+' appinfo/info.xml 2>/dev/null)))
+php_declared  = $(call info_xml,dependencies/php,min-version,[0-9.]+)
+nc_min        = $(firstword $(subst ., ,$(call info_xml,dependencies/nextcloud,min-version,[0-9.]+)))
 nc_php_floor  = $(shell { curl -fsSL "$(nc_server_raw)/stable$(1)/lib/versioncheck.php" 2>/dev/null || curl -fsSL "$(nc_server_raw)/master/lib/versioncheck.php" 2>/dev/null; } | sed -n 's/.*PHP_VERSION_ID < \([0-9]*\).*/\1/p' | head -1 | awk '{ printf "%d.%d", $$1 / 10000, $$1 % 10000 / 100 }')
 # The CI images are tagged by major and minor, so a declared "8" means 8.0 and a
 # patch level is dropped.
@@ -249,7 +254,7 @@ all: dist
 
 # Every functional target needs the app id; help stays runnable anywhere.
 check-app:
-	@test -n "$(app_id)" || { echo >&2; echo "ERROR: no <id> found in appinfo/info.xml - run make from a Nextcloud app root." >&2; echo >&2; exit 1; }
+	@test -n "$(app_id)" || { echo >&2; echo "ERROR: no valid <id> found in appinfo/info.xml - run make from a Nextcloud app root." >&2; echo >&2; exit 1; }
 
 # == Release versioning (maintainer only) ==
 
