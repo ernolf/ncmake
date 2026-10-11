@@ -82,6 +82,7 @@ Follow these before proposing any command. They are the mistakes that cost the m
 | Remove `build/` | `make clean` |
 | Remove every git-ignored build output | `make dist-clean` |
 | Update ncmake itself | `make self-update` |
+| Install or refresh this skill file | `make skill-install` |
 
 `TARGET` for `rsync` and `cp` is the **parent** `apps/` directory; the app subdirectory is appended automatically. `OCC=1` wraps the copy into `occ app:disable`, `chown` to `web_user` (default `www-data`) and `occ app:enable`, so `info.xml` is re-read and migrations run. Without `OCC=1` those commands are only printed. `ENGINE=docker|podman` picks the container CLI for `cp` independently of `RUNTIME`.
 
@@ -274,6 +275,8 @@ Two things about it are worth knowing:
 ## Self-update and pinning
 
 In stub mode the per-machine cache refreshes itself at most once per `NCMAKE_TTL_MIN` (default 1440 minutes) with a conditional GET, so being offline or an unchanged upstream costs nothing. A committed full copy never modifies itself. `make self-update` fetches the newest Makefile immediately and drops the ETag. `NCMAKE_REF` pins ncmake to a branch or tag, and the cache is keyed by that ref, so pinned and unpinned apps coexist on one machine.
+
+This skill file is a copy that does not refresh itself. `make skill-install` fetches it from the same `NCMAKE_REF` into `skill_dir` (default `~/.claude/skills/ncmake`) and says whether it was installed, updated or already current; run it again after `make self-update`.
 
 ## Troubleshooting
 
