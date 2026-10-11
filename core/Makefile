@@ -404,8 +404,10 @@ tag: check-app
 # the line, never at main. Before it is created, the Nextcloud and PHP ranges at that tag are
 # shown next to those of main, with a note when the line still reaches into the Nextcloud
 # versions main covers. After confirmation it creates and pushes the branch and prints what
-# comes next. Stale remote branches are pruned in a fetch of their own: --prune together with
-# --tags would also delete local tags that origin does not have.
+# comes next, for an app with .tx/config including the Transifex sync, which reaches app
+# release lines only through .tx/backport on main. Stale remote branches are pruned in a fetch
+# of their own: --prune together with --tags would also delete local tags that origin does not
+# have.
 stable-branch: check-app
 	@cur=$$(git rev-parse --abbrev-ref HEAD 2>/dev/null); \
 	[ "$$cur" = main ] || { echo "make stable-branch must run on 'main' (you are on '$$cur')." >&2; exit 1; }; \
@@ -471,7 +473,23 @@ stable-branch: check-app
 	echo "    - The workflows on $$branch stay as they were at $$base; comment and scheduled"; \
 	echo "      events run the workflows of the default branch. A workflow main gained later,"; \
 	echo "      for example one whose check your rules require, comes over on $$branch with:"; \
-	echo "        make workflows-install W=<name> PR=1"
+	echo "        make workflows-install W=<name> PR=1"; \
+	if git cat-file -e main:.tx/config 2>/dev/null; then \
+		echo "    - Transifex: the Nextcloud sync bot only reaches $$branch when .tx/backport on"; \
+		echo "      main lists it, and that list replaces the server's stable* names."; \
+		if git show main:.tx/backport 2>/dev/null | tr -s ' \t' '\n' | grep -qxF "$$branch"; then \
+			echo "      .tx/backport on main already lists $$branch."; \
+		else \
+			echo "      Add it through a PR against main, one branch per line:"; \
+			echo "        git switch -c <branch> main && echo $$branch >> .tx/backport"; \
+			if git cat-file -e main:REUSE.toml 2>/dev/null && ! git show main:REUSE.toml 2>/dev/null | grep -qF '.tx/backport'; then \
+				echo "      and add .tx/backport next to .tx/config in REUSE.toml."; \
+			fi; \
+		fi; \
+		echo "    - The bot pushes its commits directly: add nextcloud-bot to the bypass list of"; \
+		echo "      the rule that protects $$branch, as on main. It needs write access as a"; \
+		echo "      collaborator first: $(if $(gh_slug),https://github.com/$(gh_slug)/settings/access,the repository settings)"; \
+	fi
 
 # == Build ==
 
@@ -866,6 +884,11 @@ reaches into the Nextcloud versions main covers. After confirmation it creates
 and pushes the branch and prints the next steps: protection, backports through
 PRs against the branch, releases with make version, make changelog, make tag,
 and workflows main gained later (make workflows-install on the branch).
+
+For an app with .tx/config the next steps add the Transifex sync: the Nextcloud
+bot syncs only the branches .tx/backport on main lists (one per line, replacing
+the server's stable* names), and it needs write access plus a bypass on the
+rule that protects the branch, because it pushes its commits directly.
 endef
 
 define help_dev-init

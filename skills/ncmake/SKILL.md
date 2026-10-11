@@ -127,7 +127,8 @@ An older release line, for example 0.7 while `main` is at 0.8, gets its own `sta
 2. Protect the branch on GitHub like `main`.
 3. Changes reach the branch only through PRs against it. A backport: `git switch -c <branch> stableX.Y && git cherry-pick -x <commit>`.
 4. A workflow that `main` gained after the line's tag, for example one whose check the repository rules require, comes over on `stableX.Y` with `make workflows-install W=<name> PR=1`. The workflow updater never reaches a `stable*` branch, so `make workflows-update PR=1` runs there by hand.
-5. Release from it exactly as from `main`, with `stableX.Y` in place of `main`: `make version` keeps the major.minor of the line and compares against the tags reachable from the branch, `make changelog` counts only the commits since the line's own last tag, and `make tag` runs on `stableX.Y` after the merge. When publishing the GitHub release, untick "Set as the latest release".
+5. For an app with `.tx/config`: the Nextcloud Transifex bot syncs only the branches that `.tx/backport` on `main` lists (one per line, replacing the server's `stable*` names), so `stableX.Y` goes into that file through a PR against `main`, together with a `REUSE.toml` entry for it. The bot pushes its commits directly, so it needs write access as a collaborator and a bypass on the rule that protects the branch, as on `main`. `make stable-branch` prints both steps.
+6. Release from it exactly as from `main`, with `stableX.Y` in place of `main`: `make version` keeps the major.minor of the line and compares against the tags reachable from the branch, `make changelog` counts only the commits since the line's own last tag, and `make tag` runs on `stableX.Y` after the merge. When publishing the GitHub release, untick "Set as the latest release".
 
 ## Developer modules
 
