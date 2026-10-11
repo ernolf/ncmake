@@ -283,7 +283,7 @@ This skill file is a copy that does not refresh itself. `make skill-install` fet
 | Symptom | Cause and fix |
 | --- | --- |
 | `no container runtime found` | install podman (`apt-get install podman`), or use `RUNTIME=bare` with composer and npm on the `PATH` |
-| `check-app` fails | the command is not running in an app root; `appinfo/info.xml` is missing |
+| `check-app` fails | the command is not running in an app root, or `appinfo/info.xml` is missing or has no valid `<id>` |
 | `check-build` fails | the git-ignored build outputs are absent; run `make build` |
 | `make psalm` reports a missing `vendor/bin/psalm` | the dev tools are not installed; run `make composer ARGS=install` |
 | Usage message from `composer` or `npm` | `ARGS` was empty; it is mandatory |
