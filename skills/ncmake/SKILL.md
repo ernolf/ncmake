@@ -92,7 +92,8 @@ Follow these before proposing any command. They are the mistakes that cost the m
 | --- | --- | --- |
 | `ghcr.io/nextcloud/continuous-integration-php<min-version>` | `make build` | dependencies resolve against the declared support floor, which is what a correct package needs |
 | `docker.io/library/composer:2` | `make composer`, `make psalm` | newest PHP patch plus composer, git and unzip, which current dev tools need |
-| `node:<engines.node major>`, fallback `node:lts` | every npm run | the Node version the app declares |
+| `node:<engines.node major>`, fallback `node:lts` | every npm run, `build-verify` | the Node version the app declares |
+| `node:lts` (`lib_node_image`) | `consistency-audit`, `bundle-report`, `build-audit` | the analysers need Node 18 or newer and build nothing, so the app's Node does not apply |
 | `docker.io/fsfe/reuse` | `make reuse` | the REUSE compliance checker |
 
 `PHP=min|max` switches the PHP side explicitly. `build` pins `PHP := min`, `psalm` pins `PHP := max`. `RUNTIME=podman|docker|docker-rootless|bare` selects the runtime; it is auto-detected with podman preferred, and `docker` maps the caller's uid and gid so no root-owned files appear in the checkout.

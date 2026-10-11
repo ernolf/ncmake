@@ -40,7 +40,7 @@ audit_cmdline  = make build-audit ARGS=\"%s\"
 # Makefile refreshes that one by hand - so the core here can be older than the
 # analyser section this module expects. Say which side is behind rather than run an
 # empty command.
-analyse_core = $(if $(ncmake_lib_run),:,echo "ERROR: this module needs a newer ncmake core - run 'make self-update'" >&2; exit 1)
+analyse_core = $(if $(ncmake_lib_read_run),:,echo "ERROR: this module needs a newer ncmake core - run 'make self-update'" >&2; exit 1)
 
 .PHONY: bundle-report build-audit
 
@@ -48,13 +48,13 @@ bundle-report:
 	@$(analyse_core)
 	@$(call ncmake_lib_need,$(report_libs))
 	@echo "==> bundle-report$(if $(strip $(ARGS)), $(ARGS)) (RUNTIME=$(RUNTIME))" >&2
-	@$(ncmake_lib_run) 'BUNDLE_REPORT_CMDLINE="$(report_cmdline)" node $(ncmake_lib_path)/bundle-report.mjs $(ARGS)'
+	@$(ncmake_lib_read_run) '$(call ncmake_lib_guard,bundle-report) BUNDLE_REPORT_CMDLINE="$(report_cmdline)" node $(ncmake_lib_path)/bundle-report.mjs $(ARGS)'
 
 build-audit:
 	@$(analyse_core)
 	@$(call ncmake_lib_need,$(audit_libs))
 	@echo "==> build-audit$(if $(strip $(ARGS)), $(ARGS)) (RUNTIME=$(RUNTIME))" >&2
-	@$(ncmake_lib_run) 'BUILD_AUDIT_CMDLINE="$(audit_cmdline)" node $(ncmake_lib_path)/build-audit.mjs $(ARGS)'
+	@$(ncmake_lib_read_run) '$(call ncmake_lib_guard,build-audit) BUILD_AUDIT_CMDLINE="$(audit_cmdline)" node $(ncmake_lib_path)/build-audit.mjs $(ARGS)'
 
 define help_bundle-report
 make bundle-report [ARGS="<report arguments>"]
