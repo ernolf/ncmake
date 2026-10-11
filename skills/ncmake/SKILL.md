@@ -26,7 +26,7 @@ The `Makefile` must sit in the repository root. Everything derives from `$(CURDI
 
 Follow these before proposing any command. They are the mistakes that cost the most time.
 
-1. **`make build` is the complete build.** It already runs `composer install --no-dev --prefer-dist --no-progress`, with the app's own `post-install-cmd`, when `composer.json` declares real runtime requirements (anything besides `php`, `ext-*` and `bamarni/composer-bin-plugin`), and `npm ci && npm run build` when `package.json` has a `scripts.build`. Never propose `make npm ARGS=ci` or `make npm ARGS="run build"` as a build step, and never propose them as a preparation for `make build`.
+1. **`make build` is the complete build.** It already runs `composer install --no-dev --prefer-dist --no-progress`, with the app's own `post-install-cmd`, when `composer.json` declares real runtime requirements (anything besides `php`, `ext-*` and `bamarni/composer-bin-plugin`) or the app has `composer/autoload.php`, and `npm ci && npm run build` when `package.json` has a `scripts.build`. Never propose `make npm ARGS=ci` or `make npm ARGS="run build"` as a build step, and never propose them as a preparation for `make build`.
 2. **`make help-<target>` is the authoritative reference.** Every target has extended help with its exact options and examples. Run it instead of guessing an option name.
 3. **Do not add build configuration.** No wrapper scripts, no extra make targets, no CI build steps that duplicate `make build`. A genuine deviation belongs in `ncmake.mk` (plain make syntax, one variable per line).
 4. **Never edit the version by hand** in `info.xml`, `composer.json` or `package.json`. `make version` does the bump, the validation and the lockfile sync.
@@ -43,7 +43,7 @@ Follow these before proposing any command. They are the mistakes that cost the m
 | Source | What it decides |
 | --- | --- |
 | `appinfo/info.xml` | `<id>` (app id, tarball and stage directory name), `<version>`, `<dependencies><php min-version>` (the build image) |
-| `composer.json` | a composer step is needed when `require` holds anything besides `php` and `ext-*`; the version is bumped here too when the key exists |
+| `composer.json` | a composer step is needed when `require` holds anything besides `php` and `ext-*`, or when `composer/autoload.php` exists; the version is bumped here too when the key exists |
 | `package.json` | an npm step is needed when `scripts.build` exists; `engines.node` picks the Node image; the version is bumped here too |
 | `.gitignore` | classifies `js/` and `vendor/`: ignored means build output that must be built before shipping, committed means a fresh checkout is already dist ready |
 | `.nextcloudignore` | optional, rsync exclude syntax, filters within the shipped file set |
@@ -102,8 +102,8 @@ Follow these before proposing any command. They are the mistakes that cost the m
 
 A release ships an allowlist, never an exclude list, so a stray development file cannot leak into the tarball:
 
-* directories `appinfo lib l10n templates img css js vendor LICENSES`
-* files `CHANGELOG.md AUTHORS.md REUSE.toml COPYING COPYING.md LICENSE LICENSE.md`
+* directories `appinfo lib l10n templates img css js vendor composer LICENSES`
+* files `CHANGELOG.md AUTHORS AUTHORS.md REUSE.toml COPYING COPYING.md LICENSE LICENSE.md`, each with its REUSE sidecar `<file>.license` when it has one
 * plus whatever `keep_extra` in `ncmake.mk` adds (for example `resources`)
 
 Only paths that actually exist are staged. `.nextcloudignore` filters within that set. The result is materialized into `build/stage/<app_id>/` and packed into `build/artifacts/dist/<app_id>-<version>.tar.gz`. `rsync` and `cp` deploy that very same tree, so a test deployment is byte for byte what a release ships.

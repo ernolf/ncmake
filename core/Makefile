@@ -95,9 +95,13 @@ endif
 # The runtime file set is an allowlist, not an exclude list: ship these paths when
 # they exist, nothing else. A forgotten exclude can never leak into the tarball,
 # and a missing runtime directory fails loudly. keep_extra (ncmake.mk) extends it.
-keep_dirs     = appinfo lib l10n templates img css js vendor LICENSES
-keep_files    = CHANGELOG.md AUTHORS.md REUSE.toml COPYING COPYING.md LICENSE LICENSE.md
-keep_existing = $(wildcard $(keep_dirs) $(keep_files) $(keep_extra))
+# composer/ holds the autoloader the server loads in place of its PSR-4 fallback
+# for lib/ (see need_composer).
+keep_dirs     = appinfo lib l10n templates img css js vendor composer LICENSES
+keep_files    = CHANGELOG.md AUTHORS AUTHORS.md REUSE.toml COPYING COPYING.md LICENSE LICENSE.md
+# A kept file takes its REUSE sidecar <file>.license along, so the tarball states
+# the license of every file it carries.
+keep_existing = $(wildcard $(keep_dirs) $(keep_files) $(keep_extra) $(addsuffix .license,$(keep_files) $(keep_extra)))
 # Optional excludes WITHIN the shipped set come from .nextcloudignore (the
 # ecosystem convention; rsync exclude syntax: anchored /path, dir/, wildcards).
 stage_excludes = $(if $(wildcard .nextcloudignore),--exclude-from=.nextcloudignore)
@@ -108,7 +112,10 @@ stage_excludes = $(if $(wildcard .nextcloudignore),--exclude-from=.nextcloudigno
 # installs tools into vendor-bin/ and nothing the app loads); npm runs when
 # package.json has a build script. Both are overridable in ncmake.mk (set to
 # empty to skip).
-need_composer = $(shell python3 -c 'import json;d=json.load(open("composer.json"));print(1 if [k for k in d.get("require",{}) if k not in ("php","bamarni/composer-bin-plugin") and not k.startswith("ext-")] else "")' 2>/dev/null)
+# composer runs as well when the app has composer/autoload.php: the server loads
+# it instead of its PSR-4 fallback for lib/, and it requires vendor/autoload.php,
+# which only the composer step writes, even for an app that requires nothing.
+need_composer = $(if $(wildcard composer/autoload.php),1,$(shell python3 -c 'import json;d=json.load(open("composer.json"));print(1 if [k for k in d.get("require",{}) if k not in ("php","bamarni/composer-bin-plugin") and not k.startswith("ext-")] else "")' 2>/dev/null))
 need_npm      = $(shell python3 -c 'import json;d=json.load(open("package.json"));print(1 if "build" in d.get("scripts",{}) else "")' 2>/dev/null)
 # .gitignore classifies the outputs: an ignored js/ or vendor/ is a build
 # artifact that must be built before shipping; a committed one (apps that ship
@@ -746,6 +753,7 @@ make build
 Builds the PHP dependencies and the frontend, each in a throwaway container, so
 the host needs neither PHP nor Node. What runs is detected from your files:
   composer install --no-dev    when composer.json declares runtime requirements
+                               or the app has composer/autoload.php
   npm ci && npm run build      when package.json has a build script
 Composer ignores the PHP extensions the build image loads but neither
 composer.json nor a locked package requires, so the build fails only on what the
