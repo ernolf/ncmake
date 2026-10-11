@@ -177,6 +177,8 @@ node_major  = $(shell python3 -c 'import json,re;print(re.search(r"[0-9]+", json
 php_image      ?= ghcr.io/nextcloud/continuous-integration-php$(php_min):latest
 analysis_image ?= docker.io/library/composer:2
 node_image     ?= node:$(or $(node_major),lts)
+# The ncmake analysers that only read run here, whatever Node the app declares.
+lib_node_image ?= node:lts
 reuse_image    ?= docker.io/fsfe/reuse:latest
 # PHP picks the image per task: max (default) runs on analysis_image, the newest tooled
 # runtime, right for dev tools and psalm; min runs on php_image, the support floor, for
@@ -1043,15 +1045,27 @@ ncmake_lib_need = for f in $(1); do test -s "$(ncmake_lib_dir)/$$f" || { echo "E
 # The library directory is mounted at /ncmake, read-only, alongside the app at
 # /app, and gets the writable npm cache every other npm call here gets: an
 # analyser that builds runs npm, and the container user has no home of its own.
+# An analyser that builds the app (ncmake_lib_run) needs the app's Node; one that
+# only reads (ncmake_lib_read_run) runs on lib_node_image, so an old engines.node
+# cannot keep it from loading.
 # With RUNTIME=bare there is no container and the host path is used as it is; with
 # no runtime at all $(node_run) carries the "install podman" abort.
 ifeq ($(filter $(RUNTIME),bare none),)
-  ncmake_lib_run  = $(container) -v "$(ncmake_lib_dir)":/ncmake:ro -e npm_config_cache=/tmp/.npm $(node_image) sh -lc
-  ncmake_lib_path = /ncmake
+  ncmake_lib_in       = $(container) -v "$(ncmake_lib_dir)":/ncmake:ro -e npm_config_cache=/tmp/.npm $(1) sh -lc
+  ncmake_lib_run      = $(call ncmake_lib_in,$(node_image))
+  ncmake_lib_read_run = $(call ncmake_lib_in,$(lib_node_image))
+  ncmake_lib_path     = /ncmake
 else
-  ncmake_lib_run  = $(node_run)
-  ncmake_lib_path = $(ncmake_lib_dir)
+  ncmake_lib_run      = $(node_run)
+  ncmake_lib_read_run = $(node_run)
+  ncmake_lib_path     = $(ncmake_lib_dir)
 endif
+
+# The analysers are written for Node 18 or newer. $(call ncmake_lib_guard,<target>),
+# the first command of an analyser script, stops below that with the reason instead
+# of letting node fail on syntax it does not know.
+ncmake_lib_node_min = 18
+ncmake_lib_guard = v=$$(node -p process.versions.node); [ "$${v%%.*}" -ge $(ncmake_lib_node_min) ] || { echo "ERROR: $(1) needs Node $(ncmake_lib_node_min) or newer and found Node $$v$(if $(filter build-verify,$(1)), - it builds with the Node that engines.node in package.json declares)" >&2; exit 1; };
 
 help::
 	@echo ""
