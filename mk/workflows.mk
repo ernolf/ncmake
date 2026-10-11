@@ -228,6 +228,11 @@ def install(names, lock, cat):
             f.write(text)
         lock[name] = {'source': entry['src'], 'sha': entry['sha'], 'hash': file_hash(path)}
         print('%s: %s' % (verb, path))
+        # COMMIT=1 / PR=1 describe each workflow in the pull request body.
+        desc_file = os.environ.get('wf_desc_file')
+        if desc_file:
+            with open(desc_file, 'a', encoding='utf-8', newline='\n') as f:
+                f.write('%s\t%s\n' % (name, description(entry)))
     save_lock(lock)
     if failed:
         sys.exit(1)
@@ -274,10 +279,15 @@ wf_run = mkdir -p "$(cache_dir)" && printf '%s\n' "$$wf_tool" > "$(cache_dir)/nc
 # of the tag it started from, and the updater only ever runs on the default branch.
 COMMIT ?= 0
 PR     ?= 0
+# BODY=<path>: the text under the bullet list of the pull request, read from a file
+# because markdown with backticks does not survive a command line.
+BODY   ?=
 
-# Pull-request body (the commit itself stays lean: title + bullets). Kept in make
-# variables and exported so the backticks survive into the shell as literal text
-# instead of being taken for command substitution.
+# Pull-request body (the commit itself stays lean: title + bullets): the bullets, a
+# rule, then BODY or, without it, one paragraph per workflow with its description
+# followed by this sentence. Kept in make variables and exported so the backticks
+# survive into the shell as literal text instead of being taken for command
+# substitution.
 define wf_install_body
 `make workflows-install` added these ncmake-managed workflows from their upstream templates (nextcloud/.github + ncmake). Review the diff and merge.
 endef
@@ -297,6 +307,8 @@ export wf_update_body
 # only surfacing as a rejected push after the work is already committed.
 # _start sets $base (the branch it starts from) and $branch: on stableX.Y the
 # line is appended, so it never collides with an in-flight branch for main.
+# The blank line above the rule in the pull request body is load bearing: '---'
+# right after a line of text makes that line a heading instead of drawing a rule.
 define wf_flow
 wf_require_no_remote_branch() {
     branch="$$1"
@@ -336,7 +348,8 @@ wf_branch_finish() {
         wf_branch_abort "$$branch"
         return 0
     fi
-    bullets=$$(git diff --cached --name-only -- "$(wf_dir)" | grep -E '\.ya?ml$$' | sed 's#.*/#- #')
+    names=$$(git diff --cached --name-only -- "$(wf_dir)" | grep -E '\.ya?ml$$' | sed 's#.*/##')
+    bullets=$$(printf '%s\n' "$$names" | sed 's#^#- #')
     printf '%s\n\n%s\n' "$$title" "$$bullets" > "$(cache_dir)/wf_commit_msg"
     git commit -s -F "$(cache_dir)/wf_commit_msg" || { wf_branch_abort "$$branch"; return 1; }
     if [ "$$pr" != "1" ]; then
@@ -359,9 +372,17 @@ wf_branch_finish() {
         echo "      git push -u origin $$branch" >&2
         return 1
     fi
+    if [ -n "$(BODY)" ]; then
+        text=$$(cat "$(BODY)")
+    else
+        text=$$(for n in $$names; do
+            d=$$(awk -F '\t' -v n="$$n" '$$1 == n { print $$2; exit }' "$(cache_dir)/wf_descriptions" 2>/dev/null)
+            printf '**%s**%s\n\n' "$$n" "$${d:+: $$d}"
+        done; printf '%s\n' "$$body")
+    fi
     git push -u origin "$$branch" || return 1
     gh pr create --base "$$base" --head "$$branch" --title "$$title" \
-        --body "$$(printf '%s\n\n%s\n' "$$bullets" "$$body")"
+        --body "$$(printf '%s\n\n---\n\n%s\n' "$$bullets" "$$text")"
 }
 endef
 export wf_flow
@@ -377,7 +398,7 @@ workflows-list:
 
 workflows-install:
 	@test -n "$(W)" || { echo "Usage: make workflows-install W=\"<name>[,<name>...]\"   (names from 'make workflows-list')" >&2; exit 1; }
-	@names="$$(echo '$(W)' | tr ',' ' ')"; \
+	@$(if $(BODY),test -r "$(BODY)" || { echo "BODY=$(BODY) is not a readable file" >&2; exit 1; };) names="$$(echo '$(W)' | tr ',' ' ')"; \
 	commit="$(COMMIT)"; pr="$(PR)"; if [ "$$pr" = "1" ]; then commit=1; fi; \
 	if [ "$$commit" != "1" ]; then \
 		$(wf_run) install $$names || exit 1; \
@@ -385,18 +406,20 @@ workflows-install:
 	else \
 		eval "$$wf_flow"; \
 		wf_branch_start ncmake/ci/workflows-install || exit 1; \
+		rm -f "$(cache_dir)/wf_descriptions"; export wf_desc_file="$(cache_dir)/wf_descriptions"; \
 		$(wf_run) install $$names || { wf_branch_abort "$$branch"; echo "install failed - branch discarded." >&2; exit 1; }; \
 		wf_branch_finish "$$branch" "ci: install managed CI workflows" "$$wf_install_body" "$$pr"; \
 	fi
 
 workflows-update:
-	@commit="$(COMMIT)"; pr="$(PR)"; if [ "$$pr" = "1" ]; then commit=1; fi; \
+	@$(if $(BODY),test -r "$(BODY)" || { echo "BODY=$(BODY) is not a readable file" >&2; exit 1; };) commit="$(COMMIT)"; pr="$(PR)"; if [ "$$pr" = "1" ]; then commit=1; fi; \
 	if [ "$$commit" != "1" ]; then \
 		$(wf_run) update; \
 		echo "Review and commit: git add $(wf_dir)/"; \
 	else \
 		eval "$$wf_flow"; \
 		wf_branch_start ncmake/ci/workflow-update || exit 1; \
+		rm -f "$(cache_dir)/wf_descriptions"; export wf_desc_file="$(cache_dir)/wf_descriptions"; \
 		$(wf_run) update || { wf_branch_abort "$$branch"; echo "update failed - branch discarded." >&2; exit 1; }; \
 		wf_branch_finish "$$branch" "ci: update managed CI workflows from upstream" "$$wf_update_body" "$$pr"; \
 	fi
@@ -422,7 +445,7 @@ API, so new upstream workflows appear without any ncmake update.
 endef
 
 define help_workflows-install
-make workflows-install W="<name>[,<name>...]" [COMMIT=1|PR=1]
+make workflows-install W="<name>[,<name>...]" [COMMIT=1|PR=1 [BODY=<path>]]
 
 Fetches the named workflows (the .yml suffix is optional; separate several with
 a comma or a space), replaces GitHub's template placeholders ($$default-branch
@@ -441,17 +464,20 @@ ncmake/ci/workflows-install (on stableX.Y: ncmake/ci/workflows-install-stableX.Y
 one bullet per installed workflow) and prints the push command without pushing -
 amend it first if you like. PR=1 implies COMMIT=1 and additionally pushes and
 opens the pull request via gh, against the branch it started from. On a stable*
-branch this brings a workflow that main gained later to the line. See
-https://github.com/ernolf/ncmake/wiki/Workflows.
+branch this brings a workflow that main gained later to the line. The pull
+request body is the bullet list, a rule, and a paragraph per workflow with its
+description from the source; BODY=<path> puts the text of that file there
+instead. See https://github.com/ernolf/ncmake/wiki/Workflows.
 
   make workflows-install W=reuse
   make workflows-install W="lint-php,lint-info-xml,psalm-matrix"
   make workflows-install W=reuse COMMIT=1
   make workflows-install W="lint-php psalm-matrix" PR=1
+  make workflows-install W="lint-php psalm-matrix" PR=1 BODY=pr-body.md
 endef
 
 define help_workflows-update
-make workflows-update [COMMIT=1|PR=1]
+make workflows-update [COMMIT=1|PR=1 [BODY=<path>]]
 
 Brings every managed workflow to the current upstream state: 'update available'
 and 'missing' files are reinstalled, locally modified files are skipped with a
@@ -465,7 +491,8 @@ ncmake/ci/workflow-update-stableX.Y, one bullet per updated workflow) and prints
 the push command without pushing. PR=1 implies COMMIT=1 and additionally pushes
 and opens the pull request via gh, against the branch it started from - the same
 thing the updater does for you on the default branch. A stable* branch is never
-reached by the updater, so run it there by hand. See
+reached by the updater, so run it there by hand. The pull request body is built
+as for workflows-install, BODY=<path> included. See
 https://github.com/ernolf/ncmake/wiki/Workflows.
 
   make workflows-update COMMIT=1
