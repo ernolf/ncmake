@@ -61,6 +61,10 @@ tarball       = $(dist_dir)/$(app_id)-$(version).tar.gz
 # owner/repo from the origin remote (ssh or https) - the changelog link reference
 # and the appstore module derive their URLs from it.
 gh_slug       = $(shell git remote get-url origin 2>/dev/null | sed -E 's#^git@github.com:##; s#^https://github.com/##; s#\.git$$##')
+# Where skill-install puts the skill file for an AI coding assistant. The default is
+# the per-user location Claude Code reads; another assistant, or a skill scoped to
+# one repository (.claude/skills/ncmake), sets it in ncmake.mk or on the command line.
+skill_dir    ?= $(HOME)/.claude/skills/ncmake
 # == Help palette ==
 # Real ESC bytes (not the literal \033 string) so plain `echo` in the recipes
 # passes them straight through. Colors are on when writing to a terminal and
@@ -198,7 +202,7 @@ ifeq ($(filter $(RUNTIME),bare none),)
 endif
 
 .PHONY: all version changelog tag stable-branch build check-app check-build stage dist rsync cp composer npm reuse psalm \
-        clean dist-clean self-update dev-init dev-clean help
+        clean dist-clean self-update skill-install dev-init dev-clean help
 
 # == Changelog configuration (git-cliff) ==
 # Keep a Changelog sections from Conventional Commits, user-visible changes only:
@@ -673,6 +677,19 @@ dist-clean: clean
 self-update:
 	@curl -fsSL "$(ncmake_url)" -o "$(this_ncmake)" && rm -f "$(this_ncmake).etag" && echo "ncmake updated: $(this_ncmake)"
 
+# Install the skill file that tells an AI coding assistant how ncmake works, or bring an
+# existing copy up to date. It comes from the same NCMAKE_REF as this Makefile, so a
+# pinned app gets the skill that describes its own ncmake. Unlike the cached Makefile
+# the copy never refreshes itself, which is why this target says whether it changed.
+skill-install:
+	@mkdir -p "$(skill_dir)" || exit 1; \
+	f="$(skill_dir)/SKILL.md"; \
+	curl -fsSL "$(ncmake_raw)/skills/ncmake/SKILL.md" -o "$$f.new" \
+		|| { rm -f "$$f.new"; echo "ERROR: could not fetch $(ncmake_raw)/skills/ncmake/SKILL.md (network? ref '$(ncmake_ref)'?)" >&2; exit 1; }; \
+	if [ ! -f "$$f" ]; then mv "$$f.new" "$$f" && echo "Skill installed ($(ncmake_ref)): $$f"; \
+	elif cmp -s "$$f.new" "$$f"; then rm -f "$$f.new"; echo "Skill is up to date ($(ncmake_ref)): $$f"; \
+	else mv "$$f.new" "$$f" && echo "Skill updated ($(ncmake_ref)): $$f"; fi
+
 # Fetch the optional developer modules (mk/*.mk in the ncmake repo) into the
 # per-machine cache. Discovery is dynamic: whatever modules the repo ships for
 # the selected NCMAKE_REF is what lands here, so new modules appear without
@@ -918,6 +935,21 @@ stub mode, the committed copy otherwise) and drops the ETag so the next run
 revalidates.
 endef
 
+define help_skill-install
+make skill-install [skill_dir=<dir>]
+
+Installs skills/ncmake/SKILL.md, the file that teaches an AI coding assistant how
+ncmake works, into skill_dir, or replaces a copy there that differs, and says
+which of the two happened or that the copy was already current. The file comes
+from the same NCMAKE_REF as this Makefile. skill_dir defaults to
+~/.claude/skills/ncmake, where Claude Code looks for it for every app of the
+user; set it in ncmake.mk or on the command line for another assistant, or to
+.claude/skills/ncmake to scope the skill to one repository. Writes nothing else.
+
+The copy does not refresh itself: run the target again after a self-update.
+make help shows whether a copy exists in skill_dir.
+endef
+
 help-%:
 	@:$(info $(or $(help_$*),No extended help for "$*". Run "make help" for the target list and "make help-<target>" for another target.))
 
@@ -962,6 +994,8 @@ help::
 	@echo "  $(ct)clean$(c0)                Remove build/ directory (incl. stage and cache)"
 	@echo "  $(ct)dist-clean$(c0)           Remove ALL git-ignored build outputs (vendor, node_modules, js, …)"
 	@echo "  $(ct)self-update$(c0)          Fetch the newest ncmake Makefile"
+	@echo "  $(ct)skill-install$(c0)        Install or refresh the skill file for an AI coding assistant"
+	@echo "                       $(cd)→ $(skill_dir)/SKILL.md ($(if $(wildcard $(skill_dir)/SKILL.md),present,not installed))$(c0)"
 	@echo "  $(ct)dev-init$(c0)             Fetch the ncmake developer modules (App Store, CI workflows, ...)  $(cm)[m]$(c0)"
 	@echo "  $(ct)dev-clean$(c0)            Remove the developer modules again"
 	@echo "  $(ct)help$(c0)                 Show this help"
