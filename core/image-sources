@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
+# SPDX-License-Identifier: MIT
+#
+# The registries ncmake pulls a container image from, tried in the order given until
+# one serves it. Each line holds a prefix of the image reference ncmake asks for,
+# followed by the prefixes that replace it, one per source. The longest prefix that
+# matches applies. An image no line matches is pulled from its own reference, and that
+# reference is tried last on any line that does not list it. Every source of a line
+# must serve the same images as the reference, digest for digest.
+
+# The Docker Official Images. Docker Hub limits anonymous pulls the most, so it comes
+# last.
+docker.io/library/      public.ecr.aws/docker/library/  mirror.gcr.io/library/  docker.io/library/
+
+# ECR Public carries only the Docker Official Images; mirror.gcr.io caches others too.
+docker.io/fsfe/reuse    mirror.gcr.io/fsfe/reuse        docker.io/fsfe/reuse
