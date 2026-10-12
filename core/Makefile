@@ -177,7 +177,7 @@ endif
 RUNTIME     ?= $(default_runtime)
 no_runtime   = sh -c 'echo >&2; echo "ERROR: no container runtime found (podman/docker). Install podman: apt-get install podman, or use RUNTIME=bare to build on the host." >&2; echo >&2; exit 1'
 # Two container images, picked per task, both maintained upstream (nothing to build here):
-#   php_image      - the Nextcloud CI image for the declared min-version, fully tooled
+#   php_image      - the Nextcloud CI image for the PHP floor (php_min), fully tooled
 #                    (composer, git, unzip). 'make build' uses it so dependencies resolve
 #                    against the support floor, which is what package-correct output needs;
 #                    its frozen patch level does not matter for shipping runtime deps.
@@ -197,7 +197,18 @@ nc_php_floor  = $(shell { curl -fsSL "$(nc_server_raw)/stable$(1)/lib/versionche
 # The CI images are tagged by major and minor, so a declared "8" means 8.0 and a
 # patch level is dropped.
 php_major_minor = $(if $(1),$(word 1,$(subst ., ,$(1))).$(or $(word 2,$(subst ., ,$(1))),0))
-php_min       = $(or $(call php_major_minor,$(php_declared)),$(call nc_php_floor,$(nc_min)),$(error No PHP floor: appinfo/info.xml declares no php min-version and lib/versioncheck.php of Nextcloud $(nc_min) could not be read))
+php_app       = $(or $(call php_major_minor,$(php_declared)),$(call nc_php_floor,$(nc_min)))
+# The floor never drops below the one of the newest end-of-life Nextcloud major,
+# whatever the app declares: an app in the App Store supports current servers, none
+# of which runs on an older PHP, and the older CI images carry tools that no longer
+# resolve current dependencies (php8.0 ships Composer 1). That major is the first
+# row under "EOL Versions" in the server's Maintenance and Release Schedule;
+# nc_eol_fallback stands in when the page cannot be read.
+nc_schedule_url = https://raw.githubusercontent.com/wiki/nextcloud/server/Maintenance-and-Release-Schedule.md
+nc_eol_fallback = 32
+nc_eol        = $(or $(shell curl -fsSL "$(nc_schedule_url)" 2>/dev/null | sed -n '/^## EOL Versions/,$$ s/^| \*\*\([0-9]*\)\*\*.*/\1/p' | head -1),$(nc_eol_fallback))
+php_eol_floor = $(call nc_php_floor,$(nc_eol))
+php_min       = $(or $(lastword $(shell printf '%s\n' $(php_app) $(php_eol_floor) | sort -V)),$(error No PHP floor: neither appinfo/info.xml nor lib/versioncheck.php of Nextcloud $(nc_min) and $(nc_eol) gave one))
 # The build Node is the newest LTS line that engines.node allows and that is not
 # end of life by the Node.js release schedule: an open range such as >=18 is a
 # floor, not the version to build on. When no LTS line fits, the newest current
@@ -563,11 +574,13 @@ stable-branch: check-app
 
 # Build the app's dependencies and frontend. What runs is auto-detected (see the
 # build heuristics at the top) and routed to its container via RUNTIME. PHP=min so
-# packaging resolves dependencies against the declared support floor.
+# packaging resolves dependencies against the support floor (php_min).
 build: PHP := min
 build: check-app
 	@echo "==> Building via RUNTIME=$(RUNTIME)"
 	@if [ -n "$(php_build_cmd)" ]; then \
+		app="$(php_app)"; min="$(php_min)"; \
+		if [ "$$app" != "$$min" ]; then echo "composer: building on PHP $$min, the floor of Nextcloud $(nc_eol), the newest end-of-life major; the app's own floor is $${app:+PHP $$app}$${app:-unknown}"; fi; \
 		echo "+ $(php_build_cmd)"; \
 		$(php_run) 'export COMPOSER_IGNORE_PLATFORM_REQ="$$($(php_ignored_ext))"; $(php_build_cmd)' || exit 1; \
 	else echo "(composer: nothing to build)"; fi
@@ -822,7 +835,7 @@ make composer ARGS="<composer arguments>"
 Runs any composer command in a throwaway container, so no composer or PHP is
 needed on the host. It uses analysis_image by default (the official composer
 image: newest PHP plus composer, git and unzip), which is what dev tools such as
-psalm need. Add PHP=min to run on php_image instead, the min-version build image,
+psalm need. Add PHP=min to run on php_image instead, the PHP floor build image,
 to resolve dependencies against the support floor.
 
 Examples:
@@ -1050,7 +1063,7 @@ help::
 	@echo "  $(ct)dist$(c0)                 Build the distribution tarball from the shipped file set"
 	@echo "                       $(cd)→ $(tarball)$(c0)"
 	@echo ""
-	@echo "  $(cd)PHP image per task: build on the min-version, composer/psalm on the current composer image ($(cv)PHP=min|max$(c0)$(cd)).$(c0)"
+	@echo "  $(cd)PHP image per task: build on the PHP floor, composer/psalm on the current composer image ($(cv)PHP=min|max$(c0)$(cd)).$(c0)"
 	@echo ""
 	@echo "$(ch)Local deploy:$(c0)"
 	@echo "  $(ct)rsync$(c0)                Deploy the shipped file set into an apps/ dir via rsync (no tarball)."
