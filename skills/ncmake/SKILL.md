@@ -18,9 +18,11 @@ Full documentation: <https://github.com/ernolf/ncmake/wiki>
 
 ## Recognising an ncmake app
 
-The repository root has `appinfo/info.xml` and a `Makefile` that is either the short ncmake bootstrap stub (a dozen lines that fetch and include the real Makefile from a per-machine cache) or a committed full copy of `core/Makefile`. `make` with no target prints the annotated help with the app id, version and the available targets.
+The repository root has `appinfo/info.xml` and either the short ncmake bootstrap stub (a dozen lines that fetch and include the real Makefile from a per-machine cache) or a committed full copy of `core/Makefile`. The stub is committed as `GNUmakefile`; older apps carry it as `Makefile`, which still works. `make` with no target prints the annotated help with the app id, version and the available targets.
 
-The `Makefile` must sit in the repository root. Everything derives from `$(CURDIR)`, and the CI workflows expect it there.
+GNU make reads the first of `GNUmakefile`, `makefile` and `Makefile` it finds and none of the others. As `GNUmakefile` the stub is read whatever other build file the app keeps; that file runs only with `make -f <name>`. A stub as `Makefile` next to a lowercase `makefile` is never read, and no ncmake target exists; `make consistency-audit` reports which file make reads and which it hides.
+
+The stub must sit in the repository root. Everything derives from `$(CURDIR)`, and the CI workflows expect it there.
 
 ## Ground rules
 
