@@ -261,7 +261,7 @@ endif
 # than IMAGE_CHECK_MIN minutes, and removes the image that pull superseded at once:
 # it has lost its tag and would otherwise stay on the host for good. rmi without -f
 # leaves an image that a container still uses or another tag still names.
-# image_record keeps one line per image: CLI, reference, image ID, whether ncmake
+# The image record keeps one line per image: CLI, reference, image ID, whether ncmake
 # pulled it (1) or found it on the host (0), and the last use and the last check in
 # epoch seconds. Every message goes to stderr, so a target whose stdout is captured,
 # such as an analyser with ARGS=--json, gets nothing but its own output. A failed
@@ -269,17 +269,57 @@ endif
 # The reference names the image, not the registry it comes from. image_sources lists
 # the registries that serve each image, tried in order, so that a rate limit or an
 # outage of one leaves the next; the image is then tagged with its reference and the
-# source's name dropped, so the host, image_record and make image-clean see one name
+# source's name dropped, so the host, the image record and make image-clean see one name
 # whatever served it. The list is data in the ncmake repo, fetched into the cache when
 # a pull first needs it and refreshed on the same TTL and ETag terms as this file, so
 # a new mirror needs no ncmake update. IMAGE_SOURCES names a list of one's own, which
 # is used as it is.
+# The record is state, not cache: deleting the cache must not turn the images ncmake
+# pulled into foreign ones that no clean-up touches again. It lives beside the image
+# store it describes, which depends on who runs the CLI, so image_rec_fn asks the CLI
+# and recfile names the file per CLI. A rootless store (podman run by a user, rootless
+# docker) has one record per user under XDG_STATE_HOME. A store for the whole host
+# (podman run by root, rootful docker) has one under /var/lib, which root creates
+# itself. A member of the docker group needs sudo once for it: recfile asks where a
+# record is written, in image_prep, with a terminal and outside CI, and creates the
+# directory group-writable and setgid on yes. On no, or without a terminal, the record
+# stays in the user's file and the sudo command is shown; while that file holds a line
+# for the CLI, nobody is asked again, until make image-setup asks on request. Once the
+# directory is writable, the CLI's lines move there from the user's file. A record in
+# the shared directory is written group-writable, so every member keeps it current.
 IMAGE_CHECK_MIN ?= 1440
-image_record     = $(ncmake_cache)/images.txt
+image_state_sys  = /var/lib/ncmake
+image_state_user = $(or $(XDG_STATE_HOME),$(HOME)/.local/state)/ncmake
+image_rec_fn = sys="$(image_state_sys)" usr="$(image_state_user)"; \
+	share() { [ "$${1%/*}" != "$$sys" ] || chmod 664 "$$1"; }; \
+	recfile() { \
+		if [ "$$1" = podman ]; then r=$$(podman info --format "{{.Host.Security.Rootless}}" 2>/dev/null); \
+			[ -n "$$r" ] || { [ "$$(id -u)" = 0 ] && r=false || r=true; }; \
+		else case "$$(docker info --format "{{.SecurityOptions}}" 2>/dev/null)" in *rootless*) r=true ;; *) r=false ;; esac; fi; \
+		[ "$$r" != true ] || { echo "$$usr/images.txt"; return 0; }; \
+		[ -d "$$sys" ] || [ "$$(id -u)" != 0 ] || mkdir -p "$$sys"; \
+		if [ ! -w "$$sys" ] && [ "$$1" = docker ] && [ -n "$$2" ] && \
+		   { [ "$$2" = again ] || ! grep -q "^$$1 " "$$usr/images.txt" 2>/dev/null; }; then \
+			if [ -t 0 ] && [ -z "$(CI)" ]; then \
+				printf "==> Keep the record of the images ncmake pulls for docker in %s, shared by the docker group? It needs sudo once. [y/N] " "$$sys" >&2; \
+				read -r a || a=; case "$$a" in [yY]*) sudo install -d -m 2775 -g docker "$$sys" >&2 ;; esac; \
+			fi; \
+			[ -w "$$sys" ] || echo "==> The record of the images ncmake pulls for docker stays in $$usr/images.txt. To share it: sudo install -d -m 2775 -g docker $$sys, or make image-setup" >&2; \
+		fi; \
+		[ -w "$$sys" ] || { echo "$$usr/images.txt"; return 0; }; \
+		if grep -q "^$$1 " "$$usr/images.txt" 2>/dev/null && t=$$(mktemp "$$sys/images.txt.XXXXXX"); then share "$$t"; \
+			if { cat "$$sys/images.txt" 2>/dev/null; grep "^$$1 " "$$usr/images.txt"; } >"$$t" && mv -f "$$t" "$$sys/images.txt"; then \
+				grep -v "^$$1 " "$$usr/images.txt" >"$$usr/images.txt.new"; \
+				if [ -s "$$usr/images.txt.new" ]; then mv -f "$$usr/images.txt.new" "$$usr/images.txt"; else rm -f "$$usr/images.txt.new" "$$usr/images.txt"; fi; \
+			else rm -f "$$t"; fi; \
+		fi; \
+		echo "$$sys/images.txt"; \
+	};
 image_sources    = $(or $(IMAGE_SOURCES),$(ncmake_cache)/image-sources-$(ncmake_ref))
 image_sources_url = $(if $(IMAGE_SOURCES),,$(ncmake_raw)/core/image-sources)
 image_prep = sh -c ' \
-	cli=$$1 ref=$$2 rec=$$3 list=$$4 url=$$5 now=$$(date +%s) own= checked=0; \
+	cli=$$1 ref=$$2 list=$$3 url=$$4 now=$$(date +%s) own= checked=0; \
+	$(image_rec_fn) rec=$$(recfile "$$cli" ask); \
 	if [ -f "$$rec" ]; then while read -r c r i o u k; do \
 		if [ "$$c" = "$$cli" ] && [ "$$r" = "$$ref" ]; then own=$$o checked=$$k; fi; done <"$$rec"; fi; \
 	case "$$checked" in ""|*[!0-9]*) checked=0 ;; esac; \
@@ -331,7 +371,7 @@ image_prep = sh -c ' \
 		fi; \
 	fi; \
 	[ -n "$$new" ] || exit 0; \
-	mkdir -p "$${rec%/*}" && tmp=$$(mktemp "$$rec.XXXXXX") || exit 0; \
+	mkdir -p "$${rec%/*}" && tmp=$$(mktemp "$$rec.XXXXXX") || exit 0; share "$$tmp"; \
 	{ if [ -f "$$rec" ]; then while read -r c r i o u k; do \
 		[ "$$c" = "$$cli" ] && [ "$$r" = "$$ref" ] || echo "$$c $$r $$i $$o $$u $$k"; done <"$$rec"; fi; \
 	  echo "$$cli $$ref $$new $$own $$now $$checked"; } >"$$tmp" && mv -f "$$tmp" "$$rec" || rm -f "$$tmp"; \
@@ -373,7 +413,7 @@ image_idle = sh -c ' \
 	exit 0' image-idle
 # $(call container_run,<image>,<run options>) prepares the image, then starts it. The
 # preparation never stands in the way of the run, whatever it runs into.
-container_run = { $(image_prep) $(container_cli) '$(1)' '$(image_record)' '$(image_sources)' '$(image_sources_url)' || :; $(image_idle) '$(image_stamp)' '$(this_ncmake)' '$(NCMAKE)' || :; } && $(container) $(2) $(1)
+container_run = { $(image_prep) $(container_cli) '$(1)' '$(image_sources)' '$(image_sources_url)' || :; $(image_idle) '$(image_stamp)' '$(this_ncmake)' '$(NCMAKE)' || :; } && $(container) $(2) $(1)
 
 ifeq ($(filter $(RUNTIME),bare none),)
   php_run   = $(call container_run,$(active_php_image),-e COMPOSER_HOME=/tmp/composer -e COMPOSER_ALLOW_SUPERUSER=1) sh -lc
@@ -382,7 +422,7 @@ ifeq ($(filter $(RUNTIME),bare none),)
 endif
 
 .PHONY: all version changelog tag stable-branch build check-app check-build stage dist rsync cp composer npm reuse psalm \
-        clean dist-clean image-clean self-update skill-install dev-init dev-clean help
+        clean dist-clean image-clean image-setup self-update skill-install dev-init dev-clean help
 
 # == Changelog configuration (git-cliff) ==
 # Keep a Changelog sections from Conventional Commits, user-visible changes only:
@@ -901,13 +941,13 @@ dist-clean: clean
 # used them and where they come from, and remove the ones picked: by number at the
 # prompt, or by OWN=1 and OLD=1 for scripts. The flags never pick a foreign image or
 # one a container uses. rmi runs without -f, so an image that a container uses or
-# another tag names stays, whoever picked it. An image is matched to image_record by
-# CLI and reference, with docker.io/ and library/ dropped, because podman lists the
-# full name where docker lists the short one. A removed image leaves image_record, so
+# another tag names stays, whoever picked it. An image is matched to the record of its
+# CLI by reference, with docker.io/ and library/ dropped, because podman lists the
+# full name where docker lists the short one. A removed image leaves the record, so
 # the next run that needs it pulls it as ncmake's own again. The space freed is the
 # difference in the CLI's own accounting, which counts a shared layer once.
 image-clean:
-	@clis="$(image_clis)"; rec="$(image_record)"; now=$$(date +%s); idle=$$(($(IMAGE_IDLE_MIN) * 60)); \
+	@clis="$(image_clis)"; now=$$(date +%s); idle=$$(($(IMAGE_IDLE_MIN) * 60)); $(image_rec_fn) \
 	test -n "$$clis" || { echo "No container CLI found (podman/docker), no image to list."; exit 0; }; \
 	for cli in $$clis; do command -v "$$cli" >/dev/null || { echo "ERROR: $$cli not found." >&2; exit 1; }; done; \
 	norm() { n=$${1#docker.io/}; echo "$${n#library/}"; }; \
@@ -916,7 +956,7 @@ image-clean:
 		if [ $$a -lt 3600 ]; then echo "$$((a / 60)) min ago"; elif [ $$a -lt 172800 ]; then echo "$$((a / 3600)) h ago"; else echo "$$((a / 86400)) d ago"; fi; }; \
 	list=$$(mktemp) || exit 1; trap 'rm -f "$$list"' EXIT; \
 	for cli in $$clis; do \
-		ids=$$("$$cli" ps -aq 2>/dev/null); used=; \
+		ids=$$("$$cli" ps -aq 2>/dev/null); used=; rec=$$(recfile "$$cli"); \
 		[ -z "$$ids" ] || used=$$("$$cli" container inspect --format "{{.Image}}" $$ids 2>/dev/null | sed "s/^sha256://"); \
 		used=" $$(echo $$used) "; \
 		"$$cli" images --no-trunc --format "{{.ID}}|{{.Repository}}|{{.Tag}}|{{.Size}}" 2>/dev/null \
@@ -928,13 +968,13 @@ image-clean:
 			case "$$used" in *" $$id "*) st="in use" ;; \
 			*) if [ "$$own" = 1 ]; then st=ncmake; elif [ -n "$$own" ]; then st=ncmake-used; \
 			   elif [ -z "$$ref" ]; then st=dangling; else st=foreign; fi ;; esac; \
-			echo "$$cli|$${ref:-$$id}|$${ref:-$$(printf %.12s "$$id")}|$$size|$$last|$$st"; \
+			echo "$$cli|$${ref:-$$id}|$${ref:-$$(printf %.12s "$$id")}|$$size|$$last|$$st|$$rec"; \
 		done; \
 	done >"$$list"; \
 	n=$$(wc -l <"$$list"); [ "$$n" -gt 0 ] || { echo "No container images on this host."; exit 0; }; \
 	pick=; i=0; \
 	printf "%5s  %-6s  %9s  %-11s  %-11s  %s\n" "" CLI size "last used" status image; \
-	while IFS="|" read -r cli target name size last st; do i=$$((i + 1)); mark=" "; \
+	while IFS="|" read -r cli target name size last st rec; do i=$$((i + 1)); mark=" "; \
 		if { [ -n "$(OWN)" ] && [ "$$st" = ncmake ]; } || \
 		   { [ -n "$(OLD)" ] && { [ "$$st" = dangling ] || { [ "$$st" = ncmake ] && [ $$((now - $${last:-0})) -ge $$idle ]; }; }; }; then \
 			mark="*"; pick="$$pick $$i"; fi; \
@@ -953,11 +993,11 @@ image-clean:
 	test -n "$$pick" || { echo "Nothing to remove."; exit 0; }; \
 	if [ -n "$(DRY)" ]; then echo "DRY=1: the images marked * would be removed."; exit 0; fi; \
 	before=0; for cli in $$clis; do x=$$(bytes "$$cli"); before=$$((before + $${x:-0})); done; \
-	i=0; while IFS="|" read -r cli target name size last st; do i=$$((i + 1)); \
+	i=0; while IFS="|" read -r cli target name size last st rec; do i=$$((i + 1)); \
 		case " $$pick " in *" $$i "*) ;; *) continue ;; esac; \
 		if err=$$("$$cli" rmi "$$target" 2>&1 >/dev/null </dev/null); then \
 			echo "removed  $$cli $$name"; \
-			if [ -f "$$rec" ] && tmp=$$(mktemp "$$rec.XXXXXX"); then key=$$(norm "$$target"); \
+			if [ -f "$$rec" ] && tmp=$$(mktemp "$$rec.XXXXXX"); then share "$$tmp"; key=$$(norm "$$target"); \
 				while read -r c r i2 o u k; do [ "$$c" = "$$cli" ] && [ "$$(norm "$$r")" = "$$key" ] || echo "$$c $$r $$i2 $$o $$u $$k"; done <"$$rec" >"$$tmp" \
 				&& mv -f "$$tmp" "$$rec" || rm -f "$$tmp"; fi; \
 		else echo "stays    $$cli $$name: $$(echo "$$err" | head -n 1)"; fi; \
@@ -965,6 +1005,13 @@ image-clean:
 	after=0; for cli in $$clis; do x=$$(bytes "$$cli"); after=$$((after + $${x:-0})); done; \
 	[ "$$before" -gt 0 ] || exit 0; d=$$((before - after)); [ $$d -ge 0 ] || d=0; \
 	echo "Freed: $$(awk -v b=$$d 'BEGIN { if (b >= 1e9) printf "%.2f GB", b / 1e9; else printf "%.0f MB", b / 1e6 }')"
+
+# Show where the image record of each container CLI lives, and for rootful docker
+# ask again whether to share it in /var/lib/ncmake, which an earlier no declined.
+image-setup:
+	@clis="$(image_clis)"; $(image_rec_fn) \
+	test -n "$$clis" || { echo "No container CLI found (podman/docker), no image record to set up."; exit 0; }; \
+	for cli in $$clis; do echo "$$cli: image record $$(recfile "$$cli" again)"; done
 
 # Fetch the newest ncmake Makefile over this one (the per-machine cache in stub
 # mode, the committed copy otherwise).
@@ -1262,6 +1309,23 @@ The flags never pick a foreign image or one a container uses. Nothing is removed
 with -f: an image that a container uses or another tag names stays and says why.
 endef
 
+define help_image-setup
+make image-setup [ENGINE=podman|docker]
+
+Shows for each container CLI on the host where ncmake keeps the record of the
+images it uses, pulled or found:
+  $(image_state_user)/images.txt
+               a rootless store: podman run by a user, rootless docker
+  $(image_state_sys)/images.txt
+               a store for the whole host: podman run by root, rootful docker
+
+For rootful docker run by a member of the docker group, $(image_state_sys) needs
+sudo once. ncmake asks the first time it records an image; on no, or without a
+terminal, the record stays in the user's file. make image-setup asks again and on
+yes runs: sudo install -d -m 2775 -g docker $(image_state_sys)
+The entries from the user's file move there the next time ncmake reads them.
+endef
+
 define help_self-update
 make self-update
 
@@ -1333,6 +1397,7 @@ help::
 	@echo "  $(ct)dist-clean$(c0)           Remove ALL git-ignored build outputs (vendor, node_modules, js, …)"
 	@echo "  $(ct)image-clean$(c0)          List the container images on the host and remove the picked ones"
 	@echo "                       $(cv)OWN=1$(c0) ncmake's own, $(cv)OLD=1$(c0) dangling and unused, $(cv)DRY=1$(c0) only show"
+	@echo "  $(ct)image-setup$(c0)          Show where the image record lives; share it for rootful docker"
 	@echo "  $(ct)self-update$(c0)          Fetch the newest ncmake Makefile"
 	@echo "  $(ct)skill-install$(c0)        Install or refresh the skill file for an AI coding assistant"
 	@echo "                       $(cd)→ $(skill_dir)/SKILL.md ($(if $(wildcard $(skill_dir)/SKILL.md),present,not installed))$(c0)"
