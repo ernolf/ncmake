@@ -98,6 +98,8 @@ Follow these before proposing any command. They are the mistakes that cost the m
 
 `PHP=min|max` switches the PHP side explicitly. `build` pins `PHP := min`, `psalm` pins `PHP := max`. `RUNTIME=podman|docker|docker-rootless|bare` selects the runtime; it is auto-detected with podman preferred, and `docker` maps the caller's uid and gid so no root-owned files appear in the checkout.
 
+Every container runs with `--rm` and `--label ncmake`. Before it starts, its image is pulled again once the last check is older than `IMAGE_CHECK_MIN` minutes (default 1440), and the image that pull superseded is removed right away. Images that a container still uses or another tag still names stay. `images.txt` in the per-machine cache records each image ncmake used, whether ncmake pulled it or found it on the host, and when it was last used and checked.
+
 ## The shipped file set (keep model)
 
 A release ships an allowlist, never an exclude list, so a stray development file cannot leak into the tarball:

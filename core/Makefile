@@ -242,19 +242,66 @@ else ifeq ($(RUNTIME),none)
   node_run  = $(no_runtime)
   reuse_run = $(no_runtime)
 else ifeq ($(RUNTIME),podman)
-  container = podman run --rm -v "$(CURDIR)":/app -w /app
+  container_cli = podman
+  container     = podman run --rm --label ncmake -v "$(CURDIR)":/app -w /app
 else ifeq ($(RUNTIME),docker-rootless)
-  container = docker run --rm -v "$(CURDIR)":/app -w /app
+  container_cli = docker
+  container     = docker run --rm --label ncmake -v "$(CURDIR)":/app -w /app
 else ifeq ($(RUNTIME),docker)
-  container = docker run --rm --user $(shell id -u):$(shell id -g) -v "$(CURDIR)":/app -w /app
+  container_cli = docker
+  container     = docker run --rm --label ncmake --user $(shell id -u):$(shell id -g) -v "$(CURDIR)":/app -w /app
 else
   $(error Unknown RUNTIME '$(RUNTIME)'. Use: podman | docker | docker-rootless | bare)
 endif
 
+# == Container images ==
+# podman and docker run an image as it lies once it is on the host, so a moving tag
+# such as :latest or node:lts would stay at the day of its first pull. Before a
+# container starts, image_prep pulls its image again when the last check is older
+# than IMAGE_CHECK_MIN minutes, and removes the image that pull superseded at once:
+# it has lost its tag and would otherwise stay on the host for good. rmi without -f
+# leaves an image that a container still uses or another tag still names.
+# image_record keeps one line per image: CLI, reference, image ID, whether ncmake
+# pulled it (1) or found it on the host (0), and the last use and the last check in
+# epoch seconds. Every message goes to stderr, so a target whose stdout is captured,
+# such as an analyser with ARGS=--json, gets nothing but its own output. A failed
+# pull is no error here: the container run that follows reports what is missing.
+IMAGE_CHECK_MIN ?= 1440
+image_record     = $(ncmake_cache)/images.txt
+image_prep = sh -c ' \
+	cli=$$1 ref=$$2 rec=$$3 now=$$(date +%s) own= checked=0; \
+	if [ -f "$$rec" ]; then while read -r c r i o u k; do \
+		if [ "$$c" = "$$cli" ] && [ "$$r" = "$$ref" ]; then own=$$o checked=$$k; fi; done <"$$rec"; fi; \
+	case "$$checked" in ""|*[!0-9]*) checked=0 ;; esac; \
+	old=$$("$$cli" image inspect --format "{{.Id}}" "$$ref" 2>/dev/null); new=$$old; \
+	if [ -z "$$old" ]; then \
+		own=1; echo "==> Pulling $$ref ($$cli)" >&2; \
+		"$$cli" pull "$$ref" >&2 && checked=$$now; \
+		new=$$("$$cli" image inspect --format "{{.Id}}" "$$ref" 2>/dev/null); \
+	else \
+		own=$${own:-0}; \
+		if [ $$((now - checked)) -ge $$(($(IMAGE_CHECK_MIN) * 60)) ] && "$$cli" pull -q "$$ref" >/dev/null 2>&1; then \
+			checked=$$now; new=$$("$$cli" image inspect --format "{{.Id}}" "$$ref" 2>/dev/null); \
+			if [ -n "$$new" ] && [ "$$new" != "$$old" ]; then \
+				if "$$cli" rmi "$$old" >/dev/null 2>&1; then echo "==> $$ref updated, the superseded image is removed" >&2; \
+				else echo "==> $$ref updated, the superseded image stays: a container uses it or another tag names it" >&2; fi; \
+			fi; \
+		fi; \
+	fi; \
+	[ -n "$$new" ] || exit 0; \
+	mkdir -p "$${rec%/*}" && tmp=$$(mktemp "$$rec.XXXXXX") || exit 0; \
+	{ if [ -f "$$rec" ]; then while read -r c r i o u k; do \
+		[ "$$c" = "$$cli" ] && [ "$$r" = "$$ref" ] || echo "$$c $$r $$i $$o $$u $$k"; done <"$$rec"; fi; \
+	  echo "$$cli $$ref $$new $$own $$now $$checked"; } >"$$tmp" && mv -f "$$tmp" "$$rec" || rm -f "$$tmp"; \
+	exit 0' image-prep
+# $(call container_run,<image>,<run options>) prepares the image, then starts it. The
+# preparation never stands in the way of the run, whatever it runs into.
+container_run = { $(image_prep) $(container_cli) '$(1)' '$(image_record)' || :; } && $(container) $(2) $(1)
+
 ifeq ($(filter $(RUNTIME),bare none),)
-  php_run   = $(container) -e COMPOSER_HOME=/tmp/composer -e COMPOSER_ALLOW_SUPERUSER=1 $(active_php_image) sh -lc
-  node_run  = $(container) -e npm_config_cache=/tmp/.npm -e COREPACK_HOME=/tmp/.corepack $(node_image) sh -lc
-  reuse_run = $(container) $(reuse_image)
+  php_run   = $(call container_run,$(active_php_image),-e COMPOSER_HOME=/tmp/composer -e COMPOSER_ALLOW_SUPERUSER=1) sh -lc
+  node_run  = $(call container_run,$(node_image),-e npm_config_cache=/tmp/.npm -e COREPACK_HOME=/tmp/.corepack) sh -lc
+  reuse_run = $(call container_run,$(reuse_image))
 endif
 
 .PHONY: all version changelog tag stable-branch build check-app check-build stage dist rsync cp composer npm reuse psalm \
@@ -846,7 +893,9 @@ Composer ignores the PHP extensions the build image loads but neither
 composer.json nor a locked package requires, so the build fails only on what the
 app requires. A side that does not apply is skipped; override in ncmake.mk (php_build_cmd,
 node_build_cmd). RUNTIME= selects the container (podman, docker, docker-rootless,
-bare).
+bare). Each image is pulled again once its last check is older than
+IMAGE_CHECK_MIN minutes (default 1440), and the image that pull superseded is
+removed right away.
 
   make build
   make dist-clean && make build     reproducible from-scratch build
@@ -1079,6 +1128,7 @@ help::
 	@echo ""
 	@echo "  $(cd)Container runtime for 'version' (lockfile sync) and 'build': $(c0)$(cv)RUNTIME=...$(c0)$(cd) (now: $(RUNTIME))$(c0)"
 	@echo "    $(cd)podman | docker | docker-rootless | bare   (auto-detected, podman preferred)$(c0)"
+	@echo "    $(cd)Images are checked upstream once per $(cv)IMAGE_CHECK_MIN$(c0)$(cd) minutes (now: $(IMAGE_CHECK_MIN)); a superseded one is removed.$(c0)"
 	@echo ""
 	@echo "$(ch)Build:$(c0)"
 	@echo "  $(ct)build$(c0)                Build PHP deps + frontend (auto-detected from composer.json/package.json)"
@@ -1153,7 +1203,7 @@ ncmake_lib_need = for f in $(1); do test -s "$(ncmake_lib_dir)/$$f" || { echo "E
 # With RUNTIME=bare there is no container and the host path is used as it is; with
 # no runtime at all $(node_run) carries the "install podman" abort.
 ifeq ($(filter $(RUNTIME),bare none),)
-  ncmake_lib_in       = $(container) -v "$(ncmake_lib_dir)":/ncmake:ro -e npm_config_cache=/tmp/.npm $(1) sh -lc
+  ncmake_lib_in       = $(call container_run,$(1),-v "$(ncmake_lib_dir)":/ncmake:ro -e npm_config_cache=/tmp/.npm) sh -lc
   ncmake_lib_run      = $(call ncmake_lib_in,$(node_image))
   ncmake_lib_read_run = $(call ncmake_lib_in,$(lib_node_image))
   ncmake_lib_path     = /ncmake
