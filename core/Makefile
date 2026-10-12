@@ -222,9 +222,9 @@ node_major  = $(call node_major_of,$(node_pick))
 node_major_of = $(if $(filter eol,$(1)),$(warning engines.node in package.json allows only end-of-life Node lines - building on Node $(firstword $(1))))$(firstword $(1))
 php_image      ?= ghcr.io/nextcloud/continuous-integration-php$(php_min):latest
 analysis_image ?= docker.io/library/composer:2
-node_image     ?= node:$(or $(node_major),lts)
+node_image     ?= docker.io/library/node:$(or $(node_major),lts)
 # The ncmake analysers that only read run here, whatever Node the app declares.
-lib_node_image ?= node:lts
+lib_node_image ?= docker.io/library/node:lts
 reuse_image    ?= docker.io/fsfe/reuse:latest
 # PHP picks the image per task: max (default) runs on analysis_image, the newest tooled
 # runtime, right for dev tools and psalm; min runs on php_image, the support floor, for
@@ -266,21 +266,63 @@ endif
 # epoch seconds. Every message goes to stderr, so a target whose stdout is captured,
 # such as an analyser with ARGS=--json, gets nothing but its own output. A failed
 # pull is no error here: the container run that follows reports what is missing.
+# The reference names the image, not the registry it comes from. image_sources lists
+# the registries that serve each image, tried in order, so that a rate limit or an
+# outage of one leaves the next; the image is then tagged with its reference and the
+# source's name dropped, so the host, image_record and make image-clean see one name
+# whatever served it. The list is data in the ncmake repo, fetched into the cache when
+# a pull first needs it and refreshed on the same TTL and ETag terms as this file, so
+# a new mirror needs no ncmake update. IMAGE_SOURCES names a list of one's own, which
+# is used as it is.
 IMAGE_CHECK_MIN ?= 1440
 image_record     = $(ncmake_cache)/images.txt
+image_sources    = $(or $(IMAGE_SOURCES),$(ncmake_cache)/image-sources-$(ncmake_ref))
+image_sources_url = $(if $(IMAGE_SOURCES),,$(ncmake_raw)/core/image-sources)
 image_prep = sh -c ' \
-	cli=$$1 ref=$$2 rec=$$3 now=$$(date +%s) own= checked=0; \
+	cli=$$1 ref=$$2 rec=$$3 list=$$4 url=$$5 now=$$(date +%s) own= checked=0; \
 	if [ -f "$$rec" ]; then while read -r c r i o u k; do \
 		if [ "$$c" = "$$cli" ] && [ "$$r" = "$$ref" ]; then own=$$o checked=$$k; fi; done <"$$rec"; fi; \
 	case "$$checked" in ""|*[!0-9]*) checked=0 ;; esac; \
+	sources() { \
+		if [ -n "$$url" ]; then mkdir -p "$${list%/*}"; \
+			if [ ! -s "$$list" ]; then curl -fsSL "$$url" -o "$$list" 2>/dev/null; [ -s "$$list" ] || rm -f "$$list"; \
+			elif [ -n "$$(find "$$list" -mmin +$(NCMAKE_TTL_MIN) 2>/dev/null)" ]; then \
+				curl -fsSL --etag-compare "$$list.etag" --etag-save "$$list.etag" "$$url" -o "$$list.new" 2>/dev/null; \
+				if [ -s "$$list.new" ]; then mv "$$list.new" "$$list"; else rm -f "$$list.new"; fi; touch "$$list"; \
+			fi; \
+		fi; \
+		srcs= best=; \
+		if [ -f "$$list" ]; then while read -r pre alt; do \
+			case "$$ref" in "$$pre"*) ;; *) continue ;; esac; \
+			case "$$pre" in "$$best"*) [ "$$pre" != "$$best" ] || continue ;; *) continue ;; esac; \
+			best=$$pre srcs= rest=$$(printf "%s\n" "$$ref" | cut -c "$$(($$(printf %s "$$pre" | wc -c) + 1))-"); \
+			for a in $$alt; do srcs="$$srcs $$a$$rest"; done; \
+		done <"$$list"; fi; \
+		case " $$srcs " in *" $$ref "*) ;; *) srcs="$$srcs $$ref" ;; esac; \
+	}; \
+	pull() { \
+		sources; err=; t=$$(mktemp) || return 1; \
+		for s in $$srcs; do \
+			if [ "$$1" = quiet ]; then "$$cli" pull -q "$$s" >"$$t" 2>&1 </dev/null; rc=$$?; \
+			else echo "==> Pulling $$s ($$cli)" >&2; \
+				{ "$$cli" pull "$$s" 2>&1 </dev/null; echo $$? >"$$t.rc"; } | tee "$$t" >&2; rc=$$(cat "$$t.rc" 2>/dev/null); fi; \
+			if [ "$$rc" = 0 ]; then \
+				[ "$$s" = "$$ref" ] || { "$$cli" tag "$$s" "$$ref" && \
+					if [ "$$cli" = podman ]; then podman untag "$$ref" "$$s"; else docker rmi "$$s"; fi; } >/dev/null 2>&1; \
+				rm -f "$$t" "$$t.rc"; return 0; \
+			fi; \
+			err="$$err$$(printf "\n    %s: %s" "$$s" "$$(grep . "$$t" | tail -n 1)")"; \
+		done; \
+		rm -f "$$t" "$$t.rc"; return 1; \
+	}; \
 	old=$$("$$cli" image inspect --format "{{.Id}}" "$$ref" 2>/dev/null); new=$$old; \
 	if [ -z "$$old" ]; then \
-		own=1; echo "==> Pulling $$ref ($$cli)" >&2; \
-		"$$cli" pull "$$ref" >&2 && checked=$$now; \
+		own=1; \
+		if pull; then checked=$$now; else echo "==> No source could pull $$ref ($$cli):$$err" >&2; fi; \
 		new=$$("$$cli" image inspect --format "{{.Id}}" "$$ref" 2>/dev/null); \
 	else \
 		own=$${own:-0}; \
-		if [ $$((now - checked)) -ge $$(($(IMAGE_CHECK_MIN) * 60)) ] && "$$cli" pull -q "$$ref" >/dev/null 2>&1; then \
+		if [ $$((now - checked)) -ge $$(($(IMAGE_CHECK_MIN) * 60)) ] && pull quiet; then \
 			checked=$$now; new=$$("$$cli" image inspect --format "{{.Id}}" "$$ref" 2>/dev/null); \
 			if [ -n "$$new" ] && [ "$$new" != "$$old" ]; then \
 				if "$$cli" rmi "$$old" >/dev/null 2>&1; then echo "==> $$ref updated, the superseded image is removed" >&2; \
@@ -331,7 +373,7 @@ image_idle = sh -c ' \
 	exit 0' image-idle
 # $(call container_run,<image>,<run options>) prepares the image, then starts it. The
 # preparation never stands in the way of the run, whatever it runs into.
-container_run = { $(image_prep) $(container_cli) '$(1)' '$(image_record)' || :; $(image_idle) '$(image_stamp)' '$(this_ncmake)' '$(NCMAKE)' || :; } && $(container) $(2) $(1)
+container_run = { $(image_prep) $(container_cli) '$(1)' '$(image_record)' '$(image_sources)' '$(image_sources_url)' || :; $(image_idle) '$(image_stamp)' '$(this_ncmake)' '$(NCMAKE)' || :; } && $(container) $(2) $(1)
 
 ifeq ($(filter $(RUNTIME),bare none),)
   php_run   = $(call container_run,$(active_php_image),-e COMPOSER_HOME=/tmp/composer -e COMPOSER_ALLOW_SUPERUSER=1) sh -lc
@@ -999,8 +1041,11 @@ app requires. A side that does not apply is skipped; override in ncmake.mk (php_
 node_build_cmd). RUNTIME= selects the container (podman, docker, docker-rootless,
 bare). Each image is pulled again once its last check is older than
 IMAGE_CHECK_MIN minutes (default 1440), and the image that pull superseded is
-removed right away. The images ncmake pulled are removed once no ncmake container
-has run for IMAGE_IDLE_MIN minutes (default 10); KEEP=1 keeps them.
+removed right away. A pull tries the registries that ncmake's image-sources list
+names for the image in turn, so a rate limit on one falls through to the next;
+IMAGE_SOURCES=<file> uses a list of one's own. The images ncmake pulled are
+removed once no ncmake container has run for IMAGE_IDLE_MIN minutes (default 10);
+KEEP=1 keeps them.
 
   make build
   make build KEEP=1                 keep the images for a series of runs
@@ -1258,6 +1303,7 @@ help::
 	@echo "  $(cd)Container runtime for 'version' (lockfile sync) and 'build': $(c0)$(cv)RUNTIME=...$(c0)$(cd) (now: $(RUNTIME))$(c0)"
 	@echo "    $(cd)podman | docker | docker-rootless | bare   (auto-detected, podman preferred)$(c0)"
 	@echo "    $(cd)Images are checked upstream once per $(cv)IMAGE_CHECK_MIN$(c0)$(cd) minutes (now: $(IMAGE_CHECK_MIN)); a superseded one is removed.$(c0)"
+	@echo "    $(cd)A pull tries the registries in image-sources in turn; $(cv)IMAGE_SOURCES=<file>$(c0)$(cd) uses a list of your own.$(c0)"
 	@echo "    $(cd)The images ncmake pulled go after $(cv)IMAGE_IDLE_MIN$(c0)$(cd) idle minutes (now: $(IMAGE_IDLE_MIN)); $(cv)KEEP=1$(c0)$(cd) keeps them.$(c0)"
 	@echo ""
 	@echo "$(ch)Build:$(c0)"

@@ -94,13 +94,15 @@ Follow these before proposing any command. They are the mistakes that cost the m
 | --- | --- | --- |
 | `ghcr.io/nextcloud/continuous-integration-php<floor>` | `make build` | dependencies resolve against the PHP floor, which is what a correct package needs: the declared `min-version`, raised to the floor of the newest end-of-life Nextcloud major when it is lower |
 | `docker.io/library/composer:2` | `make composer`, `make psalm` | newest PHP patch plus composer, git and unzip, which current dev tools need |
-| `node:<major>`, the newest LTS line `engines.node` allows that is not end of life, fallback `node:lts` | every npm run, `build-verify` | the Node version the app declares |
-| `node:lts` (`lib_node_image`) | `consistency-audit`, `bundle-report`, `build-audit` | the analysers need Node 18 or newer and build nothing, so the app's Node does not apply |
+| `docker.io/library/node:<major>`, the newest LTS line `engines.node` allows that is not end of life, fallback `docker.io/library/node:lts` | every npm run, `build-verify` | the Node version the app declares |
+| `docker.io/library/node:lts` (`lib_node_image`) | `consistency-audit`, `bundle-report`, `build-audit` | the analysers need Node 18 or newer and build nothing, so the app's Node does not apply |
 | `docker.io/fsfe/reuse` | `make reuse` | the REUSE compliance checker |
 
 `PHP=min|max` switches the PHP side explicitly. `build` pins `PHP := min`, `psalm` pins `PHP := max`. `RUNTIME=podman|docker|docker-rootless|bare` selects the runtime; it is auto-detected with podman preferred, and `docker` maps the caller's uid and gid so no root-owned files appear in the checkout.
 
 Every container runs with `--rm` and `--label ncmake`. Before it starts, its image is pulled again once the last check is older than `IMAGE_CHECK_MIN` minutes (default 1440), and the image that pull superseded is removed right away. Images that a container still uses or another tag still names stay. `images.txt` in the per-machine cache records each image ncmake used, whether ncmake pulled it or found it on the host, and when it was last used and checked.
+
+Which registry serves an image is data, not code: `core/image-sources` in the ncmake repo lists, per image reference prefix, the registries to try in order (for the Docker Official Images ECR Public, then `mirror.gcr.io`, then Docker Hub, whose anonymous pull limit is the strictest). A pull that fails, through a rate limit or otherwise, falls through to the next source. The image is tagged with its reference afterwards, so the host keeps one name whatever served it. The list is cached and refreshed like the Makefile; `IMAGE_SOURCES=<file>` uses a list of one's own instead.
 
 `make image-clean` lists the images of every container CLI on the host with size, last use and status (`ncmake`, `ncmake-used`, `dangling`, `foreign`, `in use`) and removes the ones picked at the prompt. `OWN=1` picks every image ncmake pulled, `OLD=1` every dangling image and every ncmake image unused for `IMAGE_IDLE_MIN` minutes (default 10), `DRY=1` only shows the pick. The flags never pick a foreign image or one in use, and nothing is removed with `-f`. It removes images from the host, so run it only when the user asks for it.
 
