@@ -330,14 +330,29 @@ version_sort = sed 's/-/~/' | sort -V | sed 's/~/-/'
 # ncmake/release/X.Y.Z (branches created by ncmake carry the ncmake/ prefix), records the
 # branch it started from as ncmake-base in the git config of the release branch, and commits
 # the bump there: info.xml/composer.json/package.json plus the re-synced lockfiles (via
-# RUNTIME). The base branch is protected, so the bump lands through that branch and a PR, not
-# a direct push. Fill the CHANGELOG on the branch; after the PR is merged, run 'make tag' on
-# the base branch.
+# RUNTIME). The bump reaches the base branch through that branch and a PR. Fill the CHANGELOG
+# on the branch; after the PR is merged, run 'make tag' on the base branch.
+# What the base branch requires is stated only as far as GitHub confirms it: a branch that is
+# not on origin yet, or a ruleset with a pull_request rule. The rules endpoint lists rulesets
+# only; classic branch protection shows as "protected" without saying whether it requires a
+# PR, and a private repository answers "Not Found" without a token. Both stay unmentioned.
 version: check-app
 	@cur=$$(git rev-parse --abbrev-ref HEAD 2>/dev/null); \
 	case "$$cur" in main|stable*) ;; *) echo "make version must run on 'main' or a 'stable*' branch (you are on '$$cur')." >&2; exit 1;; esac; \
-	echo "Maintainer target: opens a release branch with the version bump for a PR"; \
-	echo "($$cur is protected, no direct push); after the merge you tag it with 'make tag'."; \
+	echo "Maintainer target: opens a release branch with the version bump for a PR against"; \
+	echo "$$cur; after the merge you tag it with 'make tag'."; \
+	if echo "$(gh_slug)" | grep -qE '^[^/:]+/[^/]+$$'; then \
+		tok="$${GITHUB_TOKEN:-$$GH_TOKEN}"; \
+		set -- -sS --max-time 10 -H 'User-Agent: ncmake'; \
+		test -z "$$tok" || set -- "$$@" -H "Authorization: Bearer $$tok"; \
+		api="https://api.github.com/repos/$(gh_slug)"; \
+		state=$$(curl "$$@" "$$api/branches/$$cur" 2>/dev/null | python3 -c 'import json,sys; d = json.load(sys.stdin); print("missing" if d.get("message") == "Branch not found" else "found" if "name" in d else "")' 2>/dev/null); \
+		case "$$state" in \
+		missing) echo "$$cur is not on origin yet: push it (git push -u origin $$cur) before a PR against it is possible.";; \
+		found) rules=$$(curl "$$@" "$$api/rules/branches/$$cur" 2>/dev/null | python3 -c 'import json,sys; print(" ".join(r["type"] for r in json.load(sys.stdin)))' 2>/dev/null); \
+			case " $$rules " in *" pull_request "*) echo "A ruleset on $$cur requires a pull request: no direct push.";; esac;; \
+		esac; \
+	fi; \
 	latest=$$($(git_tags) --list 'v*' --merged HEAD --sort=-v:refname | head -1 | sed 's/^v//'); \
 	latest=$${latest:-0.0.0}; \
 	printf 'New version (latest tag on %s: %s, empty = abort): ' "$$cur" "$$latest"; read new; \
