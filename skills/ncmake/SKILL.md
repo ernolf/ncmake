@@ -81,6 +81,8 @@ Follow these before proposing any command. They are the mistakes that cost the m
 | Deploy into a running container (All-in-One) | `make build && make cp TARGET=nextcloud-aio-nextcloud:/var/www/html/custom_apps OCC=1` |
 | Remove `build/` | `make clean` |
 | Remove every git-ignored build output | `make dist-clean` |
+| List the container images on the host and remove some | `make image-clean` |
+| Remove the images ncmake pulled, unattended | `make image-clean OWN=1` |
 | Update ncmake itself | `make self-update` |
 | Install or refresh this skill file | `make skill-install` |
 
@@ -99,6 +101,8 @@ Follow these before proposing any command. They are the mistakes that cost the m
 `PHP=min|max` switches the PHP side explicitly. `build` pins `PHP := min`, `psalm` pins `PHP := max`. `RUNTIME=podman|docker|docker-rootless|bare` selects the runtime; it is auto-detected with podman preferred, and `docker` maps the caller's uid and gid so no root-owned files appear in the checkout.
 
 Every container runs with `--rm` and `--label ncmake`. Before it starts, its image is pulled again once the last check is older than `IMAGE_CHECK_MIN` minutes (default 1440), and the image that pull superseded is removed right away. Images that a container still uses or another tag still names stay. `images.txt` in the per-machine cache records each image ncmake used, whether ncmake pulled it or found it on the host, and when it was last used and checked.
+
+`make image-clean` lists the images of every container CLI on the host with size, last use and status (`ncmake`, `ncmake-used`, `dangling`, `foreign`, `in use`) and removes the ones picked at the prompt. `OWN=1` picks every image ncmake pulled, `OLD=1` every dangling image and every ncmake image unused for `IMAGE_IDLE_MIN` minutes (default 10), `DRY=1` only shows the pick. The flags never pick a foreign image or one in use, and nothing is removed with `-f`. It removes images from the host, so run it only when the user asks for it.
 
 ## The shipped file set (keep model)
 
