@@ -294,6 +294,13 @@ image_prep = sh -c ' \
 		[ "$$c" = "$$cli" ] && [ "$$r" = "$$ref" ] || echo "$$c $$r $$i $$o $$u $$k"; done <"$$rec"; fi; \
 	  echo "$$cli $$ref $$new $$own $$now $$checked"; } >"$$tmp" && mv -f "$$tmp" "$$rec" || rm -f "$$tmp"; \
 	exit 0' image-prep
+# make image-clean covers every container CLI on the host. ENGINE narrows it to one
+# when it comes from the command line or the environment; the ENGINE that ncmake.mk
+# sets for make cp names the CLI of a Nextcloud instance, not the images to clean.
+image_clis = $(if $(filter-out file default undefined,$(origin ENGINE)),$(ENGINE),$(if $(have_podman),podman) $(if $(have_docker),docker))
+# OLD=1 treats an image ncmake pulled as unused once its last use is this many
+# minutes ago.
+IMAGE_IDLE_MIN ?= 10
 # $(call container_run,<image>,<run options>) prepares the image, then starts it. The
 # preparation never stands in the way of the run, whatever it runs into.
 container_run = { $(image_prep) $(container_cli) '$(1)' '$(image_record)' || :; } && $(container) $(2) $(1)
@@ -305,7 +312,7 @@ ifeq ($(filter $(RUNTIME),bare none),)
 endif
 
 .PHONY: all version changelog tag stable-branch build check-app check-build stage dist rsync cp composer npm reuse psalm \
-        clean dist-clean self-update skill-install dev-init dev-clean help
+        clean dist-clean image-clean self-update skill-install dev-init dev-clean help
 
 # == Changelog configuration (git-cliff) ==
 # Keep a Changelog sections from Conventional Commits, user-visible changes only:
@@ -820,6 +827,75 @@ clean:
 dist-clean: clean
 	git clean -dffX
 
+# List the images of every container CLI on the host with their size, when ncmake last
+# used them and where they come from, and remove the ones picked: by number at the
+# prompt, or by OWN=1 and OLD=1 for scripts. The flags never pick a foreign image or
+# one a container uses. rmi runs without -f, so an image that a container uses or
+# another tag names stays, whoever picked it. An image is matched to image_record by
+# CLI and reference, with docker.io/ and library/ dropped, because podman lists the
+# full name where docker lists the short one. A removed image leaves image_record, so
+# the next run that needs it pulls it as ncmake's own again. The space freed is the
+# difference in the CLI's own accounting, which counts a shared layer once.
+image-clean:
+	@clis="$(image_clis)"; rec="$(image_record)"; now=$$(date +%s); idle=$$(($(IMAGE_IDLE_MIN) * 60)); \
+	test -n "$$clis" || { echo "No container CLI found (podman/docker), no image to list."; exit 0; }; \
+	for cli in $$clis; do command -v "$$cli" >/dev/null || { echo "ERROR: $$cli not found." >&2; exit 1; }; done; \
+	norm() { n=$${1#docker.io/}; echo "$${n#library/}"; }; \
+	bytes() { "$$1" system df --format "{{.Type}}|{{.Size}}" 2>/dev/null | awk -F"|" '$$1 == "Images" { v = $$2; gsub(/ /, "", v); u = v; sub(/^[0-9.]+/, "", u); m = 1; if (u == "kB" || u == "KB") m = 1e3; else if (u == "MB") m = 1e6; else if (u == "GB") m = 1e9; else if (u == "TB") m = 1e12; printf "%.0f\n", v * m }'; }; \
+	age() { [ -n "$$1" ] || return 0; a=$$((now - $$1)); \
+		if [ $$a -lt 3600 ]; then echo "$$((a / 60)) min ago"; elif [ $$a -lt 172800 ]; then echo "$$((a / 3600)) h ago"; else echo "$$((a / 86400)) d ago"; fi; }; \
+	list=$$(mktemp) || exit 1; trap 'rm -f "$$list"' EXIT; \
+	for cli in $$clis; do \
+		ids=$$("$$cli" ps -aq 2>/dev/null); used=; \
+		[ -z "$$ids" ] || used=$$("$$cli" container inspect --format "{{.Image}}" $$ids 2>/dev/null | sed "s/^sha256://"); \
+		used=" $$(echo $$used) "; \
+		"$$cli" images --no-trunc --format "{{.ID}}|{{.Repository}}|{{.Tag}}|{{.Size}}" 2>/dev/null \
+		| while IFS="|" read -r id repo tag size; do \
+			id=$${id#sha256:}; ref=; own=; last=; \
+			[ "$$repo" = "<none>" ] || [ "$$tag" = "<none>" ] || ref=$$repo:$$tag; \
+			if [ -n "$$ref" ] && [ -f "$$rec" ]; then key=$$(norm "$$ref"); \
+				while read -r c r i o u k; do [ "$$c" = "$$cli" ] && [ "$$(norm "$$r")" = "$$key" ] && own=$$o last=$$u; done <"$$rec"; fi; \
+			case "$$used" in *" $$id "*) st="in use" ;; \
+			*) if [ "$$own" = 1 ]; then st=ncmake; elif [ -n "$$own" ]; then st=ncmake-used; \
+			   elif [ -z "$$ref" ]; then st=dangling; else st=foreign; fi ;; esac; \
+			echo "$$cli|$${ref:-$$id}|$${ref:-$$(printf %.12s "$$id")}|$$size|$$last|$$st"; \
+		done; \
+	done >"$$list"; \
+	n=$$(wc -l <"$$list"); [ "$$n" -gt 0 ] || { echo "No container images on this host."; exit 0; }; \
+	pick=; i=0; \
+	printf "%5s  %-6s  %9s  %-11s  %-11s  %s\n" "" CLI size "last used" status image; \
+	while IFS="|" read -r cli target name size last st; do i=$$((i + 1)); mark=" "; \
+		if { [ -n "$(OWN)" ] && [ "$$st" = ncmake ]; } || \
+		   { [ -n "$(OLD)" ] && { [ "$$st" = dangling ] || { [ "$$st" = ncmake ] && [ $$((now - $${last:-0})) -ge $$idle ]; }; }; }; then \
+			mark="*"; pick="$$pick $$i"; fi; \
+		printf "%s%4d  %-6s  %9s  %-11s  %-11s  %s\n" "$$mark" "$$i" "$$cli" "$$size" "$$(age "$$last")" "$$st" "$$name"; \
+	done <"$$list"; \
+	if [ -z "$(OWN)$(OLD)" ]; then \
+		[ -z "$(DRY)" ] && [ -t 0 ] || exit 0; \
+		printf "Images to remove (numbers or ranges, e.g. 1 3-5; empty removes nothing): "; read -r ans || ans=; \
+		for t in $$(echo "$$ans" | tr "," " "); do \
+			case "$$t" in *[!0-9-]*|-*|*-|*-*-*) echo "ERROR: not a number or a range: $$t" >&2; exit 1 ;; esac; \
+			a=$${t%-*}; b=$${t#*-}; \
+			[ "$$a" -ge 1 ] && [ "$$a" -le "$$b" ] && [ "$$b" -le "$$n" ] || { echo "ERROR: outside 1-$$n: $$t" >&2; exit 1; }; \
+			while [ "$$a" -le "$$b" ]; do pick="$$pick $$a"; a=$$((a + 1)); done; \
+		done; \
+	fi; \
+	test -n "$$pick" || { echo "Nothing to remove."; exit 0; }; \
+	if [ -n "$(DRY)" ]; then echo "DRY=1: the images marked * would be removed."; exit 0; fi; \
+	before=0; for cli in $$clis; do x=$$(bytes "$$cli"); before=$$((before + $${x:-0})); done; \
+	i=0; while IFS="|" read -r cli target name size last st; do i=$$((i + 1)); \
+		case " $$pick " in *" $$i "*) ;; *) continue ;; esac; \
+		if err=$$("$$cli" rmi "$$target" 2>&1 >/dev/null </dev/null); then \
+			echo "removed  $$cli $$name"; \
+			if [ -f "$$rec" ] && tmp=$$(mktemp "$$rec.XXXXXX"); then key=$$(norm "$$target"); \
+				while read -r c r i2 o u k; do [ "$$c" = "$$cli" ] && [ "$$(norm "$$r")" = "$$key" ] || echo "$$c $$r $$i2 $$o $$u $$k"; done <"$$rec" >"$$tmp" \
+				&& mv -f "$$tmp" "$$rec" || rm -f "$$tmp"; fi; \
+		else echo "stays    $$cli $$name: $$(echo "$$err" | head -n 1)"; fi; \
+	done <"$$list"; \
+	after=0; for cli in $$clis; do x=$$(bytes "$$cli"); after=$$((after + $${x:-0})); done; \
+	[ "$$before" -gt 0 ] || exit 0; d=$$((before - after)); [ $$d -ge 0 ] || d=0; \
+	echo "Freed: $$(awk -v b=$$d 'BEGIN { if (b >= 1e9) printf "%.2f GB", b / 1e9; else printf "%.0f MB", b / 1e6 }')"
+
 # Fetch the newest ncmake Makefile over this one (the per-machine cache in stub
 # mode, the committed copy otherwise).
 self-update:
@@ -1088,6 +1164,29 @@ the analyser libraries those modules fetched - make help shows the plain user
 target set again. make dev-init brings them back.
 endef
 
+define help_image-clean
+make image-clean [OWN=1] [OLD=1] [DRY=1] [ENGINE=podman|docker]
+
+Lists the images of every container CLI on the host, numbered, with their size,
+when ncmake last used them and their status:
+  ncmake       pulled by ncmake
+  ncmake-used  on the host before, used by ncmake
+  dangling     without a tag
+  foreign      neither from ncmake nor dangling
+  in use       a container uses it
+Without a flag it asks which images to remove, by number or range (1 3-5), and
+reports the space that freed. Without a terminal it only lists.
+
+  OWN=1     remove every image ncmake pulled itself
+  OLD=1     remove every image without a tag, and every image ncmake pulled and
+            has not used for IMAGE_IDLE_MIN minutes (now: $(IMAGE_IDLE_MIN))
+  DRY=1     list and mark what OWN=1 or OLD=1 would remove, remove nothing
+  ENGINE=   on the command line, limit the target to podman or docker
+
+The flags never pick a foreign image or one a container uses. Nothing is removed
+with -f: an image that a container uses or another tag names stays and says why.
+endef
+
 define help_self-update
 make self-update
 
@@ -1155,6 +1254,8 @@ help::
 	@echo "$(ch)Utility:$(c0)"
 	@echo "  $(ct)clean$(c0)                Remove build/ directory (incl. stage and cache)"
 	@echo "  $(ct)dist-clean$(c0)           Remove ALL git-ignored build outputs (vendor, node_modules, js, …)"
+	@echo "  $(ct)image-clean$(c0)          List the container images on the host and remove the picked ones"
+	@echo "                       $(cv)OWN=1$(c0) ncmake's own, $(cv)OLD=1$(c0) dangling and unused, $(cv)DRY=1$(c0) only show"
 	@echo "  $(ct)self-update$(c0)          Fetch the newest ncmake Makefile"
 	@echo "  $(ct)skill-install$(c0)        Install or refresh the skill file for an AI coding assistant"
 	@echo "                       $(cd)→ $(skill_dir)/SKILL.md ($(if $(wildcard $(skill_dir)/SKILL.md),present,not installed))$(c0)"
