@@ -104,6 +104,8 @@ Every container runs with `--rm` and `--label ncmake`. Before it starts, its ima
 
 `make image-clean` lists the images of every container CLI on the host with size, last use and status (`ncmake`, `ncmake-used`, `dangling`, `foreign`, `in use`) and removes the ones picked at the prompt. `OWN=1` picks every image ncmake pulled, `OLD=1` every dangling image and every ncmake image unused for `IMAGE_IDLE_MIN` minutes (default 10), `DRY=1` only shows the pick. The flags never pick a foreign image or one in use, and nothing is removed with `-f`. It removes images from the host, so run it only when the user asks for it.
 
+Once no ncmake container has run for `IMAGE_IDLE_MIN` minutes (default 10), the images ncmake pulled itself are removed, as `make image-clean OWN=1` does. A detached waiter that each container run starts does this, so a sequence of targets reuses the images in between. `KEEP=1` starts no waiter, for a series of runs that should keep the images; CI (`CI` set) and `RUNTIME=bare` start none either.
+
 ## The shipped file set (keep model)
 
 A release ships an allowlist, never an exclude list, so a stray development file cannot leak into the tarball:

@@ -298,12 +298,40 @@ image_prep = sh -c ' \
 # when it comes from the command line or the environment; the ENGINE that ncmake.mk
 # sets for make cp names the CLI of a Nextcloud instance, not the images to clean.
 image_clis = $(if $(filter-out file default undefined,$(origin ENGINE)),$(ENGINE),$(if $(have_podman),podman) $(if $(have_docker),docker))
-# OLD=1 treats an image ncmake pulled as unused once its last use is this many
-# minutes ago.
+# Once no ncmake container has run for this many minutes, the images ncmake pulled
+# are removed; OLD=1 of make image-clean uses the same span per image.
 IMAGE_IDLE_MIN ?= 10
+# Removing the images after every target would pull them again for each step of a
+# sequence such as build, psalm, reuse. So every container run writes a token to
+# image_stamp and starts a detached waiter, which ignores SIGHUP so that closing the
+# terminal does not end it. On waking after IMAGE_IDLE_MIN minutes, a waiter that finds
+# another token leaves the work to the waiter of that later run. While a container
+# labelled ncmake still runs, it checks once a minute and begins a fresh idle span
+# once none does; then it runs make image-clean OWN=1 on its own, without the
+# MAKEFLAGS of the run that started it. KEEP=1 and CI still write the token, so the
+# waiter of an earlier run stands down, but start none.
+image_stamp   = $(ncmake_cache)/last-run
+image_engines = $(if $(have_podman),podman) $(if $(have_docker),docker)
+# Expanded once here, so that a recipe line which starts a waiter is never taken for a
+# recursive make call, whose lines make -n runs instead of printing them.
+image_make   := $(MAKE)
+image_idle = sh -c ' \
+	stamp=$$1 idle=$$(($(IMAGE_IDLE_MIN) * 60)) me=$$(date +%s).$$$$; \
+	mkdir -p "$${stamp%/*}" && echo "$$me" >"$$stamp" || exit 0; \
+	[ -z "$(KEEP)$(CI)" ] || exit 0; \
+	( trap "" HUP; \
+	  mine() { [ "$$(cat "$$stamp" 2>/dev/null)" = "$$me" ]; }; \
+	  running() { for c in $(image_engines); do "$$c" ps -q --filter label=ncmake 2>/dev/null; done | grep -q .; }; \
+	  while :; do \
+		sleep $$idle; mine || exit 0; running || break; \
+		while running; do sleep 60; mine || exit 0; done; \
+	  done; \
+	  MAKEFLAGS= MAKELEVEL= $(image_make) -s -f "$$2" -C "$${stamp%/*}" image-clean OWN=1 NCMAKE="$$3" \
+	) </dev/null >/dev/null 2>&1 & \
+	exit 0' image-idle
 # $(call container_run,<image>,<run options>) prepares the image, then starts it. The
 # preparation never stands in the way of the run, whatever it runs into.
-container_run = { $(image_prep) $(container_cli) '$(1)' '$(image_record)' || :; } && $(container) $(2) $(1)
+container_run = { $(image_prep) $(container_cli) '$(1)' '$(image_record)' || :; $(image_idle) '$(image_stamp)' '$(this_ncmake)' '$(NCMAKE)' || :; } && $(container) $(2) $(1)
 
 ifeq ($(filter $(RUNTIME),bare none),)
   php_run   = $(call container_run,$(active_php_image),-e COMPOSER_HOME=/tmp/composer -e COMPOSER_ALLOW_SUPERUSER=1) sh -lc
@@ -971,9 +999,11 @@ app requires. A side that does not apply is skipped; override in ncmake.mk (php_
 node_build_cmd). RUNTIME= selects the container (podman, docker, docker-rootless,
 bare). Each image is pulled again once its last check is older than
 IMAGE_CHECK_MIN minutes (default 1440), and the image that pull superseded is
-removed right away.
+removed right away. The images ncmake pulled are removed once no ncmake container
+has run for IMAGE_IDLE_MIN minutes (default 10); KEEP=1 keeps them.
 
   make build
+  make build KEEP=1                 keep the images for a series of runs
   make dist-clean && make build     reproducible from-scratch build
 endef
 
@@ -1228,6 +1258,7 @@ help::
 	@echo "  $(cd)Container runtime for 'version' (lockfile sync) and 'build': $(c0)$(cv)RUNTIME=...$(c0)$(cd) (now: $(RUNTIME))$(c0)"
 	@echo "    $(cd)podman | docker | docker-rootless | bare   (auto-detected, podman preferred)$(c0)"
 	@echo "    $(cd)Images are checked upstream once per $(cv)IMAGE_CHECK_MIN$(c0)$(cd) minutes (now: $(IMAGE_CHECK_MIN)); a superseded one is removed.$(c0)"
+	@echo "    $(cd)The images ncmake pulled go after $(cv)IMAGE_IDLE_MIN$(c0)$(cd) idle minutes (now: $(IMAGE_IDLE_MIN)); $(cv)KEEP=1$(c0)$(cd) keeps them.$(c0)"
 	@echo ""
 	@echo "$(ch)Build:$(c0)"
 	@echo "  $(ct)build$(c0)                Build PHP deps + frontend (auto-detected from composer.json/package.json)"
