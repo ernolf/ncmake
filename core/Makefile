@@ -136,7 +136,25 @@ php_build_cmd  ?= $(if $(need_composer),composer install --no-dev --prefer-dist 
 # images ship neither bcmath nor soap). Installing the dependencies does not load
 # it, the server that runs the app does, so it is ignored too, and named.
 php_ignored_ext = php -r "\$$r = []; foreach ([\"composer.json\", \"composer.lock\"] as \$$f) { \$$j = json_decode((string) @file_get_contents(\$$f), true) ?: []; \$$r += \$$j[\"platform\"] ?? []; foreach (array_merge([\$$j], \$$j[\"packages\"] ?? [], \$$j[\"packages-dev\"] ?? []) as \$$p) { \$$r += \$$p[\"require\"] ?? []; } } \$$r = array_change_key_case(\$$r); \$$l = []; foreach (get_loaded_extensions() as \$$e) { \$$l[\"ext-\" . str_replace(\" \", \"-\", strtolower(\$$e))] = true; } \$$m = array_values(array_filter(array_keys(array_diff_key(\$$r, \$$l)), fn(\$$n) => strncmp(\$$n, \"ext-\", 4) === 0)); if (\$$m) { fwrite(STDERR, \"composer: ignoring \" . implode(\", \", \$$m) . \" - required, but missing from the build image\" . PHP_EOL); } echo implode(\",\", array_merge(array_keys(array_diff_key(\$$l, \$$r)), \$$m));"
-node_build_cmd ?= $(if $(need_npm),npm ci && npm run build)
+# The lock file names the package manager, and installing from it is what makes
+# the frontend build reproducible; npm-shrinkwrap.json wins over package-lock.json,
+# as in npm. Without a lock file the dependencies are resolved anew: the build
+# still runs, with npm install, and says that it is not reproducible.
+# yarn.lock tells the two yarn lines apart: Yarn 2 and later write a __metadata
+# block and take --immutable, Yarn 1 writes "yarn lockfile v1" and takes
+# --frozen-lockfile.
+node_lock      = $(firstword $(wildcard npm-shrinkwrap.json package-lock.json pnpm-lock.yaml yarn.lock))
+node_pm        = $(if $(filter pnpm-lock.yaml,$(node_lock)),pnpm,$(if $(filter yarn.lock,$(node_lock)),yarn,npm))
+yarn_frozen    = $(if $(shell grep -q '^__metadata:' yarn.lock 2>/dev/null && echo 1),--immutable,--frozen-lockfile)
+node_install   = $(if $(filter pnpm,$(node_pm)),pnpm install --frozen-lockfile,$(if $(filter yarn,$(node_pm)),yarn install $(yarn_frozen),$(if $(node_lock),npm ci,npm install)))
+node_build_cmd ?= $(if $(need_npm),$(node_install) && $(node_pm) run build)
+# pnpm and yarn come through corepack, in the version the packageManager field of
+# package.json names. Node 25 and later no longer ship corepack, so there it is
+# installed from npm first. The shims go to a directory on PATH, where a script
+# that calls pnpm or yarn itself finds them too. AUTO_PIN=0 keeps corepack from
+# writing a packageManager field into the app's package.json.
+node_pm_prefix = /tmp/.node-pm
+node_pm_setup  = $(if $(filter pnpm yarn,$(node_pm)),export PATH=$(node_pm_prefix)/bin:$$PATH COREPACK_ENABLE_AUTO_PIN=0 COREPACK_ENABLE_DOWNLOAD_PROMPT=0; { command -v corepack >/dev/null || npm install --global --prefix $(node_pm_prefix) corepack; } && corepack enable --install-directory $(node_pm_prefix)/bin $(node_pm) && )
 
 # == Container runtime (used by 'make version' and 'make build') ==
 # composer/npm run in throwaway containers, so the host needs no PHP/Node toolchain.
@@ -214,7 +232,7 @@ endif
 
 ifeq ($(filter $(RUNTIME),bare none),)
   php_run   = $(container) -e COMPOSER_HOME=/tmp/composer -e COMPOSER_ALLOW_SUPERUSER=1 $(active_php_image) sh -lc
-  node_run  = $(container) -e npm_config_cache=/tmp/.npm $(node_image) sh -lc
+  node_run  = $(container) -e npm_config_cache=/tmp/.npm -e COREPACK_HOME=/tmp/.corepack $(node_image) sh -lc
   reuse_run = $(container) $(reuse_image)
 endif
 
@@ -544,7 +562,8 @@ build: check-app
 		$(php_run) 'export COMPOSER_IGNORE_PLATFORM_REQ="$$($(php_ignored_ext))"; $(php_build_cmd)' || exit 1; \
 	else echo "(composer: nothing to build)"; fi
 	@if [ -n "$(node_build_cmd)" ]; then \
-		echo "+ $(node_build_cmd)"; $(node_run) '$(node_build_cmd)' || exit 1; \
+		if [ -z "$(node_lock)" ]; then echo "npm: no lock file, so the dependencies are resolved anew and this build is not reproducible" >&2; fi; \
+		echo "+ $(node_build_cmd)"; $(node_run) '$(node_pm_setup)$(node_build_cmd)' || exit 1; \
 	else echo "(npm: nothing to build)"; fi
 
 # Generic pass-through into the throwaway containers: run any composer or npm
@@ -773,7 +792,10 @@ Builds the PHP dependencies and the frontend, each in a throwaway container, so
 the host needs neither PHP nor Node. What runs is detected from your files:
   composer install --no-dev    when composer.json declares runtime requirements
                                or the app has composer/autoload.php
-  npm ci && npm run build      when package.json has a build script
+  npm ci && npm run build      when package.json has a build script; with
+                               pnpm-lock.yaml or yarn.lock that package manager,
+                               through corepack; without a lock file npm install,
+                               and the build is not reproducible
 Composer ignores the PHP extensions the build image loads but neither
 composer.json nor a locked package requires, so the build fails only on what the
 app requires. A side that does not apply is skipped; override in ncmake.mk (php_build_cmd,
