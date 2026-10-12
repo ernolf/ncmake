@@ -636,8 +636,16 @@ npm: check-app
 # REUSE compliance check (https://reuse.software) with the official fsfe/reuse
 # container image; RUNTIME=bare expects the reuse tool on the host. ARGS is
 # forwarded to reuse lint, e.g. --json for a machine-readable report.
+# The REUSE Specification requires LICENSES/ of every compliant project, and
+# REUSE.toml or the deprecated .reuse/dep5 are the other ways to state licensing.
+# An app with none of them never claimed compliance, so linting it would only list
+# every file; FORCE=1 lints it anyway.
 reuse: check-app
 	@echo "==> reuse lint (RUNTIME=$(RUNTIME))"
+	@if [ -z "$(FORCE)" ] && [ ! -d LICENSES ] && [ ! -e REUSE.toml ] && [ ! -e .reuse/dep5 ]; then \
+		echo "Not set up for REUSE: no LICENSES/, REUSE.toml or .reuse/dep5. FORCE=1 lints it anyway."; \
+		exit 1; \
+	fi
 	@$(reuse_run) lint $(ARGS)
 
 # Abort (do not ship a broken file set) when a build output is missing. Only
@@ -896,14 +904,17 @@ Examples:
 endef
 
 define help_reuse
-make reuse [ARGS="<reuse lint arguments>"]
+make reuse [ARGS="<reuse lint arguments>"] [FORCE=1]
 
 Runs the REUSE compliance check (reuse.software) in the fsfe/reuse container:
 every file must carry a license, via an SPDX header or a REUSE.toml annotation.
 RUNTIME=bare expects the reuse tool on the host. ARGS is forwarded to reuse lint.
+An app without LICENSES/, REUSE.toml and .reuse/dep5 is reported as not set up
+for REUSE in one line, without a lint; FORCE=1 lints it anyway.
 
   make reuse                 check
   make reuse ARGS=--json     the report as JSON
+  make reuse FORCE=1         lint an app that is not set up for REUSE
 endef
 
 define help_dist
