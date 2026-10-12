@@ -15,11 +15,11 @@ Everything is derived from the app itself, so a standard app needs no build conf
 
 ## Quick start
 
-Commit the bootstrap stub as your app's `Makefile`, once:
+Commit the bootstrap stub as your app's `GNUmakefile`, once:
 
 ```sh
-curl -fLO https://raw.githubusercontent.com/ernolf/ncmake/main/bootstrap/Makefile
-git add Makefile
+curl -fLO https://raw.githubusercontent.com/ernolf/ncmake/main/bootstrap/GNUmakefile
+git add GNUmakefile
 ```
 
 That single dozen-line file is all your repository carries: it fetches the real Makefile into a per-machine cache and includes it from there, so every clone of your app runs the current ncmake from one shared cache — nothing else lands in your checkout. Then:

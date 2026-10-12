@@ -4,7 +4,9 @@
 # ncmake bootstrap - fetches and includes the shared Nextcloud app Makefile.
 # https://github.com/ernolf/ncmake
 #
-# Commit this file as the Makefile of your app; it never needs to change again.
+# Commit this file as the GNUmakefile of your app; it never needs to change again.
+# GNU make reads GNUmakefile before makefile and Makefile, so the stub is read
+# whatever other build file the app keeps; such a file runs with make -f <name>.
 # The real Makefile is cached once per machine under ~/.cache/ncmake/ (shared by
 # all apps) and keeps itself up to date. Pin a fixed version by setting NCMAKE_REF
 # to a tag instead of main.
