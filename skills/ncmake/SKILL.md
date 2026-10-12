@@ -44,7 +44,7 @@ Follow these before proposing any command. They are the mistakes that cost the m
 | --- | --- |
 | `appinfo/info.xml` | `<id>` (app id, tarball and stage directory name), `<version>`, `<dependencies><php min-version>` (the build image) |
 | `composer.json` | a composer step is needed when `require` holds anything besides `php` and `ext-*`, or when `composer/autoload.php` exists; the version is bumped here too when the key exists |
-| `package.json` | an npm step is needed when `scripts.build` exists; the lock file picks npm, pnpm or yarn; `engines.node` picks the Node image; the version is bumped here too |
+| `package.json` | an npm step is needed when `scripts.build` exists; the lock file picks npm, pnpm or yarn; `engines.node` picks the Node image, the newest LTS line it allows that is not end of life; the version is bumped here too |
 | `.gitignore` | classifies `js/` and `vendor/`: ignored means build output that must be built before shipping, committed means a fresh checkout is already dist ready |
 | `.nextcloudignore` | optional, rsync exclude syntax, filters within the shipped file set |
 | `.ncmake/certificate.crt` | optional, the committed public certificate that marks the app as signed and pins every verification against it |
@@ -92,7 +92,7 @@ Follow these before proposing any command. They are the mistakes that cost the m
 | --- | --- | --- |
 | `ghcr.io/nextcloud/continuous-integration-php<min-version>` | `make build` | dependencies resolve against the declared support floor, which is what a correct package needs |
 | `docker.io/library/composer:2` | `make composer`, `make psalm` | newest PHP patch plus composer, git and unzip, which current dev tools need |
-| `node:<engines.node major>`, fallback `node:lts` | every npm run, `build-verify` | the Node version the app declares |
+| `node:<major>`, the newest LTS line `engines.node` allows that is not end of life, fallback `node:lts` | every npm run, `build-verify` | the Node version the app declares |
 | `node:lts` (`lib_node_image`) | `consistency-audit`, `bundle-report`, `build-audit` | the analysers need Node 18 or newer and build nothing, so the app's Node does not apply |
 | `docker.io/fsfe/reuse` | `make reuse` | the REUSE compliance checker |
 

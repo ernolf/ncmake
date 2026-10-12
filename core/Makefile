@@ -186,7 +186,7 @@ no_runtime   = sh -c 'echo >&2; echo "ERROR: no container runtime found (podman/
 #                    a current runtime matters - psalm needs a recent patch - while the
 #                    analysed PHP level stays pinned through psalm.xml, so the image's fixed
 #                    PHP version does not affect the result.
-# The Node image comes from package.json's engines.node.
+# The Node image comes from package.json's engines.node, see node_major.
 # An info.xml without <php> still has a PHP floor: the one its oldest declared server
 # refuses to run below. Each server states it in its own lib/versioncheck.php, read
 # here from its stable branch, or from master for a major that has none yet.
@@ -198,7 +198,17 @@ nc_php_floor  = $(shell { curl -fsSL "$(nc_server_raw)/stable$(1)/lib/versionche
 # patch level is dropped.
 php_major_minor = $(if $(1),$(word 1,$(subst ., ,$(1))).$(or $(word 2,$(subst ., ,$(1))),0))
 php_min       = $(or $(call php_major_minor,$(php_declared)),$(call nc_php_floor,$(nc_min)),$(error No PHP floor: appinfo/info.xml declares no php min-version and lib/versioncheck.php of Nextcloud $(nc_min) could not be read))
-node_major  = $(shell python3 -c 'import json,re;print(re.search(r"[0-9]+", json.load(open("package.json"))["engines"]["node"]).group())' 2>/dev/null)
+# The build Node is the newest LTS line that engines.node allows and that is not
+# end of life by the Node.js release schedule: an open range such as >=18 is a
+# floor, not the version to build on. When no LTS line fits, the newest current
+# line that does; when only end-of-life lines fit, the newest of them, with a
+# warning. Without engines.node the image is node:lts. When the schedule cannot be
+# read, node_schedule_fallback stands in, a snapshot of it from 2026-10.
+node_schedule_url      = https://raw.githubusercontent.com/nodejs/Release/main/schedule.json
+node_schedule_fallback = {"v20":{"lts":"2023-10-24","end":"2026-04-30"},"v22":{"lts":"2024-10-29","end":"2027-04-30"},"v24":{"lts":"2025-10-28","end":"2028-04-30"},"v26":{"lts":"2026-10-28","end":"2029-04-30"}}
+node_pick   = $(if $(wildcard package.json),$(shell { curl -fsSL "$(node_schedule_url)" 2>/dev/null || echo '$(node_schedule_fallback)'; } | python3 -c 'import json,re,sys,datetime; r=re.sub(r"([<>=^~]+)\s+",r"\1",re.sub(r"(\S+)\s+-\s+(\S+)",r">=\1 <=\2",str(json.load(open("package.json")).get("engines",{}).get("node","")).strip())); s=json.load(sys.stdin); t=datetime.date.today().isoformat(); I=(1e9,0,0); P=lambda x:[int(n) for n in re.match(r"[v=]*([0-9.]*)",x).group(1).split(".") if n][:3]; pad=lambda p:tuple((p+[0,0,0])[:3]); up=lambda p:pad(p[:-1]+[p[-1]+1]) if p else I; C=lambda o,p:{"^":(pad(p),up(p[:1])),"~":(pad(p),up(p[:2])),">=":(pad(p),I),">":(up(p),I),"<":((0,0,0),pad(p)),"<=":((0,0,0),up(p))}.get(o,(pad(p),up(p))); ok=lambda M:any(all(max(lo,(M,0,0))<min(hi,(M+1,0,0)) for lo,hi in (C(m.group(1),P(m.group(2))) for m in (re.match(r"([<>]=?|[\^~]?)(.*)",c) for c in a.split()))) for a in r.split("||")); M=sorted((int(k[1:]) for k in s if re.fullmatch(r"v[0-9]+",k)),reverse=True); live=lambda m:s["v"+str(m)].get("end","")>t; lts=lambda m:s["v"+str(m)].get("lts","9")<=t; c=[m for m in M if ok(m) and live(m) and lts(m)] or [m for m in M if ok(m) and live(m)]; x=c[:1] or [m for m in M if ok(m)][:1]; print(" ".join([str(x[0])]+([] if c else ["eol"])) if r and x else "")' 2>/dev/null))
+node_major  = $(call node_major_of,$(node_pick))
+node_major_of = $(if $(filter eol,$(1)),$(warning engines.node in package.json allows only end-of-life Node lines - building on Node $(firstword $(1))))$(firstword $(1))
 php_image      ?= ghcr.io/nextcloud/continuous-integration-php$(php_min):latest
 analysis_image ?= docker.io/library/composer:2
 node_image     ?= node:$(or $(node_major),lts)
@@ -846,7 +856,8 @@ define help_npm
 make npm ARGS="<npm arguments>"
 
 Runs any npm command in the throwaway Node container; no Node on the host. The
-image comes from engines.node in package.json.
+image is the newest Node LTS line that engines.node in package.json allows and
+that is not end of life.
 
 Examples:
   make npm ARGS=ci                   install from package-lock.json
