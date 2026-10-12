@@ -42,7 +42,7 @@ Follow these before proposing any command. They are the mistakes that cost the m
 
 | Source | What it decides |
 | --- | --- |
-| `appinfo/info.xml` | `<id>` (app id, tarball and stage directory name), `<version>`, `<dependencies><php min-version>` (the build image) |
+| `appinfo/info.xml` | `<id>` (app id, tarball and stage directory name), `<version>`, `<dependencies><php min-version>` (the build image, never below the PHP floor of the newest end-of-life Nextcloud major) |
 | `composer.json` | a composer step is needed when `require` holds anything besides `php` and `ext-*`, or when `composer/autoload.php` exists; the version is bumped here too when the key exists |
 | `package.json` | an npm step is needed when `scripts.build` exists; the lock file picks npm, pnpm or yarn; `engines.node` picks the Node image, the newest LTS line it allows that is not end of life; the version is bumped here too |
 | `.gitignore` | classifies `js/` and `vendor/`: ignored means build output that must be built before shipping, committed means a fresh checkout is already dist ready |
@@ -90,7 +90,7 @@ Follow these before proposing any command. They are the mistakes that cost the m
 
 | Image | Used by | Purpose |
 | --- | --- | --- |
-| `ghcr.io/nextcloud/continuous-integration-php<min-version>` | `make build` | dependencies resolve against the declared support floor, which is what a correct package needs |
+| `ghcr.io/nextcloud/continuous-integration-php<floor>` | `make build` | dependencies resolve against the PHP floor, which is what a correct package needs: the declared `min-version`, raised to the floor of the newest end-of-life Nextcloud major when it is lower |
 | `docker.io/library/composer:2` | `make composer`, `make psalm` | newest PHP patch plus composer, git and unzip, which current dev tools need |
 | `node:<major>`, the newest LTS line `engines.node` allows that is not end of life, fallback `node:lts` | every npm run, `build-verify` | the Node version the app declares |
 | `node:lts` (`lib_node_image`) | `consistency-audit`, `bundle-report`, `build-audit` | the analysers need Node 18 or newer and build nothing, so the app's Node does not apply |
