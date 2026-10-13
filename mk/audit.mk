@@ -25,6 +25,7 @@
 # names, decoded as UTF-8, and the section that names the version in info.xml. A
 # misspelled name or a heading the store does not recognise publishes the release
 # without a changelog, silently. Like the audit, it reads the checkout only.
+# make tag runs it before the confirmation, through the core's tag_check.
 #
 # This is its own module rather than a third target in mk/bundle.mk because a
 # module file cannot be renamed: the core includes every *.mk-<ref> it finds in the
@@ -81,6 +82,11 @@ verify_transient = $(if $(filter $(RUNTIME),bare none),,BUILD_VERIFY_TRANSIENT=1
 # analyser section this module expects. Say which side is behind rather than run an
 # empty command.
 audit_core = $(if $(ncmake_lib_read_run),:,echo "ERROR: this module needs a newer ncmake core - run 'make self-update'" >&2; exit 1)
+
+# make tag checks the changelog the way the App Store reads it rather than by the
+# core's heading grep. A second make, so that the goal changelog-lint fetches the
+# analyser it needs.
+tag_check = $(MAKE) --no-print-directory changelog-lint || { echo "ERROR: make tag stops on the [!] findings above - fix the changelog, or tag regardless with NO_CHANGELOG_LINT=1." >&2; exit 1; }
 
 .PHONY: consistency-audit build-verify changelog-lint
 
@@ -204,11 +210,18 @@ or ## v1.2.3. A version with a '-' is a pre-release and is read from the
 ## [Unreleased] section, as a nightly is. Whatever the store does not find, the
 release is published without, and nothing reports it.
 
+A tagged pre-release (1.2.3-rc.1) is a release of its own, and the check asks for
+the section that names it, ## [1.2.3-rc.1], as make changelog writes it. The
+store shows that section with the stable 1.2.3, below its own. On the page of
+the pre-release itself it shows ## [Unreleased]; that is reported with [i], not
+demanded.
+
 That is what this reports: [!] for no CHANGELOG.md, for a name that differs only
 in its spelling (changelog.md, CHANGELOG.MD, CHANGELOG.De.md) together with the
 git mv that fixes it, for a language code the store does not know, for a file that
-is not UTF-8, and for a changelog without a section for this version; [i] for a
-changelog under a name the store never reads (CHANGES.md, HISTORY.md, CHANGELOG);
+is not UTF-8, and for a changelog without a section for this version or with an
+empty one; [i] for a changelog under a name the store never reads (CHANGES.md,
+HISTORY.md, CHANGELOG);
 [ok] with the lines of the section in each language. The rules are those of the
 App Store's release parser, and its language list is written into the analyser.
 
@@ -216,7 +229,9 @@ ncmake ships CHANGELOG.md and every CHANGELOG.*.md, each with its .license
 sidecar. make changelog writes the English section; a translation is written by
 hand.
 
-The exit code is 1 when a finding is marked [!], so the target can gate a release.
+The exit code is 1 when a finding is marked [!]. make tag runs this check before
+its confirmation and refuses on that exit code; make tag NO_CHANGELOG_LINT=1 tags
+regardless. Elsewhere the exit code stops a chain of commands, or fails a CI job.
 ARGS is passed to the analyser; a bare word in it is the checkout to check
 (default: the current directory):
   make changelog-lint                      this app, this version

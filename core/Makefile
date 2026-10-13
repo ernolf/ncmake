@@ -619,6 +619,15 @@ tag_message = $(cache_dir)/tag-message
 # can hold it.
 tag_hook ?= :
 
+# Checks the changelog before the confirmation and fails the tag when it is not
+# ready. The audit module puts changelog-lint here; without it, make tag only
+# looks for the heading of this version in CHANGELOG.md, spelled as the App Store
+# accepts it. NO_CHANGELOG_LINT=1 skips either, for a release that is meant to go
+# out regardless.
+tag_check ?= re=$$(printf '%s' '$(version)' | sed 's/[.]/\\./g'); \
+	[ ! -f CHANGELOG.md ] || grep -qE "^\#\# \[?v?$$re(\]|[[:space:]]|$$)" CHANGELOG.md || \
+	{ echo "ERROR: no '\#\# [$(version)]' section in CHANGELOG.md - run 'make changelog' (and merge it) first." >&2; exit 1; }
+
 tag: check-app
 	@ver="$(version)"; \
 	git rev-parse --verify --quiet "refs/tags/v$$ver" >/dev/null && { echo "Tag v$$ver already exists - run 'make version' first" >&2; exit 1; }; \
@@ -630,14 +639,16 @@ tag: check-app
 		echo "ERROR: the working tree is not clean, untracked files included - the release is packed from the checkout, so anything only this machine has would reach the tarball and nothing else." >&2; \
 		git status --short >&2; exit 1; \
 	fi; \
+	if [ "$(NO_CHANGELOG_LINT)" = 1 ]; then \
+		echo "==> NO_CHANGELOG_LINT=1: the changelog is not checked."; \
+	else \
+		$(tag_check) || exit 1; \
+	fi; \
 	echo "############################################################################"; \
 	echo "##  About to create the signed tag v$$ver at the CURRENT commit."; \
 	echo "##  EVERYTHING that belongs in this release MUST be committed NOW:"; \
 	echo "##  CHANGELOG.md (## [$$ver]) and all release content. A tag is frozen."; \
 	echo "############################################################################"; \
-	if [ -f CHANGELOG.md ] && ! grep -q "^## \[$$ver\]" CHANGELOG.md; then \
-		echo "ERROR: no '## [$$ver]' section in CHANGELOG.md - run 'make changelog' (and merge it) first." >&2; exit 1; \
-	fi; \
 	printf 'Create and push the signed tag v%s now? [y/N] ' "$$ver"; read yn; \
 	if [ "$$yn" = y ] || [ "$$yn" = Y ]; then \
 		mkdir -p "$(cache_dir)"; printf 'Release %s\n' "$$ver" > "$(tag_message)"; \
@@ -1238,12 +1249,19 @@ define help_tag
 make tag    (maintainer, on main or the stable* branch after the merge)
 
 Refuses to re-tag, refuses a working tree that is not clean (untracked files
-included - the release is packed from the checkout), refuses when CHANGELOG.md
-has no "## [X.Y.Z]" section, then creates and pushes the signed vX.Y.Z tag after
-confirmation. Publishing the release triggers the release workflow, which
+included - the release is packed from the checkout), checks the changelog, then
+creates and pushes the signed vX.Y.Z tag after confirmation. Publishing the release triggers the release workflow, which
 attaches the tarball asset. A release from a stable* branch must not be marked
 as the latest release on GitHub, and a pre-release (X.Y.Z-rc.N) must be marked as
 a pre-release; make tag reminds of both.
+
+The changelog check runs before the confirmation. With the audit module
+(make dev-init) it is make changelog-lint, which refuses on a [!] finding, such
+as a changelog the App Store would not show this release from, or a pre-release
+without a section of its own. Without the module, make tag refuses when
+CHANGELOG.md has no "## [X.Y.Z]" section.
+
+  make tag NO_CHANGELOG_LINT=1    skip the check and tag regardless
 
 Between the confirmation and the tag, $$(tag_hook) may add lines to the tag
 message; the integrity module installs its signature step there.
