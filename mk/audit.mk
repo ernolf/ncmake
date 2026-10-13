@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
 # SPDX-License-Identifier: MIT
 #
-# ncmake developer module: two checks on a checkout.
+# ncmake developer module: three checks on a checkout.
 #
 # consistency-audit reads the metadata of a checkout and holds the statements it
 # finds against each other: the version in appinfo/info.xml against the one in
@@ -20,6 +20,12 @@
 # reproducible. It installs and builds, so unlike the audit it needs the network
 # and takes minutes, and it writes nothing into the app.
 #
+# changelog-lint reads the changelogs the way the App Store reads them when a
+# release is published: CHANGELOG.md and CHANGELOG.<code>.md under exactly those
+# names, decoded as UTF-8, and the section that names the version in info.xml. A
+# misspelled name or a heading the store does not recognise publishes the release
+# without a changelog, silently. Like the audit, it reads the checkout only.
+#
 # This is its own module rather than a third target in mk/bundle.mk because a
 # module file cannot be renamed: the core includes every *.mk-<ref> it finds in the
 # per-machine cache and dev-init only ever adds files, so a renamed bundle.mk would
@@ -27,10 +33,10 @@
 # separate file costs nothing beyond its own header: fetching the analysers is the
 # core's, under "Analyser libraries" there.
 #
-# The same discovery rule is why build-verify is a second target in this file and
-# not a module of its own: a new module file reaches a machine only on the next
-# dev-init, while a target added to a file the cache already holds arrives with the
-# next refresh.
+# The same discovery rule is why build-verify and changelog-lint are targets in this
+# file and not modules of their own: a new module file reaches a machine only on the
+# next dev-init, while a target added to a file the cache already holds arrives with
+# the next refresh.
 #
 # Names here must stay distinct from mk/bundle.mk: that file is read after this one
 # and would otherwise overwrite this module's variables without a word. ncmake_libs
@@ -42,10 +48,11 @@
 # decides what is worth saying.
 consistency_libs = consistency-audit.mjs report-text.mjs
 verify_libs      = build-verify.mjs report-text.mjs
+changelog_libs   = changelog-lint.mjs report-text.mjs
 
 # What the goals on this command line need, handed to the core's analyser library
 # section: appended, never set, because every analyser module adds its own.
-ncmake_libs += $(if $(filter consistency-audit,$(MAKECMDGOALS)),$(consistency_libs)) $(if $(filter build-verify,$(MAKECMDGOALS)),$(verify_libs))
+ncmake_libs += $(if $(filter consistency-audit,$(MAKECMDGOALS)),$(consistency_libs)) $(if $(filter build-verify,$(MAKECMDGOALS)),$(verify_libs)) $(if $(filter changelog-lint,$(MAKECMDGOALS)),$(changelog_libs))
 
 # The app is mounted at /app inside the container, so the mount point cannot tell
 # the analyser what the app directory is called - the one thing it needs the host
@@ -62,6 +69,7 @@ consistency_cmdline = make consistency-audit ARGS=\"%s\"
 # name of the checkout: it names the root it resolved, which inside the container
 # is the mount point, so no second variable is handed in.
 verify_cmdline = make build-verify ARGS=\"%s\"
+changelog_cmdline = make changelog-lint ARGS=\"%s\"
 
 # In a container the scratch tree is in the container's own /tmp and goes with it,
 # so the verifier must neither offer to keep it nor name it as kept. The condition
@@ -74,7 +82,7 @@ verify_transient = $(if $(filter $(RUNTIME),bare none),,BUILD_VERIFY_TRANSIENT=1
 # empty command.
 audit_core = $(if $(ncmake_lib_read_run),:,echo "ERROR: this module needs a newer ncmake core - run 'make self-update'" >&2; exit 1)
 
-.PHONY: consistency-audit build-verify
+.PHONY: consistency-audit build-verify changelog-lint
 
 consistency-audit:
 	@$(audit_core)
@@ -87,6 +95,12 @@ build-verify:
 	@$(call ncmake_lib_need,$(verify_libs))
 	@echo "==> build-verify$(if $(strip $(ARGS)), $(ARGS)) (RUNTIME=$(RUNTIME))" >&2
 	@$(ncmake_lib_run) '$(call ncmake_lib_guard,build-verify) $(verify_transient) BUILD_VERIFY_CMDLINE="$(verify_cmdline)" node $(ncmake_lib_path)/build-verify.mjs $(ARGS)'
+
+changelog-lint:
+	@$(audit_core)
+	@$(call ncmake_lib_need,$(changelog_libs))
+	@echo "==> changelog-lint$(if $(strip $(ARGS)), $(ARGS)) (RUNTIME=$(RUNTIME))" >&2
+	@$(ncmake_lib_read_run) '$(call ncmake_lib_guard,changelog-lint) CHANGELOG_LINT_CMDLINE="$(changelog_cmdline)" node $(ncmake_lib_path)/changelog-lint.mjs $(ARGS)'
 
 define help_consistency-audit
 make consistency-audit [ARGS="<audit arguments>"]
@@ -176,6 +190,45 @@ Where a step fails, the last lines of its output and of its error output are
 printed apart, which in a container is the only record of why.
 endef
 
+define help_changelog-lint
+make changelog-lint [ARGS="<lint arguments>"]
+
+Checks whether the App Store finds this release in the changelog. The store takes
+the changelog from the tarball and reads exactly two kinds of file there:
+  CHANGELOG.md          English
+  CHANGELOG.<code>.md   one per language of its language list, such as
+                        CHANGELOG.de.md or CHANGELOG.pt-br.md
+Each is decoded as UTF-8, and what it shows is the section under the heading that
+names the version in appinfo/info.xml: a line that begins with ## 1.2.3, ## [1.2.3]
+or ## v1.2.3. A version with a '-' is a pre-release and is read from the
+## [Unreleased] section, as a nightly is. Whatever the store does not find, the
+release is published without, and nothing reports it.
+
+That is what this reports: [!] for no CHANGELOG.md, for a name that differs only
+in its spelling (changelog.md, CHANGELOG.MD, CHANGELOG.De.md) together with the
+git mv that fixes it, for a language code the store does not know, for a file that
+is not UTF-8, and for a changelog without a section for this version; [i] for a
+changelog under a name the store never reads (CHANGES.md, HISTORY.md, CHANGELOG);
+[ok] with the lines of the section in each language. The rules are those of the
+App Store's release parser, and its language list is written into the analyser.
+
+ncmake ships CHANGELOG.md and every CHANGELOG.*.md, each with its .license
+sidecar. make changelog writes the English section; a translation is written by
+hand.
+
+The exit code is 1 when a finding is marked [!], so the target can gate a release.
+ARGS is passed to the analyser; a bare word in it is the checkout to check
+(default: the current directory):
+  make changelog-lint                      this app, this version
+  make changelog-lint ARGS=--nightly       the section a nightly is read from
+  make changelog-lint ARGS=--json > changelog.json  machine-readable, nothing else
+  make changelog-lint ARGS=--help          the analyser's own option list
+
+It reads the checkout only: no build, no network. The analyser runs in the
+throwaway Node container and is mounted in from the ncmake cache, so nothing is
+written into the app.
+endef
+
 help::
 	@echo ""
 	@echo "$(ch)Checkout audit (developer module):$(c0)"
@@ -183,3 +236,5 @@ help::
 	@echo "    $(cd)optional $(cv)ARGS=\"--details\"$(cd), see $(cv)make help-consistency-audit$(c0)"
 	@echo "  $(ct)build-verify$(c0)         Whether the committed build output comes from the source beside it"
 	@echo "    $(cd)optional $(cv)ARGS=\"--details\"$(cd), see $(cv)make help-build-verify$(c0)"
+	@echo "  $(ct)changelog-lint$(c0)       Whether the App Store finds this release in the changelog"
+	@echo "    $(cd)optional $(cv)ARGS=\"--nightly\"$(cd), see $(cv)make help-changelog-lint$(c0)"

@@ -98,7 +98,9 @@ endif
 # composer/ holds the autoloader the server loads in place of its PSR-4 fallback
 # for lib/ (see need_composer).
 keep_dirs     = appinfo lib l10n templates img css js vendor composer LICENSES
-keep_files    = CHANGELOG.md AUTHORS AUTHORS.md REUSE.toml COPYING COPYING.md LICENSE LICENSE.md
+# CHANGELOG.<code>.md is a translated changelog, which the App Store reads next to
+# CHANGELOG.md; make changelog-lint names a file whose code it does not know.
+keep_files    = CHANGELOG.md CHANGELOG.*.md AUTHORS AUTHORS.md REUSE.toml COPYING COPYING.md LICENSE LICENSE.md
 # A kept file takes its REUSE sidecar <file>.license along, so the tarball states
 # the license of every file it carries.
 keep_existing = $(wildcard $(keep_dirs) $(keep_files) $(keep_extra) $(addsuffix .license,$(keep_files) $(keep_extra)))
