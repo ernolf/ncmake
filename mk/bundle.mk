@@ -91,15 +91,21 @@ Build first (make build), then report. The analyser runs in the throwaway Node
 container, so the host needs no Node, and it is mounted in from the ncmake cache,
 so nothing is written into the app.
 
+The directory to read is the one the build writes. That is js/, unless git
+ignores no script in js/ but another directory with scripts in it, dist/ for
+example: then that one is read, for scripts and stylesheets alike, and js/ and
+css/ are taken as sources. Where git ignores several such directories, the
+report stops and asks for the one to read.
+
 ARGS is passed to the analyser; a bare word in it is the directory to read
-(default: js):
-  make bundle-report                          all entries of js/
+(default: the build output, see above):
+  make bundle-report                          all entries of the build output
   make bundle-report ARGS=--details           every table behind the findings
   make bundle-report ARGS="--details --top=0"  and no row limit in them
   make bundle-report ARGS="--entry=main.mjs"  one entry only
   make bundle-report ARGS="--details --modules=@nextcloud/vue"  that package
                                               broken down per module
-  make bundle-report ARGS=dist                report on dist/ instead of js/
+  make bundle-report ARGS=dist                report on dist/, stylesheets included
   make bundle-report ARGS=--css=build/css     stylesheets outside ../css
   make bundle-report ARGS=--json > report.json   machine-readable, nothing else
   make bundle-report ARGS=--help              the analyser's own option list
@@ -135,7 +141,8 @@ the figures it is missing, so the audit is useful on a fresh checkout. A js/
 without package.json and without a bundler is taken as written by hand, and no
 finding about source maps, module format or splitting is made about it. It reads
 the checkout only: no build, no install, no network. The analyser runs in the
-throwaway Node container, so the host needs no Node.
+throwaway Node container, so the host needs no Node. The build output is found
+the way bundle-report finds it.
 
 ARGS is passed to the analyser; a bare word in it is the checkout to audit
 (default: the current directory):
