@@ -149,7 +149,7 @@ An older release line, for example 0.7 while `main` is at 0.8, gets its own `sta
 
 ## Developer modules
 
-The App Store, CI workflow, bundle analysis, checkout audit, integrity signature and gh targets are optional modules that live in the ncmake repository under `mk/`. `make dev-init` fetches them into the same per-machine cache as the core Makefile, from where every ncmake app on that machine sees them. The module list is discovered live through the GitHub contents API, so new modules arrive without an ncmake update. `make dev-clean` removes them again, which restores the plain user target set.
+The App Store, CI workflow, bundle analysis, checkout audit, integrity signature, gh and git targets are optional modules that live in the ncmake repository under `mk/`. `make dev-init` fetches them into the same per-machine cache as the core Makefile, from where every ncmake app on that machine sees them. The module list is discovered live through the GitHub contents API, so new modules arrive without an ncmake update. `make dev-clean` removes them again, which restores the plain user target set.
 
 The anonymous GitHub API allows 60 requests an hour per IP. Exporting `GITHUB_TOKEN` or `GH_TOKEN` raises that to 5000 and is worth doing on a machine that runs `dev-init` or `workflows-list` regularly.
 
@@ -292,6 +292,10 @@ Two things about it are worth knowing:
 ## gh module
 
 `make gh-install` sets up the official GitHub CLI package source and installs `gh`, following the upstream install guide. The package manager is auto-detected: apt, dnf5, dnf4, yum, zypper, pacman, apk, brew or conda. On Debian and Ubuntu the source is written in deb822 format as `/etc/apt/sources.list.d/github-cli.sources` with the ASCII-armored signing key inside the file, so no separate keyring is left behind, and the key is verified against the documented fingerprints when gpg is available (override `gh_key_fprs` in `ncmake.mk` after a key rotation). The target is idempotent: an existing source reports that it is up to date, an installed `gh` gets the upgrade command printed instead of being reinstalled. Privileged steps announce themselves and run through sudo; brew and conda never need root.
+
+## git module
+
+`make git-aliases` writes the git aliases of the wiki page [Git tips](https://github.com/ernolf/ncmake/wiki/Git-tips) into the global git configuration of the calling user: the short forms `ci`, `p`, `pf`, `pu`, `amend`, `st`, `lg`, `last` and `alias`, the guarded first push `puh`, the post-merge cleanup `merged` and `gone`, which deletes local branches whose upstream is gone. An alias that is not defined yet is set, one with the same command is reported as up to date, and one the user defined with a different command is left as it is and reported with both commands; `FORCE=1` overwrites it. It needs no root. The commands live in one table in `mk/git.mk`, one line per alias.
 
 ## Self-update and pinning
 

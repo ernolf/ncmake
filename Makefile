@@ -106,6 +106,9 @@ include mk/workflows.mk
 # == Developer module: GitHub CLI ==
 include mk/gh.mk
 
+# == Developer module: git aliases ==
+include mk/git.mk
+
 # == Help footer ==
 help::
 	@echo ""
