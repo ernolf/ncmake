@@ -277,11 +277,7 @@ wf_run = mkdir -p "$(cache_dir)" && printf '%s\n' "$$wf_tool" > "$(cache_dir)/nc
 # PR=1 additionally pushes and opens the pull request via gh, and implies COMMIT=1.
 # Both run on main or on a stable* maintenance branch: a line keeps the workflows
 # of the tag it started from, and the updater only ever runs on the default branch.
-COMMIT ?= 0
-PR     ?= 0
-# BODY=<path>: the text under the bullet list of the pull request, read from a file
-# because markdown with backticks does not survive a command line.
-BODY   ?=
+# COMMIT, PR, BODY and the branch flow they use are defined in the core.
 
 # Pull-request body (the commit itself stays lean: title + bullets): the bullets, a
 # rule, then BODY or, without it, one paragraph per workflow with its description
@@ -297,92 +293,22 @@ endef
 export wf_install_body
 export wf_update_body
 
-# Shared branch/commit/PR flow for COMMIT=1 / PR=1, as a shell function library
-# both targets source (eval) so the git handling lives in one place. The refresh
-# or install runs between _start and _finish, since that part differs per target.
-# _finish derives one bullet per actually changed file straight from the staged
-# diff, so install and update share the same shape and a no-op discards cleanly.
-# _start refuses to run when the target branch already exists locally or on
-# origin, so a stale or in-flight branch fails fast with instructions instead of
-# only surfacing as a rejected push after the work is already committed.
-# _start sets $base (the branch it starts from) and $branch: on stableX.Y the
-# line is appended, so it never collides with an in-flight branch for main.
-# The blank line above the rule in the pull request body is load bearing: '---'
-# right after a line of text makes that line a heading instead of drawing a rule.
+# Finishes the core branch flow for the workflow targets: stages the workflow
+# directory and derives one bullet per actually changed file straight from the
+# staged diff, so install and update share the same shape and a no-op discards
+# cleanly. The pull request text is one paragraph per workflow with its
+# description, followed by the target's sentence.
 define wf_flow
-wf_require_no_remote_branch() {
-    branch="$$1"
-    if git ls-remote --exit-code --heads origin "$$branch" >/dev/null 2>&1; then
-        echo "Remote branch '$$branch' already exists on origin - not committing or pushing." >&2
-        echo "It may have an open pull request, or be an already merged branch that was never deleted." >&2
-        echo "Inspect it, then merge or close its pull request, or delete the branch:" >&2
-        echo "      git push origin --delete $$branch" >&2
-        echo "and run this target again." >&2
-        return 1
-    fi
-}
-wf_branch_start() {
-    base=$$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
-    case "$$base" in
-        main) branch="$$1" ;;
-        stable*) branch="$$1-$$base" ;;
-        *) echo "COMMIT=1/PR=1 must run on 'main' or a 'stable*' branch (you are on '$$base')." >&2
-           return 1 ;;
-    esac
-    if git rev-parse --verify --quiet "refs/heads/$$branch" >/dev/null; then
-        echo "Branch $$branch already exists - delete it (git branch -D $$branch) or push and merge it first." >&2
-        return 1
-    fi
-    wf_require_no_remote_branch "$$branch" || return 1
-    git checkout -b "$$branch"
-}
-wf_branch_abort() {
-    git checkout - >/dev/null 2>&1
-    git branch -D "$$1" >/dev/null 2>&1
-}
 wf_branch_finish() {
     branch="$$1"; title="$$2"; body="$$3"; pr="$$4"
     git add "$(wf_dir)"
-    if git diff --cached --quiet; then
-        echo "==> Nothing to commit - everything is already current. Branch discarded, $$base untouched."
-        wf_branch_abort "$$branch"
-        return 0
-    fi
     names=$$(git diff --cached --name-only -- "$(wf_dir)" | grep -E '\.ya?ml$$' | sed 's#.*/##')
     bullets=$$(printf '%s\n' "$$names" | sed 's#^#- #')
-    printf '%s\n\n%s\n' "$$title" "$$bullets" > "$(cache_dir)/wf_commit_msg"
-    git commit -s -F "$(cache_dir)/wf_commit_msg" || { wf_branch_abort "$$branch"; return 1; }
-    if [ "$$pr" != "1" ]; then
-        echo
-        echo "==> Committed on branch $$branch."
-        echo "    Amend it if you like (git commit --amend), then push:"
-        echo "      git push -u origin $$branch"
-        echo "    Then open a pull request and merge it."
-        return 0
-    fi
-    if ! command -v gh >/dev/null 2>&1; then
-        echo "PR=1 needs the GitHub CLI (gh), which is not installed." >&2
-        echo "Install it with 'make gh-install', or push and open the PR yourself:" >&2
-        echo "      git push -u origin $$branch" >&2
-        return 1
-    fi
-    if ! gh auth status >/dev/null 2>&1; then
-        echo "PR=1 needs an authenticated gh (run 'gh auth login' first)." >&2
-        echo "The commit is on '$$branch'; push and open the PR yourself:" >&2
-        echo "      git push -u origin $$branch" >&2
-        return 1
-    fi
-    if [ -n "$(BODY)" ]; then
-        text=$$(cat "$(BODY)")
-    else
-        text=$$(for n in $$names; do
-            d=$$(awk -F '\t' -v n="$$n" '$$1 == n { print $$2; exit }' "$(cache_dir)/wf_descriptions" 2>/dev/null)
-            printf '**%s**%s\n\n' "$$n" "$${d:+: $$d}"
-        done; printf '%s\n' "$$body")
-    fi
-    git push -u origin "$$branch" || return 1
-    gh pr create --base "$$base" --head "$$branch" --title "$$title" \
-        --body "$$(printf '%s\n\n---\n\n%s\n' "$$bullets" "$$text")"
+    text=$$(for n in $$names; do
+        d=$$(awk -F '\t' -v n="$$n" '$$1 == n { print $$2; exit }' "$(cache_dir)/wf_descriptions" 2>/dev/null)
+        printf '**%s**%s\n\n' "$$n" "$${d:+: $$d}"
+    done; printf '%s\n' "$$body")
+    flow_branch_finish "$$branch" "$$title" "$$bullets" "$$text" "$$pr"
 }
 endef
 export wf_flow
@@ -404,10 +330,10 @@ workflows-install:
 		$(wf_run) install $$names || exit 1; \
 		echo "Review and commit: git add $(wf_dir)/"; \
 	else \
-		eval "$$wf_flow"; \
-		wf_branch_start ncmake/ci/workflows-install || exit 1; \
+		eval "$$branch_flow"; eval "$$wf_flow"; \
+		flow_branch_start ncmake/ci/workflows-install || exit 1; \
 		rm -f "$(cache_dir)/wf_descriptions"; export wf_desc_file="$(cache_dir)/wf_descriptions"; \
-		$(wf_run) install $$names || { wf_branch_abort "$$branch"; echo "install failed - branch discarded." >&2; exit 1; }; \
+		$(wf_run) install $$names || { flow_branch_abort "$$branch"; echo "install failed - branch discarded." >&2; exit 1; }; \
 		wf_branch_finish "$$branch" "ci: install managed CI workflows" "$$wf_install_body" "$$pr"; \
 	fi
 
@@ -417,10 +343,10 @@ workflows-update:
 		$(wf_run) update; \
 		echo "Review and commit: git add $(wf_dir)/"; \
 	else \
-		eval "$$wf_flow"; \
-		wf_branch_start ncmake/ci/workflow-update || exit 1; \
+		eval "$$branch_flow"; eval "$$wf_flow"; \
+		flow_branch_start ncmake/ci/workflow-update || exit 1; \
 		rm -f "$(cache_dir)/wf_descriptions"; export wf_desc_file="$(cache_dir)/wf_descriptions"; \
-		$(wf_run) update || { wf_branch_abort "$$branch"; echo "update failed - branch discarded." >&2; exit 1; }; \
+		$(wf_run) update || { flow_branch_abort "$$branch"; echo "update failed - branch discarded." >&2; exit 1; }; \
 		wf_branch_finish "$$branch" "ci: update managed CI workflows from upstream" "$$wf_update_body" "$$pr"; \
 	fi
 

@@ -432,12 +432,18 @@ endif
 # style and merge commits are left out. The daily Transifex bot commits
 # (fix(l10n): Update translations...) are skipped too - they would produce piles
 # of identical bullets; describe translation updates by hand where they matter.
-# An app can ship its own cliff.toml to override all of this.
+# An app can ship its own cliff.toml to override all of this; make changelog takes
+# the '### <group>' headings and the entries below them from its output and writes
+# the version heading itself.
 define cliff_config
 [changelog]
 header = ""
 body = """
+{% if version -%}
 ## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else -%}
+## [Unreleased]
+{% endif -%}
 {% for group, commits in commits | group_by(attribute="group") %}
 ### {{ group }}
 
@@ -464,6 +470,137 @@ commit_parsers = [
 endef
 export cliff_config
 
+# Writes what git-cliff generated into CHANGELOG.md, in the Keep a Changelog 1.1.0
+# layout with two deviations: a link reference stays directly below its section,
+# and a group without entries gets no heading. --mode unreleased adds the new
+# entries to '## [Unreleased]' (created at the top when missing); --mode release
+# moves what is under it, together with the new entries, into '## [<version>]'
+# directly below it and leaves the heading. Existing lines are kept word for word,
+# so hand-written entries survive and move with the rest. Exit 2 means nothing was
+# written, because there was nothing new to write. --entries receives the new
+# entries, which become the bullets of the commit.
+define changelog_tool
+import argparse
+import datetime
+import re
+import sys
+
+# A group Keep a Changelog does not name follows in the order it appears.
+KAC_ORDER = ['Added', 'Changed', 'Deprecated', 'Removed', 'Fixed', 'Security']
+SECTION = re.compile(r'^## ')
+UNRELEASED = re.compile(r'^## \[Unreleased\]', re.IGNORECASE)
+GROUP = re.compile(r'^### +(.*?) *$$')
+LINK_REF = re.compile(r'^\[[^\]]+\]: ')
+
+
+def strip_blank(lines):
+    while lines and not lines[0].strip():
+        lines = lines[1:]
+    while lines and not lines[-1].strip():
+        lines = lines[:-1]
+    return lines
+
+
+def parse(lines):
+    intro, groups, refs, group = [], {}, [], None
+    for line in lines:
+        if LINK_REF.match(line):
+            refs.append(line)
+            continue
+        m = GROUP.match(line)
+        if m:
+            group = m.group(1)
+            groups.setdefault(group, [])
+        elif group is None:
+            intro.append(line)
+        else:
+            groups[group].append(line)
+    return strip_blank(intro), {g: strip_blank(e) for g, e in groups.items()}, refs
+
+
+def merge(groups, new):
+    merged = {g: list(e) for g, e in groups.items()}
+    for g, entries in new.items():
+        merged[g] = merged.get(g, []) + entries
+    return merged
+
+
+def render(heading, intro, groups, refs):
+    out = [heading, '']
+    if intro:
+        out += intro + ['']
+    order = [g for g in KAC_ORDER if g in groups] + [g for g in groups if g not in KAC_ORDER]
+    for g in order:
+        if groups[g]:
+            out += ['### ' + g, ''] + groups[g] + ['']
+    if refs:
+        out += refs + ['']
+    return out
+
+
+def main():
+    p = argparse.ArgumentParser()
+    p.add_argument('--mode', choices=('unreleased', 'release'), required=True)
+    p.add_argument('--changelog', required=True)
+    p.add_argument('--new', required=True)
+    p.add_argument('--entries', required=True)
+    p.add_argument('--version', default='')
+    p.add_argument('--link', default='')
+    p.add_argument('--since', default='', help='the pre-release this release follows, if any')
+    a = p.parse_args()
+
+    with open(a.new, 'r', encoding='utf-8') as f:
+        _, new, _ = parse([line for line in f.read().split('\n') if not SECTION.match(line)])
+    new = {g: e for g, e in new.items() if e}
+    with open(a.changelog, 'r', encoding='utf-8') as f:
+        lines = f.read().split('\n')
+
+    starts = [i for i, line in enumerate(lines) if SECTION.match(line)]
+    top = next((i for i in starts if UNRELEASED.match(lines[i])), None)
+    if top is None:
+        at = starts[0] if starts else len(lines)
+        head, body, tail = lines[:at], [], lines[at:]
+        head = strip_blank(head) + [''] if strip_blank(head) else []
+    else:
+        end = next((i for i in starts if i > top), len(lines))
+        head, body, tail = lines[:top], lines[top + 1:end], lines[end:]
+    intro, groups, refs = parse(body)
+
+    if a.mode == 'unreleased':
+        if not new and top is not None:
+            return 2
+        out = head + render('## [Unreleased]', intro, merge(groups, new), refs) + tail
+    else:
+        moved = merge(groups, new)
+        if not intro and not any(moved.values()):
+            if not a.since:
+                return 2
+            intro = ['No notable changes since %s.' % a.since]
+        section = render('## [%s] - %s' % (a.version, datetime.date.today().isoformat()), intro, moved,
+                         ['[%s]: %s' % (a.version, a.link)] if a.link else [])
+        out = head + render('## [Unreleased]', [], {}, refs) + section + tail
+
+    with open(a.changelog, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(out))
+    with open(a.entries, 'w', encoding='utf-8') as f:
+        f.write(''.join(e + '\n' for entries in new.values() for e in entries if e.startswith('- ')))
+    return 0
+
+
+sys.exit(main())
+endef
+export changelog_tool
+
+changelog_run = mkdir -p "$(cache_dir)" && printf '%s\n' "$$changelog_tool" > "$(cache_dir)/ncmake_changelog.py" && python3 "$(cache_dir)/ncmake_changelog.py"
+
+# Pull-request body of make changelog COMMIT=1 / PR=1 below the bullets, unless
+# BODY replaces it. Exported for the same reason as the workflow bodies: the
+# backticks have to reach the shell as text.
+define changelog_pr_body
+`make changelog` added these entries to CHANGELOG.md from the conventional commits since its last update. Review the diff and merge.
+endef
+export changelog_pr_body
+
 # `make` with no target shows the help instead of building anything.
 .DEFAULT_GOAL := help
 
@@ -472,6 +609,116 @@ all: dist
 # Every functional target needs the app id; help stays runnable anywhere.
 check-app:
 	@test -n "$(app_id)" || { echo >&2; echo "ERROR: no valid <id> found in appinfo/info.xml - run make from a Nextcloud app root." >&2; echo >&2; exit 1; }
+
+# == Branch, commit and pull request flow ==
+
+# COMMIT / PR / AMEND: without them a target only writes its files and prints how
+# to commit them. COMMIT=1 puts the change on a branch of its own and commits it
+# without pushing; PR=1 additionally pushes and opens the pull request via gh, and
+# implies COMMIT=1. AMEND=1 (make changelog) folds the change into the current,
+# unpushed commit instead; with PR=1 it pushes that branch and opens its pull
+# request.
+COMMIT ?= 0
+PR     ?= 0
+AMEND  ?= 0
+# BODY=<path>: the text under the bullet list of the pull request, read from a file
+# because markdown with backticks does not survive a command line.
+BODY   ?=
+
+# Shared branch/commit/PR flow for COMMIT=1 / PR=1, as a shell function library
+# the targets source (eval) so the git handling lives in one place. What a target
+# writes happens between _start and _finish; the target stages it and passes the
+# bullets, so a no-op discards cleanly.
+# _start refuses to run when the target branch already exists locally or on
+# origin, so a stale or in-flight branch fails fast with instructions instead of
+# only surfacing as a rejected push after the work is already committed.
+# _start sets $base (the branch it starts from) and $branch: on stableX.Y the
+# line is appended, so it never collides with an in-flight branch for main.
+# The blank line above the rule in the pull request body is load bearing: '---'
+# right after a line of text makes that line a heading instead of drawing a rule.
+define branch_flow
+flow_require_no_remote_branch() {
+    branch="$$1"
+    if git ls-remote --exit-code --heads origin "$$branch" >/dev/null 2>&1; then
+        echo "Remote branch '$$branch' already exists on origin - not committing or pushing." >&2
+        echo "It may have an open pull request, or be an already merged branch that was never deleted." >&2
+        echo "Inspect it, then merge or close its pull request, or delete the branch:" >&2
+        echo "      git push origin --delete $$branch" >&2
+        echo "and run this target again." >&2
+        return 1
+    fi
+}
+flow_branch_start() {
+    base=$$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+    case "$$base" in
+        main) branch="$$1" ;;
+        stable*) branch="$$1-$$base" ;;
+        *) echo "COMMIT=1/PR=1 must run on 'main' or a 'stable*' branch (you are on '$$base')." >&2
+           return 1 ;;
+    esac
+    if git rev-parse --verify --quiet "refs/heads/$$branch" >/dev/null; then
+        echo "Branch $$branch already exists - delete it (git branch -D $$branch) or push and merge it first." >&2
+        return 1
+    fi
+    flow_require_no_remote_branch "$$branch" || return 1
+    git checkout -b "$$branch"
+}
+flow_branch_abort() {
+    git checkout - >/dev/null 2>&1
+    git branch -D "$$1" >/dev/null 2>&1
+}
+flow_pr() {
+    branch="$$1"; base="$$2"; title="$$3"; bullets="$$4"; text="$$5"
+    if ! command -v gh >/dev/null 2>&1; then
+        echo "PR=1 needs the GitHub CLI (gh), which is not installed." >&2
+        echo "Install it with 'make gh-install', or push and open the PR yourself:" >&2
+        echo "      git push -u origin $$branch" >&2
+        return 1
+    fi
+    if ! gh auth status >/dev/null 2>&1; then
+        echo "PR=1 needs an authenticated gh (run 'gh auth login' first)." >&2
+        echo "The commit is on '$$branch'; push and open the PR yourself:" >&2
+        echo "      git push -u origin $$branch" >&2
+        return 1
+    fi
+    if [ -n "$(BODY)" ]; then
+        text=$$(cat "$(BODY)")
+    fi
+    if [ -z "$$text" ]; then
+        body="$$bullets"
+    elif [ -z "$$bullets" ]; then
+        body="$$text"
+    else
+        body=$$(printf '%s\n\n---\n\n%s\n' "$$bullets" "$$text")
+    fi
+    git push -u origin "$$branch" || return 1
+    gh pr create --base "$$base" --head "$$branch" --title "$$title" --body "$$body"
+}
+flow_branch_finish() {
+    branch="$$1"; title="$$2"; bullets="$$3"; text="$$4"; pr="$$5"
+    if git diff --cached --quiet; then
+        echo "==> Nothing to commit - everything is already current. Branch discarded, $$base untouched."
+        flow_branch_abort "$$branch"
+        return 0
+    fi
+    if [ -n "$$bullets" ]; then
+        printf '%s\n\n%s\n' "$$title" "$$bullets" > "$(cache_dir)/flow_commit_msg"
+    else
+        printf '%s\n' "$$title" > "$(cache_dir)/flow_commit_msg"
+    fi
+    git commit -s -F "$(cache_dir)/flow_commit_msg" || { flow_branch_abort "$$branch"; return 1; }
+    if [ "$$pr" != "1" ]; then
+        echo
+        echo "==> Committed on branch $$branch."
+        echo "    Amend it if you like (git commit --amend), then push:"
+        echo "      git push -u origin $$branch"
+        echo "    Then open a pull request and merge it."
+        return 0
+    fi
+    flow_pr "$$branch" "$$base" "$$title" "$$bullets" "$$text"
+}
+endef
+export branch_flow
 
 # == Release versioning (maintainer only) ==
 
@@ -557,54 +804,115 @@ version: check-app
 	echo "      git push -u origin $$branch"; \
 	echo "    Open a PR against $$cur and merge it; afterwards on $$cur: git pull && make tag"
 
-# Generate the '## [X.Y.Z]' CHANGELOG section for the current info.xml version
-# from the conventional commits since the newest tag reachable from HEAD
-# (git-cliff via npx, in the node container). --use-branch-tags keeps the tags
-# of other release lines out, since --unreleased alone starts at the newest tag
-# of the whole repository. The section is inserted above the previous release, followed
-# by its '[X.Y.Z]:' link reference to the GitHub release tag; the rest of the
-# file - header, preamble and hand-written or hand-extended sections - is
-# never touched, so generated entries can be freely edited before committing.
-# Refuses to duplicate an existing section; reports when there is nothing to
-# document. An app-provided cliff.toml overrides the built-in configuration.
-# A pre-release gets a section of its own, and the release after it lists what
-# came since that pre-release.
+# Fill CHANGELOG.md from the conventional commits (git-cliff via npx, in the node
+# container). Without a pending bump - the info.xml version is the newest tag
+# reachable from HEAD - or with UNRELEASED=1, the new entries go under
+# '## [Unreleased]'. After make version they go, together with everything under
+# '## [Unreleased]', into the '## [X.Y.Z]' section of the info.xml version, followed
+# by its '[X.Y.Z]:' link reference to the GitHub release tag; '## [Unreleased]'
+# keeps only its heading. A pre-release gets a section of its own, and the release
+# after it lists what came since that pre-release; when nothing came, the line
+# 'No notable changes since X.Y.Z-rc.N.'.
+# Each run takes the commits since the last commit that changed CHANGELOG.md, so
+# what an earlier run wrote, and what was written or edited by hand, is kept word
+# for word. A CHANGELOG.md with uncommitted changes means the previous run is not
+# committed yet: the run stops instead of adding the same commits twice. A commit
+# that a tag already holds is never listed (--unreleased), and --use-branch-tags
+# keeps the tags of other release lines out. The rest of the file - header,
+# preamble and older sections - is never touched. Refuses to duplicate an existing
+# version section; reports when there is nothing to document. An app-provided
+# cliff.toml overrides the built-in configuration.
 changelog: check-app
-	@ver="$(version)"; \
+	@$(if $(BODY),test -r "$(BODY)" || { echo "BODY=$(BODY) is not a readable file" >&2; exit 1; };) \
+	ver="$(version)"; amend="$(AMEND)"; commit="$(COMMIT)"; pr="$(PR)"; \
+	if [ "$$amend" = 1 ] && [ "$$commit" = 1 ]; then echo "AMEND=1 folds the changelog into the current commit, COMMIT=1 makes a new one - pick one." >&2; exit 1; fi; \
+	if [ "$$pr" = 1 ] && [ "$$amend" != 1 ]; then commit=1; fi; \
 	test -f CHANGELOG.md || { echo "ERROR: no CHANGELOG.md - create it once (Keep a Changelog header), then rerun." >&2; exit 1; }; \
-	if grep -q "^## \[$$ver\]" CHANGELOG.md; then \
+	git diff --quiet HEAD -- CHANGELOG.md 2>/dev/null || { echo "ERROR: CHANGELOG.md has uncommitted changes - the previous run is not committed yet. Commit or amend it, or discard it (git checkout -- CHANGELOG.md), then rerun." >&2; exit 1; }; \
+	latest=$$($(git_tags) --list 'v*' --merged HEAD --sort=-v:refname | head -1 | sed 's/^v//'); \
+	if [ "$(UNRELEASED)" = 1 ] || [ "$$ver" = "$$latest" ]; then mode=unreleased; what=Unreleased; else mode=release; what="$$ver"; fi; \
+	if [ "$$mode" = release ] && grep -q "^## \[$$ver\]" CHANGELOG.md; then \
 		echo "CHANGELOG.md already has a '## [$$ver]' section - nothing to do."; exit 0; \
 	fi; \
+	if [ "$$amend" = 1 ] && [ -n "$$(git branch -r --contains HEAD 2>/dev/null)" ]; then \
+		echo "AMEND=1: $$(git log -1 --format='%h %s') is already pushed - amending it would need a force push. Use COMMIT=1, or commit it yourself." >&2; exit 1; \
+	fi; \
 	mkdir -p "$(cache_dir)"; \
-	if [ -f cliff.toml ]; then cfg="cliff.toml"; else cfg="build/cache/cliff.toml"; printf '%s\n' "$$cliff_config" > "$$cfg"; fi; \
+	eval "$$branch_flow"; \
 	base=$$(git config "branch.$$(git rev-parse --abbrev-ref HEAD).ncmake-base" 2>/dev/null || echo main); \
-	since=$$($(git_tags) --list 'v*' --merged HEAD --sort=-v:refname | head -1); \
-	echo "==> Generating changelog for $$ver from commits since $${since:-the first commit} ($(RUNTIME))..."; \
-	$(node_run) "git config --global --add safe.directory /app 2>/dev/null; npx --yes git-cliff@2 --config $$cfg --unreleased --use-branch-tags --tag v$$ver --strip all" > "$(cache_dir)/changelog_new.md" || { echo "git-cliff failed" >&2; exit 1; }; \
-	if ! grep -q '[^[:space:]]' "$(cache_dir)/changelog_new.md" || ! grep -q '^### ' "$(cache_dir)/changelog_new.md"; then \
-		echo "No undocumented user-visible changes since the last tag (only skipped commit types)."; \
-		echo "Add a hand-written '## [$$ver]' section if this release still warrants an entry (e.g. translation updates)."; \
+	if [ "$$commit" = 1 ]; then flow_branch_start ncmake/docs/changelog || exit 1; fi; \
+	if [ -f cliff.toml ]; then cfg="cliff.toml"; else cfg="build/cache/cliff.toml"; printf '%s\n' "$$cliff_config" > "$$cfg"; fi; \
+	last=$$(git log -1 --format=%H -- CHANGELOG.md 2>/dev/null); \
+	if [ "$$mode" = release ]; then tagopt="--tag v$$ver"; else tagopt=""; fi; \
+	if [ -n "$$last" ]; then since="the last change to CHANGELOG.md ($$(git rev-parse --short $$last))"; else since="the first commit"; fi; \
+	echo "==> Generating '## [$$what]' from the untagged commits since $$since ($(RUNTIME))..."; \
+	$(node_run) "git config --global --add safe.directory /app 2>/dev/null; npx --yes git-cliff@2 --config $$cfg --unreleased --use-branch-tags $$tagopt --strip all $${last:+$$last..HEAD}" > "$(cache_dir)/changelog_new.md" \
+		|| { echo "git-cliff failed" >&2; [ "$$commit" = 1 ] && flow_branch_abort "$$branch"; exit 1; }; \
+	pre=""; link=""; \
+	if [ "$$mode" = release ]; then \
+		echo "$$latest" | grep -qE -- '-$(prerelease_re)$$' && pre="$$latest"; \
+		[ -n "$(gh_slug)" ] && link="https://github.com/$(gh_slug)/releases/tag/v$$ver"; \
+	fi; \
+	$(changelog_run) --mode "$$mode" --changelog CHANGELOG.md --new "$(cache_dir)/changelog_new.md" --entries "$(cache_dir)/changelog_entries" \
+		--version "$$ver" --link "$$link" --since "$$pre"; rc=$$?; \
+	if [ "$$rc" = 2 ]; then \
+		[ "$$commit" = 1 ] && flow_branch_abort "$$branch"; \
+		if [ "$$mode" = unreleased ]; then \
+			echo "No undocumented user-visible changes since the last change to CHANGELOG.md (only skipped commit types)."; \
+		else \
+			echo "Nothing under '## [Unreleased]' and no undocumented user-visible changes since the last tag (only skipped commit types)."; \
+			echo "Add a hand-written '## [$$ver]' section if this release still warrants an entry (e.g. translation updates)."; \
+		fi; \
 		exit 0; \
 	fi; \
-	if [ -n "$(gh_slug)" ]; then \
-		printf '\n[%s]: https://github.com/%s/releases/tag/v%s\n' "$$ver" "$(gh_slug)" "$$ver" >> "$(cache_dir)/changelog_new.md"; \
-	fi; \
-	awk -v new="$(cache_dir)/changelog_new.md" ' \
-		/^## \[/ && !done { while ((getline line < new) > 0) print line; print ""; done=1 } \
-		{ print } \
-		END { if (!done) { while ((getline line < new) > 0) print line } }' CHANGELOG.md > "$(cache_dir)/changelog_merged.md"; \
-	mv "$(cache_dir)/changelog_merged.md" CHANGELOG.md; \
-	echo "==> Inserted '## [$$ver]' and its link reference into CHANGELOG.md."; \
-	echo "==> Review and extend it, then commit:"; \
-	if [ "$$(git log -1 --pretty=%s 2>/dev/null)" = "build(release): bump version to $$ver" ] \
-		&& [ "$$(git rev-parse HEAD 2>/dev/null)" != "$$(git rev-parse @{u} 2>/dev/null)" ]; then \
-		echo "      git add CHANGELOG.md && git commit --amend --no-edit"; \
-		echo "    which folds the changelog into the unpushed bump commit - one commit per release."; \
-		echo "    Then:"; \
-		echo "      git push -u origin $$(git rev-parse --abbrev-ref HEAD)"; \
-		echo "    Open a PR against $$base and merge it; afterwards on $$base: git pull && make tag"; \
+	[ "$$rc" = 0 ] || { echo "Writing CHANGELOG.md failed" >&2; [ "$$commit" = 1 ] && flow_branch_abort "$$branch"; exit 1; }; \
+	if [ "$$mode" = release ]; then \
+		echo "==> Inserted '## [$$ver]', with what was under '## [Unreleased]', and its link reference into CHANGELOG.md."; \
+		title="build(release): update changelog for $$ver"; \
 	else \
-		echo "      git add CHANGELOG.md && git commit -s -m 'build(release): update changelog for $$ver'"; \
+		if [ -s "$(cache_dir)/changelog_entries" ]; then echo "==> Added the new entries to '## [Unreleased]' in CHANGELOG.md."; \
+		else echo "==> Added the '## [Unreleased]' heading to CHANGELOG.md, which had none."; fi; \
+		title="docs(changelog): update the unreleased section"; \
+	fi; \
+	bullets=$$(cat "$(cache_dir)/changelog_entries"); \
+	if [ "$$commit" = 1 ]; then \
+		git add CHANGELOG.md; \
+		flow_branch_finish "$$branch" "$$title" "$$bullets" "$$changelog_pr_body" "$$pr"; exit $$?; \
+	fi; \
+	cur=$$(git rev-parse --abbrev-ref HEAD); \
+	if [ "$$amend" = 1 ]; then \
+		git add CHANGELOG.md && git commit --amend --no-edit || exit 1; \
+		echo "==> Folded into $$(git log -1 --format='%h %s')."; \
+		if [ "$$pr" = 1 ]; then \
+			flow_pr "$$cur" "$$base" "$$(git log -1 --format=%s)" "$$(git log -1 --format=%b | sed '/^Signed-off-by:/d')" ""; exit $$?; \
+		fi; \
+		echo "    Then:"; \
+		echo "      git push -u origin $$cur"; \
+		if [ "$$mode" = release ]; then \
+			echo "    Open a PR against $$base and merge it; afterwards on $$base: git pull && make tag"; \
+		else \
+			echo "    Open a PR against $$base and merge it."; \
+		fi; \
+		exit 0; \
+	fi; \
+	echo "==> Review and extend it, then commit:"; \
+	if [ "$$mode" = release ]; then \
+		if [ "$$(git log -1 --pretty=%s 2>/dev/null)" = "build(release): bump version to $$ver" ] \
+			&& [ "$$(git rev-parse HEAD 2>/dev/null)" != "$$(git rev-parse @{u} 2>/dev/null)" ]; then \
+			echo "      git add CHANGELOG.md && git commit --amend --no-edit"; \
+			echo "    which folds the changelog into the unpushed bump commit - one commit per release."; \
+			echo "    Then:"; \
+			echo "      git push -u origin $$cur"; \
+			echo "    Open a PR against $$base and merge it; afterwards on $$base: git pull && make tag"; \
+		else \
+			echo "      git add CHANGELOG.md && git commit -s -m '$$title'"; \
+		fi; \
+	else \
+		if [ -z "$$(git branch -r --contains HEAD 2>/dev/null)" ]; then \
+			echo "      git add CHANGELOG.md && git commit --amend --no-edit"; \
+			echo "    which folds it into the commit it describes ($$(git log -1 --format='%h %s')), or on its own:"; \
+		fi; \
+		echo "      git add CHANGELOG.md && git commit -s -m '$$title'"; \
 	fi
 
 # Freeze the current HEAD as a signed release tag. Everything that belongs in the
@@ -1233,16 +1541,41 @@ selects the container for the lockfile sync.
 endef
 
 define help_changelog
-make changelog    (maintainer, on the release branch)
+make changelog [UNRELEASED=1] [AMEND=1|COMMIT=1] [PR=1 [BODY=<path>]]
 
-Generates the "## [X.Y.Z]" CHANGELOG section from the conventional commits since
-the newest tag reachable from HEAD (feat to Added, fix to Fixed, perf to Changed; build/ci/test/chore/
-docs/refactor/style, merges and Transifex bot commits are skipped) and inserts it
-with its link reference. Prints the exact commit command: while the version bump
-is still unpushed it folds in via git commit --amend --no-edit (one commit per
-release). A pre-release gets a section of its own, and the release after it lists
-what came since that pre-release. Rerunning is safe; an app-provided cliff.toml
-overrides the built-in config.
+Fills CHANGELOG.md from the conventional commits since the last commit that
+changed it (feat to Added, fix to Fixed, perf to Changed;
+build/ci/test/chore/docs/refactor/style, merges and Transifex bot commits are
+skipped). What was written before, by an earlier run or by hand, is kept word
+for word.
+
+Without a pending version bump (or with UNRELEASED=1) the new entries go under
+"## [Unreleased]", on any branch, for example right after the commit they
+describe. After make version, on the release branch, everything under
+"## [Unreleased]" moves together with the new entries into the "## [X.Y.Z]"
+section with its link reference, and "## [Unreleased]" keeps its heading. A
+pre-release gets a section of its own, and the release after it lists what came
+since that pre-release ("No notable changes since X.Y.Z-rc.N." when nothing
+came). Groups follow Keep a Changelog (Added, Changed, Deprecated, Removed,
+Fixed, Security); a group without entries gets no heading. A CHANGELOG.md with
+uncommitted changes stops the run: commit the previous one first.
+
+Without flags it prints the exact commit command: git commit --amend --no-edit
+while the commit it belongs to is unpushed (after make version the bump commit,
+so a release stays one commit). AMEND=1 runs that amend itself, and refuses on a
+pushed commit; with PR=1 it also pushes the branch and opens the pull request
+against the branch it started from. COMMIT=1 runs from main or a stable* branch:
+it opens ncmake/docs/changelog (on stableX.Y: ncmake/docs/changelog-stableX.Y),
+commits with one bullet per new entry and prints the push command; PR=1 implies
+it, pushes and opens the pull request. BODY=<path> replaces the text below the
+bullets of the pull request. An app-provided cliff.toml overrides the built-in
+config.
+
+Examples:
+  make changelog
+  make changelog AMEND=1
+  make changelog AMEND=1 PR=1
+  make changelog PR=1
 endef
 
 define help_tag
@@ -1380,7 +1713,7 @@ help::
 	@echo ""
 	@echo "$(ch)Release versioning (maintainer only):$(c0)"
 	@echo "  $(ct)version$(c0)              Open a release branch with the version bump for a PR (prompts)  $(cm)[m]$(c0)"
-	@echo "  $(ct)changelog$(c0)            Generate the '## [version]' CHANGELOG section from the commits  $(cm)[m]$(c0)"
+	@echo "  $(ct)changelog$(c0)            Fill '## [Unreleased]' or '## [version]' from the commits       $(cm)[m]$(c0)"
 	@echo "  $(ct)tag$(c0)                  Tag the release commit on main or stable*, signed, and push it  $(cm)[m]$(c0)"
 	@echo "  $(ct)stable-branch$(c0)        Open a stable* maintenance branch for an older release line     $(cm)[m]$(c0)"
 	@echo ""
