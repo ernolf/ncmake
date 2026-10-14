@@ -168,6 +168,12 @@ in another directory, so output that depends on where the build ran counts as
 not reproducible too. ARGS=--once builds once and states the open question
 instead of answering it.
 
+A difference both builds reproduce means the output in the checkout was built
+from another source, and make build is the remedy. Where git ignores the output
+and make build has just run on this working tree, that cannot be the reason:
+ARGS=--fresh says so, and the same difference then reads as a build that depends
+on something a fresh clone does not have, or on the directory it ran in.
+
 Hashed file names are paired by content, so app-3f9c1a2b.js and app-8b20de41.js
 are read as one file under two names, and a reference that carries the hash
 counts as build metadata rather than a difference. A source map is compared as
@@ -184,6 +190,7 @@ ARGS is passed to the analyser; a bare word in it is the checkout to verify
   make build-verify ARGS=--build=dist       another output directory
   make build-verify ARGS=--details          every table behind the findings
   make build-verify ARGS=--once             one build instead of two
+  make build && make build-verify ARGS=--fresh  output built right before
   make build-verify ARGS=--json > verify.json  machine-readable, nothing else
   make build-verify ARGS=--help             the analyser's own option list
 
