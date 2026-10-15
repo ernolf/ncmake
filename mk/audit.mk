@@ -10,7 +10,8 @@
 # adds what a release needs and a checkout can be missing - the link from a
 # published version back to its source, a server range that names a server that
 # exists, a lockfile, a linter that a script calls but no configuration backs.
-# Metadata only: it builds nothing, installs nothing and reads no network.
+# Metadata only: it builds nothing and installs nothing. The one thing it reads from
+# the network is the major nextcloud/server develops on master, through make.
 #
 # build-verify asks the other question about the same checkout: does the build
 # output in it come from the source beside it. It copies the tracked files into a
@@ -76,6 +77,13 @@ ncmake_libs += $(if $(filter consistency-audit,$(MAKECMDGOALS)),$(consistency_li
 # The inner quotes are resolved by the shell that runs the analyser.
 consistency_cmdline = make consistency-audit ARGS=\"%s\"
 
+# The major nextcloud/server develops on master, from its version.php. No server
+# has run a <nextcloud max-version> beyond it, so the audit holds the declared range
+# against it. A table in the analyser would have to be kept current by hand; this
+# follows the server. It is read only when the recipe runs, and where it cannot be
+# read it stays empty and the analyser falls back on its own table of majors.
+consistency_nc_master = $(shell curl -fsSL "$(nc_server_raw)/master/version.php" 2>/dev/null | sed -n 's/^\$$OC_Version[^0-9]*\([0-9]*\).*/\1/p' | head -1)
+
 # The verifier prints how to run it again as well, and has nothing to say about the
 # name of the checkout: it names the root it resolved, which inside the container
 # is the mount point, so no second variable is handed in.
@@ -122,7 +130,7 @@ consistency-audit:
 	@$(audit_core)
 	@$(call ncmake_lib_need,$(consistency_libs))
 	@echo "==> consistency-audit$(if $(strip $(ARGS)), $(ARGS)) (RUNTIME=$(RUNTIME))" >&2
-	@$(ncmake_lib_read_run) '$(call ncmake_lib_guard,consistency-audit) CONSISTENCY_AUDIT_CMDLINE="$(consistency_cmdline)" CONSISTENCY_AUDIT_APPDIR="$(notdir $(CURDIR))" node $(ncmake_lib_path)/consistency-audit.mjs $(ARGS)'
+	@$(ncmake_lib_read_run) '$(call ncmake_lib_guard,consistency-audit) CONSISTENCY_AUDIT_CMDLINE="$(consistency_cmdline)" CONSISTENCY_AUDIT_APPDIR="$(notdir $(CURDIR))" CONSISTENCY_AUDIT_NC_MASTER="$(consistency_nc_master)" node $(ncmake_lib_path)/consistency-audit.mjs $(ARGS)'
 
 build-verify:
 	@$(audit_core)
@@ -181,8 +189,11 @@ reported once, with the reason it matters, and never as a score.
 Findings are marked [!] worth changing, [i] worth knowing, [ok] nothing found,
 and each says which files it was read from. What the checkout does not state is
 named as not stated instead of being guessed at - with one exception, the list of
-released Nextcloud majors, which is written into the analyser because the audit
-reads no network, and the report names the month that list is from.
+released Nextcloud majors, which is written into the analyser, and the report
+names the month that list is from. The major nextcloud/server develops on master
+is read from its version.php instead: a <nextcloud max-version> beyond it names
+servers nobody has run the app on. Without the network the list stands in for it,
+and the report says so.
 
 It reads metadata only: no build, no install, no installed dependency tree, no
 bytes. That makes it useful on a fresh clone, and on an app that never heard of
