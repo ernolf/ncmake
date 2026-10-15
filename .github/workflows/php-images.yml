@@ -1,0 +1,149 @@
+# SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
+# SPDX-License-Identifier: MIT
+#
+# Publishes the PHP build image of ncmake, ghcr.io/ernolf/ncmake-php:<minor>, for
+# amd64 and arm64. https://github.com/ernolf/ncmake
+#
+# The minors run from the PHP floor of the newest end-of-life Nextcloud major, which
+# the core Makefile never lets an app's floor drop below, to the PHP ceiling of
+# Nextcloud master, both read from lib/versioncheck.php. The Containerfile comes from
+# the core Makefile (make php-containerfile), so the published image and the one
+# ncmake builds on a host cannot drift apart.
+#
+# A minor is built again only when its inputs change: the digest of its base image,
+# the digest of composer:2 or the Containerfile. Their fingerprint is the label
+# ncmake.inputs of the published image, so a day without a change costs a few
+# registry requests. workflow_dispatch with rebuild builds every minor.
+
+name: PHP images
+
+on:
+  schedule:
+    - cron: '17 4 * * *'
+  push:
+    branches: [main]
+    paths:
+      - core/Makefile
+      - .github/workflows/php-images.yml
+  workflow_dispatch:
+    inputs:
+      rebuild:
+        description: Build every minor, whether its inputs changed or not
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: php-images
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/ernolf/ncmake-php
+
+jobs:
+  plan:
+    name: Find the minors whose inputs changed
+    if: github.repository == 'ernolf/ncmake'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Compare the inputs of each minor with the published image
+        id: plan
+        env:
+          REBUILD: ${{ inputs.rebuild || false }}
+          GH_ACTOR: ${{ github.actor }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          # shellcheck disable=SC2016 # the single quotes keep $($*) for make
+          floor=$(make -s -f core/Makefile --eval 'print-%: ; @echo $($*)' print-php_eol_floor)
+          ceiling=$(curl -fsSL https://raw.githubusercontent.com/nextcloud/server/master/lib/versioncheck.php | sed -n 's/.*PHP_VERSION_ID >= \([0-9]*\).*/\1/p' | head -1)
+          [ -n "$floor" ] || { echo "::error::No PHP floor for the newest end-of-life Nextcloud major"; exit 1; }
+          [ -n "$ceiling" ] || { echo "::error::No PHP ceiling in lib/versioncheck.php of Nextcloud master"; exit 1; }
+          # versioncheck.php refuses PHP_VERSION_ID >= ceiling, so the highest minor is the one below it.
+          ceiling=$(awk -v id="$ceiling" 'BEGIN { id -= 100; printf "%d.%d", id / 10000, id % 10000 / 100 }')
+          echo "PHP $floor to $ceiling"
+          file=$(make -s -f core/Makefile php-containerfile)
+          printf '%s\n' "$GH_TOKEN" | skopeo login ghcr.io -u "$GH_ACTOR" --password-stdin >/dev/null
+          composer=docker.io/library/composer:2
+          cdigest=$(skopeo inspect --no-tags --format '{{.Digest}}' "docker://$composer")
+          matrix='[]'
+          for major in $(seq "${floor%%.*}" "${ceiling%%.*}"); do
+            for minor in $(seq 0 9); do
+              m=$major.$minor
+              [ "$(printf '%s\n' "$floor" "$m" | sort -V | head -1)" = "$floor" ] || continue
+              [ "$(printf '%s\n' "$m" "$ceiling" | sort -V | tail -1)" = "$ceiling" ] || continue
+              base=docker.io/library/php:$m-cli-alpine
+              if ! digest=$(skopeo inspect --no-tags --format '{{.Digest}}' "docker://$base" 2>/dev/null); then
+                echo "::notice::$base does not exist, PHP $m is skipped"
+                continue
+              fi
+              sum=$(printf '%s\n' "$file" "$digest" "$cdigest" | sha256sum | cut -d ' ' -f 1)
+              published=$(skopeo inspect --no-tags --format '{{index .Labels "ncmake.inputs"}}' "docker://$IMAGE:$m" 2>/dev/null || :)
+              if [ "$REBUILD" != true ] && [ "$published" = "$sum" ]; then
+                echo "PHP $m: unchanged"
+                continue
+              fi
+              echo "PHP $m: to build"
+              matrix=$(printf '%s' "$matrix" | jq -c --arg minor "$m" --arg base "$base@$digest" --arg composer "$composer@$cdigest" --arg sum "$sum" '. + [{minor: $minor, base: $base, composer: $composer, sum: $sum}]')
+            done
+          done
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build and push PHP ${{ matrix.minor }}
+    needs: plan
+    if: needs.plan.outputs.matrix != '[]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Write the Containerfile
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/php-image"
+          make -s -f core/Makefile php-containerfile > "$RUNNER_TEMP/php-image/Containerfile"
+
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ runner.temp }}/php-image
+          file: ${{ runner.temp }}/php-image/Containerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          tags: ${{ env.IMAGE }}:${{ matrix.minor }}
+          build-args: |
+            base=${{ matrix.base }}
+            composer=${{ matrix.composer }}
+          labels: |
+            ncmake.inputs=${{ matrix.sum }}
+            org.opencontainers.image.source=https://github.com/ernolf/ncmake
