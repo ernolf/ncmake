@@ -153,10 +153,11 @@ node_build_cmd ?= $(if $(need_npm),$(node_install) && $(node_pm) run build)
 # pnpm and yarn come through corepack, in the version the packageManager field of
 # package.json names. Node 25 and later no longer ship corepack, so there it is
 # installed from npm first. The shims go to a directory on PATH, where a script
-# that calls pnpm or yarn itself finds them too. AUTO_PIN=0 keeps corepack from
-# writing a packageManager field into the app's package.json.
+# that calls pnpm or yarn itself finds them too; corepack enable does not create
+# that directory, and where the image ships corepack nothing else does. AUTO_PIN=0
+# keeps corepack from writing a packageManager field into the app's package.json.
 node_pm_prefix = /tmp/.node-pm
-node_pm_setup  = $(if $(filter pnpm yarn,$(node_pm)),export PATH=$(node_pm_prefix)/bin:$$PATH COREPACK_ENABLE_AUTO_PIN=0 COREPACK_ENABLE_DOWNLOAD_PROMPT=0; { command -v corepack >/dev/null || npm install --global --prefix $(node_pm_prefix) corepack; } && corepack enable --install-directory $(node_pm_prefix)/bin $(node_pm) && )
+node_pm_setup  = $(if $(filter pnpm yarn,$(node_pm)),export PATH=$(node_pm_prefix)/bin:$$PATH COREPACK_ENABLE_AUTO_PIN=0 COREPACK_ENABLE_DOWNLOAD_PROMPT=0; mkdir -p $(node_pm_prefix)/bin && { command -v corepack >/dev/null || npm install --global --prefix $(node_pm_prefix) corepack; } && corepack enable --install-directory $(node_pm_prefix)/bin $(node_pm) && )
 
 # == Container runtime (used by 'make version' and 'make build') ==
 # composer/npm run in throwaway containers, so the host needs no PHP/Node toolchain.
