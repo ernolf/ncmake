@@ -33,7 +33,7 @@ Follow these before proposing any command. They are the mistakes that cost the m
 3. **Do not add build configuration.** No wrapper scripts, no extra make targets, no CI build steps that duplicate `make build`. A genuine deviation belongs in `ncmake.mk` (plain make syntax, one variable per line).
 4. **Never edit the version by hand** in `info.xml`, `composer.json` or `package.json`. `make version` does the bump, the validation and the lockfile sync.
 5. **Never write a CHANGELOG section by hand.** `make changelog` generates it from the conventional commits. A translated `CHANGELOG.<code>.md` is the exception: nothing generates it.
-6. **Maintainer targets change the world.** `version`, `changelog`, `tag`, `stable-branch`, `csr`, `register`, `sign`, `release`, `publish`, `delete-release`, `integrity-enable`, `integrity-sign`, `dist-signed`, `dev-init` and every `COMMIT=1` / `PR=1` / `AMEND=1` variant write commits, tags, branches, pull requests, App Store entries or signatures. Run them only when the user explicitly asks for that step, one step at a time. Read-only targets (`build`, `dist`, `psalm`, `reuse`, `composer`, `npm`, `integrity-check`, `bundle-report`, `build-audit`, `consistency-audit`, `build-verify`, `changelog-lint`, `list-releases`, `workflows-list`, `help`) are free to run.
+6. **Maintainer targets change the world.** `version`, `changelog`, `tag`, `stable-branch`, `csr`, `register`, `sign`, `release`, `publish`, `delete-release`, `integrity-enable`, `integrity-sign`, `dist-signed`, `dev-init` and every `COMMIT=1` / `PR=1` / `AMEND=1` variant write commits, tags, branches, pull requests, App Store entries or signatures. Run them only when the user explicitly asks for that step, one step at a time. Read-only targets (`build`, `dist`, `psalm`, `reuse`, `composer`, `npm`, `integrity-check`, `bundle-report`, `build-audit`, `consistency-audit`, `build-verify`, `changelog-lint`, `php-compat`, `list-releases`, `workflows-list`, `help`) are free to run.
 7. **`build/` is generated.** Never edit, never commit, never reference a file in it as source. `make clean` removes it.
 8. **The host needs no toolchain.** Do not tell anyone to install composer, PHP or Node. podman (preferred) or docker is enough. `RUNTIME=bare` exists for hosts that deliberately run the tools directly.
 9. **The checkout directory name is not the app id.** The id comes from `appinfo/info.xml` and the two often differ.
@@ -68,6 +68,7 @@ Follow these before proposing any command. They are the mistakes that cost the m
 | Whether the checkout agrees with itself | `make consistency-audit` |
 | Whether the committed build output comes from this source | `make build-verify` |
 | Whether the App Store finds this release in the changelog | `make changelog-lint` |
+| Whether the app runs on the PHP floor and ceiling of its servers | `make build && make php-compat` |
 | Install the PHP dev tools (psalm, cs) | `make composer ARGS=install` |
 | Static analysis | `make psalm` (or `make psalm ARGS="--show-info=true"`) |
 | Coding style | `make composer ARGS="cs:check"`, `make composer ARGS="cs:fix"` |
@@ -95,10 +96,10 @@ Follow these before proposing any command. They are the mistakes that cost the m
 
 | Image | Used by | Purpose |
 | --- | --- | --- |
-| `ghcr.io/ernolf/ncmake-php:<floor>` | `make build`, anything with `PHP=min` | dependencies resolve against the PHP floor, which is what a correct package needs: the declared `min-version`, raised to the floor of the newest end-of-life Nextcloud major when it is lower; `docker.io/library/php:<floor>-cli-alpine` with the extensions a Nextcloud server offers (`php_extensions`), Composer 2, git and unzip, published by ncmake for amd64 and arm64 for every PHP minor from that floor to the ceiling of Nextcloud master and rebuilt when one of its inputs changes; pulled like any other image. `localhost/ncmake-php:<floor>` is built on the host from the same Containerfile instead when `php_extensions` in `ncmake.mk` adds an extension the published image lacks, or when no source serves the published one |
+| `ghcr.io/ernolf/ncmake-php:<floor>` | `make build`, anything with `PHP=min`, `php-compat` (one image per minor it checks) | dependencies resolve against the PHP floor, which is what a correct package needs: the declared `min-version`, raised to the floor of the newest end-of-life Nextcloud major when it is lower; `docker.io/library/php:<floor>-cli-alpine` with the extensions a Nextcloud server offers (`php_extensions`), Composer 2, git and unzip, published by ncmake for amd64 and arm64 for every PHP minor from that floor to the ceiling of Nextcloud master and rebuilt when one of its inputs changes; pulled like any other image. `localhost/ncmake-php:<floor>` is built on the host from the same Containerfile instead when `php_extensions` in `ncmake.mk` adds an extension the published image lacks, or when no source serves the published one |
 | `docker.io/library/composer:2` | `make composer`, `make psalm` | newest PHP patch plus composer, git and unzip, which current dev tools need |
 | `docker.io/library/node:<major>`, the newest LTS line `engines.node` allows that is not end of life, fallback `docker.io/library/node:lts` | every npm run, `build-verify` | the Node version the app declares |
-| `docker.io/library/node:lts` (`lib_node_image`) | `consistency-audit`, `changelog-lint`, `bundle-report`, `build-audit` | the analysers need Node 18 or newer and build nothing, so the app's Node does not apply |
+| `docker.io/library/node:lts` (`lib_node_image`) | `consistency-audit`, `changelog-lint`, `php-compat`, `bundle-report`, `build-audit` | the analysers need Node 18 or newer and build nothing, so the app's Node does not apply |
 | `docker.io/fsfe/reuse` | `make reuse` | the REUSE compliance checker |
 
 `PHP=min|max` switches the PHP side explicitly. `build` pins `PHP := min`, `psalm` pins `PHP := max`. `RUNTIME=podman|docker|docker-rootless|bare` selects the runtime; it is auto-detected with podman preferred, and `docker` maps the caller's uid and gid so no root-owned files appear in the checkout.
@@ -226,13 +227,14 @@ The analysers are dependency-free ESM files that share their measuring core, so 
 
 ## Checkout audit module
 
-Three more analysers, in `mk/audit.mk`, about the checkout rather than the bundle. They share the report core with the bundle analysers, so findings read the same way everywhere.
+Four more analysers, in `mk/audit.mk`, about the checkout rather than the bundle. They share the report core with the bundle analysers, so findings read the same way everywhere.
 
 | Target | Reads | Answers |
 | --- | --- | --- |
 | `make consistency-audit` | the metadata: `appinfo/info.xml`, `package.json`, `composer.json`, `.nvmrc`, the installed workflows | whether the checkout agrees with itself, and what a release still needs |
 | `make build-verify` | the tracked source, rebuilt twice outside the app | whether the build output committed to the checkout comes from that source |
 | `make changelog-lint` | `CHANGELOG.md`, `CHANGELOG.<code>.md`, the version in `appinfo/info.xml` | whether the App Store finds this release in the changelog |
+| `make php-compat` | the checkout run on the PHP floor and ceiling, `appinfo/info.xml`, the installed packages | whether the app runs on the PHP versions its servers run it on |
 
 `consistency-audit` holds the statements a checkout makes against each other: the version in `appinfo/info.xml` against the one in `package.json`, the PHP floor in `info.xml` against `composer.json`, every PHP extension that `composer.json` or a package in `composer.lock` requires against the `<lib>` entries in `info.xml`, unless every Nextcloud server has it, the Node version in `package.json` against `.nvmrc` and against the installed workflows. A linter checks one file against a rule and cannot see any of that. The second half is what a release needs and a checkout can be missing: the `<repository>` and `<bugs>` links, a `<nextcloud>` range that names servers that exist, one lockfile rather than two, a licence stated the same way everywhere, a linter a script calls while no configuration for it is in the tree. Metadata only, no build, no install, no network, which makes it useful on a fresh clone and on an app that never heard of ncmake. The list of released Nextcloud majors is written into the analyser for that reason, and the report names the month the list is from.
 
@@ -242,7 +244,9 @@ Three more analysers, in `mk/audit.mk`, about the checkout rather than the bundl
 
 `changelog-lint` reads the changelogs as the App Store does when a release is published. The store reads `CHANGELOG.md` for English and `CHANGELOG.<code>.md` for each language of its list (`CHANGELOG.de.md`, `CHANGELOG.pt-br.md`), under exactly those names, decodes them as UTF-8 and shows the section whose heading begins with `## 1.2.3`, `## [1.2.3]` or `## v1.2.3` for the version in `info.xml`; a version with a `-`, and a nightly (`ARGS=--nightly`), is read from `## [Unreleased]`. A tagged pre-release is a release of its own, and the lint asks for its own section `## [X.Y.Z-rc.N]`, as `make changelog` writes it; the store shows that section with the stable `X.Y.Z`, below its own, and reads the page of the pre-release from `## [Unreleased]`, which the lint reports with `[i]`. What the store does not find, the release is published without, silently. `[!]` marks a missing `CHANGELOG.md`, a name that differs only in its spelling (with the `git mv` that fixes it), an unknown language code, a file that is not UTF-8 and a missing or empty section; `[i]` a changelog under a name the store never reads. It exits 1 on a `[!]` finding, and `make tag` runs it before the confirmation and refuses on that exit code (`NO_CHANGELOG_LINT=1` tags regardless); it is worth running on its own right after `make changelog`.
 
-`make help-consistency-audit`, `make help-build-verify` and `make help-changelog-lint` list every option.
+`php-compat` runs the checkout on two PHP versions, each in the build image of that minor (`ghcr.io/ernolf/ncmake-php:<minor>`): the floor `make build` resolves against, and the ceiling, the newest PHP minor that the server of `<nextcloud max-version>` runs on, read from `lib/versioncheck.php` of its stable branch, or of master for a major without one; a higher `<php max-version>` raises it. `PHP=all` adds every minor in between. On each it runs `composer check-platform-reqs --no-dev` and `php -l` over `appinfo/`, `lib/`, `templates/` and `vendor/`. `[!]` marks a package or the app's `composer.json` that refuses one of those PHP versions, a shipped file that does not parse, a `<php max-version>` below the ceiling (a server on a newer PHP refuses to enable the app) and a PHP version that could not be checked; `[i]` a deprecation, an extension the build image lacks, a file of a dev package and a check without `vendor/` or `composer.lock`. Run it after `make build`, so `vendor/` holds what ships; the output of each run stays in `build/php-compat/<minor>`. It needs the network and exits 1 on a `[!]` finding.
+
+`make help-consistency-audit`, `make help-build-verify`, `make help-changelog-lint` and `make help-php-compat` list every option.
 
 ## CI workflow manager
 

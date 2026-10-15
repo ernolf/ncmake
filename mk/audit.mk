@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
 # SPDX-License-Identifier: MIT
 #
-# ncmake developer module: three checks on a checkout.
+# ncmake developer module: four checks on a checkout.
 #
 # consistency-audit reads the metadata of a checkout and holds the statements it
 # finds against each other: the version in appinfo/info.xml against the one in
@@ -27,6 +27,15 @@
 # without a changelog, silently. Like the audit, it reads the checkout only.
 # make tag runs it before the confirmation, through the core's tag_check.
 #
+# php-compat runs the checkout on the PHP versions a server of its declared range
+# runs it on: the floor make build resolves against, and the ceiling, the newest
+# PHP minor the highest declared server accepts. On each it asks composer whether
+# the installed packages accept that PHP, and lints the PHP files that ship. A
+# dependency resolved on the floor can require a PHP below the ceiling, and code
+# that parses on one PHP can fail on the next; neither shows before a server runs
+# it. The runs use the core's build image, one make per minor, and leave their
+# output under build/php-compat, which the analyser then reads.
+#
 # This is its own module rather than a third target in mk/bundle.mk because a
 # module file cannot be renamed: the core includes every *.mk-<ref> it finds in the
 # per-machine cache and dev-init only ever adds files, so a renamed bundle.mk would
@@ -34,8 +43,8 @@
 # separate file costs nothing beyond its own header: fetching the analysers is the
 # core's, under "Analyser libraries" there.
 #
-# The same discovery rule is why build-verify and changelog-lint are targets in this
-# file and not modules of their own: a new module file reaches a machine only on the
+# The same discovery rule is why build-verify, changelog-lint and php-compat are
+# targets in this file and not modules of their own: a new module file reaches a machine only on the
 # next dev-init, while a target added to a file the cache already holds arrives with
 # the next refresh.
 #
@@ -50,10 +59,11 @@
 consistency_libs = consistency-audit.mjs report-text.mjs
 verify_libs      = build-verify.mjs report-text.mjs
 changelog_libs   = changelog-lint.mjs report-text.mjs
+compat_libs      = php-compat.mjs report-text.mjs
 
 # What the goals on this command line need, handed to the core's analyser library
 # section: appended, never set, because every analyser module adds its own.
-ncmake_libs += $(if $(filter consistency-audit,$(MAKECMDGOALS)),$(consistency_libs)) $(if $(filter build-verify,$(MAKECMDGOALS)),$(verify_libs)) $(if $(filter changelog-lint,$(MAKECMDGOALS)),$(changelog_libs))
+ncmake_libs += $(if $(filter consistency-audit,$(MAKECMDGOALS)),$(consistency_libs)) $(if $(filter build-verify,$(MAKECMDGOALS)),$(verify_libs)) $(if $(filter changelog-lint,$(MAKECMDGOALS)),$(changelog_libs)) $(if $(filter php-compat,$(MAKECMDGOALS)),$(compat_libs))
 
 # The app is mounted at /app inside the container, so the mount point cannot tell
 # the analyser what the app directory is called - the one thing it needs the host
@@ -71,6 +81,7 @@ consistency_cmdline = make consistency-audit ARGS=\"%s\"
 # is the mount point, so no second variable is handed in.
 verify_cmdline = make build-verify ARGS=\"%s\"
 changelog_cmdline = make changelog-lint ARGS=\"%s\"
+compat_cmdline    = make php-compat ARGS=\"%s\"
 
 # In a container the scratch tree is in the container's own /tmp and goes with it,
 # so the verifier must neither offer to keep it nor name it as kept. The condition
@@ -88,7 +99,24 @@ audit_core = $(if $(ncmake_lib_read_run),:,echo "ERROR: this module needs a newe
 # analyser it needs.
 tag_check = $(MAKE) --no-print-directory changelog-lint || { echo "ERROR: make tag stops on the [!] findings above - fix the changelog, or tag regardless with NO_CHANGELOG_LINT=1." >&2; exit 1; }
 
-.PHONY: consistency-audit build-verify changelog-lint
+# php-compat needs the PHP ceiling and a build image per PHP minor from the core.
+compat_core = $(if $(value php_server_max),:,echo "ERROR: php-compat needs a newer ncmake core - run 'make self-update'" >&2; exit 1)
+
+# Each minor runs in a make of its own, because the build image is chosen while a
+# make reads its variables: php_version picks the minor, PHP=min the build image
+# rather than analysis_image. A php_image of one's own names a single minor, so the
+# published image stands in for it; a host that builds its images locally keeps
+# doing so. The run records the PHP it actually ran on, so the analyser can tell a
+# runtime that ignores the minor, RUNTIME=bare above all, from one that did not.
+compat_dir   = build/php-compat
+compat_image = $(if $(filter local,$(php_floor_mode)),localhost,ghcr.io/ernolf)/ncmake-php
+# Every PHP file that ships, linted by as many PHP processes as the runtime has
+# processors. busybox xargs stops at the first command that fails, and php -l fails
+# on every file it cannot parse, so the loop exits 0 and the output tells.
+compat_lint  = find appinfo lib templates vendor -type f -name "*.php" -print0 2>/dev/null | xargs -0 -n 64 -P "$$(nproc)" sh -c "for f; do php -d error_reporting=-1 -d display_errors=stderr -d log_errors=0 -l \"\$$f\" 2>&1 | grep -v \"^No syntax errors detected in \"; done; exit 0" php-lint
+compat_run   = out=$(compat_dir)/$(php_version); php -r "echo PHP_VERSION;" >"$$out/version"; if [ -f vendor/composer/installed.json ] || [ -f composer.lock ]; then composer check-platform-reqs --no-dev --format=json >"$$out/platform.json" 2>"$$out/platform.err"; echo $$? >"$$out/platform.rc"; fi; $(compat_lint) >"$$out/lint.txt"
+
+.PHONY: consistency-audit build-verify changelog-lint php-compat php-compat-run
 
 consistency-audit:
 	@$(audit_core)
@@ -107,6 +135,30 @@ changelog-lint:
 	@$(call ncmake_lib_need,$(changelog_libs))
 	@echo "==> changelog-lint$(if $(strip $(ARGS)), $(ARGS)) (RUNTIME=$(RUNTIME))" >&2
 	@$(ncmake_lib_read_run) '$(call ncmake_lib_guard,changelog-lint) CHANGELOG_LINT_CMDLINE="$(changelog_cmdline)" node $(ncmake_lib_path)/changelog-lint.mjs $(ARGS)'
+
+php-compat: check-app
+	@$(audit_core)
+	@$(compat_core)
+	@$(call ncmake_lib_need,$(compat_libs))
+	@floor='$(php_min)'; server='$(php_server_max)'; declared='$(php_declared_max)'; \
+	[ -n "$$server" ] || { echo "ERROR: no PHP ceiling - lib/versioncheck.php of Nextcloud $(or $(nc_max),master) could not be read" >&2; exit 1; }; \
+	ceiling=$$(printf '%s\n' "$$server" $$declared | sort -V | tail -1); \
+	if [ "$(PHP)" = all ]; then \
+		minors=$$(for M in $$(seq "$${floor%%.*}" "$${ceiling%%.*}"); do for n in $$(seq 0 9); do v=$$M.$$n; \
+			[ "$$(printf '%s\n' "$$floor" "$$v" | sort -V | head -1)" = "$$floor" ] && [ "$$(printf '%s\n' "$$v" "$$ceiling" | sort -V | tail -1)" = "$$ceiling" ] && echo "$$v"; \
+		done; done); \
+	else minors=$$(printf '%s\n' "$$floor" "$$ceiling" | sort -uV); fi; \
+	echo "==> php-compat on PHP" $$minors "(RUNTIME=$(RUNTIME))" >&2; \
+	rm -rf $(compat_dir) && mkdir -p $(compat_dir) || exit 1; \
+	printf 'floor=%s\nceiling=%s\nserver=%s\ndeclared=%s\nnextcloud=%s\n' "$$floor" "$$ceiling" "$$server" "$$declared" '$(nc_max)' >$(compat_dir)/range; \
+	for m in $$minors; do \
+		echo "==> PHP $$m" >&2; mkdir -p $(compat_dir)/$$m; \
+		$(MAKE) --no-print-directory php-compat-run php_version=$$m php_image=$(compat_image):$$m PHP=min || echo "$$?" >$(compat_dir)/$$m/failed; \
+	done; \
+	$(ncmake_lib_read_run) '$(call ncmake_lib_guard,php-compat) PHP_COMPAT_CMDLINE="$(compat_cmdline)" node $(ncmake_lib_path)/php-compat.mjs $(ARGS)'
+
+php-compat-run:
+	@$(php_run) '$(compat_run)'
 
 define help_consistency-audit
 make consistency-audit [ARGS="<audit arguments>"]
@@ -148,6 +200,49 @@ ARGS is passed to the analyser; a bare word in it is the checkout to audit
 
 Only the app itself is mounted into the container, so auditing a checkout outside
 it needs RUNTIME=bare and Node on the host.
+endef
+
+define help_php-compat
+make php-compat [PHP=all] [ARGS="<analyser arguments>"]
+
+Checks whether the app runs on the PHP versions its servers run it on. A server
+states the PHP it accepts in lib/versioncheck.php, and the app states the servers
+in appinfo/info.xml. Two of those PHP versions are checked:
+  the floor     the PHP make build resolves the dependencies against
+  the ceiling   the newest PHP minor that Nextcloud <max-version> accepts, read
+                from its stable branch, or from master for a max-version that
+                has none; <php max-version> in info.xml can only raise it
+PHP=all checks every minor in between as well.
+
+Each runs in the build image of that minor, ghcr.io/ernolf/ncmake-php:<minor>,
+with the extensions a Nextcloud server offers, and does two things there:
+  composer check-platform-reqs --no-dev
+      whether every installed package accepts this PHP. A package that requires
+      a PHP below the ceiling installs on the floor and breaks on a newer server.
+  php -l over appinfo/, lib/, templates/ and vendor/
+      whether every PHP file that ships parses on this PHP, and what it reports
+      as deprecated there.
+Findings are marked [!] worth changing, [i] worth knowing, [ok] nothing found:
+[!] for a package that refuses one of the PHP versions, a file that does not
+parse, and a <php max-version> below the server's ceiling, which keeps the app
+off servers that run a newer PHP; [i] for a deprecation, an extension the build
+image lacks, and a file of a dev package, which make build does not ship.
+
+The check reads what is installed: run make build first, so vendor/ holds what
+ships. Without vendor/, composer reads composer.lock and only the app's own files
+are linted; without either, composer has nothing to check. The output of each
+run stays in build/php-compat/<minor>.
+
+The exit code is 1 when a finding is marked [!], so a CI job that runs it after
+make build fails on it. ARGS is passed to the analyser:
+  make php-compat                       the floor and the ceiling
+  make php-compat PHP=all               every minor in between too
+  make php-compat ARGS=--details        every file behind the findings
+  make php-compat ARGS=--json > compat.json  machine-readable, nothing else
+  make php-compat ARGS=--help           the analyser's own option list
+
+It needs the network for versioncheck.php and the images. With RUNTIME=bare it
+runs on the PHP of the host, once per minor, and says so.
 endef
 
 define help_build-verify
@@ -260,3 +355,5 @@ help::
 	@echo "    $(cd)optional $(cv)ARGS=\"--details\"$(cd), see $(cv)make help-build-verify$(c0)"
 	@echo "  $(ct)changelog-lint$(c0)       Whether the App Store finds this release in the changelog"
 	@echo "    $(cd)optional $(cv)ARGS=\"--nightly\"$(cd), see $(cv)make help-changelog-lint$(c0)"
+	@echo "  $(ct)php-compat$(c0)           Whether the app runs on the PHP floor and ceiling of its servers"
+	@echo "    $(cd)optional $(cv)PHP=all$(cd), see $(cv)make help-php-compat$(c0)"
