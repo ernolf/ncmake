@@ -117,7 +117,9 @@ stage_excludes = $(if $(wildcard .nextcloudignore),--exclude-from=.nextcloudigno
 # composer runs as well when the app has composer/autoload.php: the server loads
 # it instead of its PSR-4 fallback for lib/, and it requires vendor/autoload.php,
 # which only the composer step writes, even for an app that requires nothing.
-need_composer = $(if $(wildcard composer/autoload.php),1,$(shell python3 -c 'import json;d=json.load(open("composer.json"));print(1 if [k for k in d.get("require",{}) if k not in ("php","bamarni/composer-bin-plugin") and not k.startswith("ext-")] else "")' 2>/dev/null))
+# Without composer.json there is nothing composer could install; such an app
+# commits vendor/, which already is the build output.
+need_composer = $(if $(wildcard composer.json),$(if $(wildcard composer/autoload.php),1,$(shell python3 -c 'import json;d=json.load(open("composer.json"));print(1 if [k for k in d.get("require",{}) if k not in ("php","bamarni/composer-bin-plugin") and not k.startswith("ext-")] else "")' 2>/dev/null)))
 need_npm      = $(shell python3 -c 'import json;d=json.load(open("package.json"));print(1 if "build" in d.get("scripts",{}) else "")' 2>/dev/null)
 # .gitignore classifies the outputs: an ignored js/ or vendor/ is a build
 # artifact that must be built before shipping; a committed one (apps that ship
@@ -1417,6 +1419,7 @@ Builds the PHP dependencies and the frontend, each in a throwaway container, so
 the host needs neither PHP nor Node. What runs is detected from your files:
   composer install --no-dev    when composer.json declares runtime requirements
                                or the app has composer/autoload.php
+                               next to a composer.json
   npm ci && npm run build      when package.json has a build script; with
                                pnpm-lock.yaml or yarn.lock that package manager,
                                through corepack; without a lock file npm install,
