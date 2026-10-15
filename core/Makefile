@@ -182,9 +182,9 @@ endif
 RUNTIME     ?= $(default_runtime)
 no_runtime   = sh -c 'echo >&2; echo "ERROR: no container runtime found (podman/docker). Install podman: apt-get install podman, or use RUNTIME=bare to build on the host." >&2; echo >&2; exit 1'
 # Two PHP images, picked per task:
-#   php_image      - the PHP floor (php_min) with the extensions a Nextcloud server offers,
-#                    built locally from php_base_image, the official PHP image of that
-#                    minor on Alpine, see php_image_build. 'make build' uses it so
+#   php_image      - the PHP floor (php_min) with the extensions a Nextcloud server offers
+#                    and Composer, published by ncmake for every PHP minor a Nextcloud
+#                    server supports, see php_containerfile. 'make build' uses it so
 #                    dependencies resolve against the support floor, which is what
 #                    package-correct output needs.
 #   analysis_image - the official composer image: always the newest PHP patch plus composer,
@@ -226,7 +226,7 @@ node_pick   = $(if $(wildcard package.json),$(shell { curl -fsSL "$(node_schedul
 node_major  = $(call node_major_of,$(node_pick))
 node_major_of = $(if $(filter eol,$(1)),$(warning engines.node in package.json allows only end-of-life Node lines - building on Node $(firstword $(1))))$(firstword $(1))
 php_base_image ?= docker.io/library/php:$(php_min)-cli-alpine
-php_image      ?= localhost/ncmake-php:$(php_min)
+php_image      ?= ghcr.io/ernolf/ncmake-php:$(php_min)
 analysis_image ?= docker.io/library/composer:2
 node_image     ?= docker.io/library/node:$(or $(node_major),lts)
 # The ncmake analysers that only read run here, whatever Node the app declares.
@@ -432,35 +432,60 @@ container_run  = $(call container_prep,$(1)) && $(container) $(2) $(1)
 
 # php_base_image lacks most of the extensions a Nextcloud server loads, so composer
 # would refuse a dependency that requires one of them (phpspreadsheet requires gd),
-# and the build would not test what the server offers. php_image_build therefore
-# builds php_image from it once: git, unzip and su-exec from the Alpine packages, and
-# php_extensions, compiled by install-php-extensions, which also removes the build
-# packages again. An extension the base image already loads is skipped. The image is
-# labelled with the ID of its base image and built again when image_prep has pulled a
-# newer one; the image it supersedes is removed. A php_image set in ncmake.mk is used
-# as it is, nothing is built.
-# Every run then installs what the image still lacks: the newest Composer 2 release,
-# checked against its published SHA-256, and for a php_image of one's own git and
-# unzip as well. apk needs root, so this container starts as root on every runtime;
-# RUNTIME=docker, which otherwise maps the caller's uid and gid, hands the command to
-# that user through su-exec once the tools are in place.
-php_extensions ?= apcu bcmath bz2 calendar decimal exif ffi ftp gd gettext gmp igbinary imagick inotify intl ldap memcached mysqli pcntl pdo_mysql pdo_pgsql pgsql redis shmop smbclient sockets sysvmsg sysvsem sysvshm xsl zip
+# and the build would not test what the server offers. php_containerfile therefore
+# adds to it git, unzip and su-exec from the Alpine packages, Composer from
+# analysis_image, the memory_limit of the Nextcloud CI images instead of the 128M of
+# an image without a php.ini, and php_extensions, compiled by install-php-extensions,
+# which also removes the build packages again. An extension the base image already
+# loads is skipped.
+# The php-images workflow of the ncmake repository publishes that image as php_image,
+# for amd64 and arm64, for every PHP minor from the floor of the newest end-of-life
+# Nextcloud major (see nc_eol) to the ceiling of master, and builds a minor again when
+# its base image, composer:2 or the Containerfile changes. php_floor_pick pulls it like
+# any other image. It builds php_local_image from the same Containerfile on the host
+# instead when php_extensions names an extension the published image lacks, and when
+# no source serves php_image, for a PHP minor that is not published or a registry out
+# of reach. That image carries a fingerprint of its inputs, the Containerfile and the
+# IDs of its base image and of analysis_image, as the label ncmake.inputs, and is built
+# again when one of them changes; the image it supersedes is removed. A php_image set
+# in ncmake.mk is used as it is, nothing is built.
+# Every run then installs what a php_image of one's own may lack: the newest Composer 2
+# release, checked against its published SHA-256, git and unzip. apk needs root, so
+# this container starts as root on every runtime; RUNTIME=docker, which otherwise maps
+# the caller's uid and gid, hands the command to that user through su-exec once the
+# tools are in place.
+php_extensions_published = apcu bcmath bz2 calendar decimal exif ffi ftp gd gettext gmp igbinary imagick inotify intl ldap memcached mysqli pcntl pdo_mysql pdo_pgsql pgsql redis shmop smbclient sockets sysvmsg sysvsem sysvshm xsl zip
+php_extensions ?= $(php_extensions_published)
 php_ext_installer_url = https://github.com/mlocati/docker-php-extension-installer/releases/latest/download/install-php-extensions
+# The Containerfile as printf arguments. They read the same in a recipe line and inside
+# the single quotes of an sh -c script, so make php-containerfile prints exactly what
+# php_image_build builds.
+php_containerfile = "ARG base" "ARG composer" "FROM \$$composer AS composer" "FROM \$$base" \
+	"COPY --from=composer /usr/bin/composer /usr/local/bin/composer" \
+	"RUN apk add --no-cache git unzip su-exec && curl -fsSL -o /usr/local/bin/install-php-extensions $(php_ext_installer_url) && chmod +x /usr/local/bin/install-php-extensions && for e in $(php_extensions); do php -m | grep -qix \"\$$e\" || set -- \"\$$@\" \"\$$e\"; done && { [ -z \"\$$*\" ] || install-php-extensions \"\$$@\"; } && rm /usr/local/bin/install-php-extensions && echo \"memory_limit = 768M\" >\"\$$PHP_INI_DIR/conf.d/ncmake.ini\""
 php_image_build = sh -c ' \
-	cli=$$1 base=$$2 ref=$$3; \
-	id=$$("$$cli" image inspect --format "{{.Id}}" "$$base" 2>/dev/null) || exit 0; \
-	[ "$$("$$cli" image inspect --format "{{index .Config.Labels \"ncmake.base\"}}" "$$ref" 2>/dev/null)" != "$$id" ] || exit 0; \
+	cli=$$1 base=$$2 composer=$$3 ref=$$4; \
+	id=$$("$$cli" image inspect --format "{{.Id}}" "$$base" 2>/dev/null) && cid=$$("$$cli" image inspect --format "{{.Id}}" "$$composer" 2>/dev/null) || exit 0; \
+	file=$$(printf "%s\n" $(php_containerfile)); sum=$$(printf "%s\n" "$$file" "$$id" "$$cid" | sha256sum | cut -d " " -f 1); \
+	[ "$$("$$cli" image inspect --format "{{index .Config.Labels \"ncmake.inputs\"}}" "$$ref" 2>/dev/null)" != "$$sum" ] || exit 0; \
 	old=$$("$$cli" image inspect --format "{{.Id}}" "$$ref" 2>/dev/null); \
-	echo "==> Building $$ref from $$base with the PHP extensions of a Nextcloud server ($$cli), once per base image" >&2; \
-	printf "%s\n" "FROM $$base" "ARG exts" "RUN apk add --no-cache git unzip su-exec && curl -fsSL -o /usr/local/bin/install-php-extensions $(php_ext_installer_url) && chmod +x /usr/local/bin/install-php-extensions && for e in \$$exts; do php -m | grep -qix \"\$$e\" || set -- \"\$$@\" \"\$$e\"; done && { [ -z \"\$$*\" ] || install-php-extensions \"\$$@\"; } && rm /usr/local/bin/install-php-extensions" \
-	| "$$cli" build --build-arg "exts=$(php_extensions)" --label "ncmake.base=$$id" -t "$$ref" - >&2 || { echo "==> Building $$ref failed" >&2; exit 1; }; \
+	echo "==> Building $$ref from $$base with the PHP extensions of a Nextcloud server ($$cli), once per change of its inputs" >&2; \
+	printf "%s\n" "$$file" | "$$cli" build --build-arg "base=$$base" --build-arg "composer=$$composer" --label "ncmake.inputs=$$sum" -t "$$ref" - >&2 || { echo "==> Building $$ref failed" >&2; exit 1; }; \
 	[ -z "$$old" ] || [ "$$old" = "$$("$$cli" image inspect --format "{{.Id}}" "$$ref" 2>/dev/null)" ] || "$$cli" rmi "$$old" >/dev/null 2>&1 || :' php-image-build
 php_env           = -e COMPOSER_HOME=/tmp/composer -e COMPOSER_ALLOW_SUPERUSER=1
 composer_phar_url = https://getcomposer.org/download/latest-2.x/composer.phar
 php_floor_tools   = git unzip$(if $(container_user), su-exec)
 php_floor_setup   = for t in $(php_floor_tools); do command -v $$t >/dev/null || { apk add --no-cache --quiet $(php_floor_tools) >&2 || exit 1; break; }; done; command -v composer >/dev/null || { curl -fsSL -o /usr/local/bin/composer $(composer_phar_url) && echo "$$(curl -fsSL $(composer_phar_url).sha256)  /usr/local/bin/composer" | sha256sum -c >/dev/null && chmod +x /usr/local/bin/composer; } || { echo "composer download failed" >&2; exit 1; };
-php_floor_build   = $(if $(filter localhost/ncmake-php:%,$(php_image)),{ $(image_prep) $(container_cli) '$(php_base_image)' '$(image_sources)' '$(image_sources_url)' || :; } && $(php_image_build) $(container_cli) '$(php_base_image)' '$(php_image)' &&)
-php_floor_run     = $(php_floor_build) $(call container_prep,$(php_image)) && $(or $(container_root),$(container)) $(php_env) $(php_image) sh -c '$(php_floor_setup) exec $(if $(container_user),su-exec $(container_user) )sh -lc "$$1"' php-floor
+# php_floor_mode: pull for the published image, local for one built on this host, empty
+# for a php_image of one's own. php_floor_pick leaves the image to run in img.
+php_local_image   = $(if $(filter localhost/ncmake-php:%,$(php_image)),$(php_image),localhost/ncmake-php:$(php_min))
+php_floor_mode    = $(if $(filter localhost/ncmake-php:%,$(php_image)),local,$(if $(filter ghcr.io/ernolf/ncmake-php:%,$(php_image)),$(if $(filter-out $(php_extensions_published),$(php_extensions)),local,pull)))
+php_floor_build   = { $(image_prep) $(container_cli) '$(php_base_image)' '$(image_sources)' '$(image_sources_url)' || :; } && { $(image_prep) $(container_cli) '$(analysis_image)' '$(image_sources)' '$(image_sources_url)' || :; } && $(php_image_build) $(container_cli) '$(php_base_image)' '$(analysis_image)' '$(php_local_image)' && $(call container_prep,$(php_local_image))
+php_floor_pick    = { img='$(php_image)'; \
+	$(if $(filter pull,$(php_floor_mode)),$(call container_prep,$(php_image)); $(container_cli) image inspect "$$img" >/dev/null 2>&1 || { echo "==> $(php_image) is not available; building $(php_local_image) instead" >&2; img='$(php_local_image)'; $(php_floor_build); }; ) \
+	$(if $(filter local,$(php_floor_mode)),img='$(php_local_image)'; $(php_floor_build); ) \
+	$(if $(php_floor_mode),,$(call container_prep,$(php_image)); ) }
+php_floor_run     = $(php_floor_pick) && $(or $(container_root),$(container)) $(php_env) "$$img" sh -c '$(php_floor_setup) exec $(if $(container_user),su-exec $(container_user) )sh -lc "$$1"' php-floor
 
 ifeq ($(filter $(RUNTIME),bare none),)
   php_run   = $(if $(filter min,$(PHP)),$(php_floor_run),$(call container_run,$(analysis_image),$(php_env)) sh -lc)
@@ -469,7 +494,7 @@ ifeq ($(filter $(RUNTIME),bare none),)
 endif
 
 .PHONY: all version changelog tag stable-branch build check-app check-build stage dist rsync cp composer npm reuse psalm \
-        clean dist-clean image-clean image-setup self-update skill-install dev-init dev-clean help
+        clean dist-clean image-clean image-setup php-containerfile self-update skill-install dev-init dev-clean help
 
 # == Changelog configuration (git-cliff) ==
 # Keep a Changelog sections from Conventional Commits, user-visible changes only:
@@ -1372,6 +1397,11 @@ image-clean:
 	[ "$$before" -gt 0 ] || exit 0; d=$$((before - after)); [ $$d -ge 0 ] || d=0; \
 	echo "Freed: $$(awk -v b=$$d 'BEGIN { if (b >= 1e9) printf "%.2f GB", b / 1e9; else printf "%.0f MB", b / 1e6 }')"
 
+# The Containerfile of the PHP floor image, from which the php-images workflow of the
+# ncmake repository publishes php_image. It needs no app.
+php-containerfile:
+	@printf '%s\n' $(php_containerfile)
+
 # Show where the image record of each container CLI lives, and for rootful docker
 # ask again whether to share it in /var/lib/ncmake, which an earlier no declined.
 image-setup:
@@ -1726,6 +1756,17 @@ yes runs: sudo install -d -m 2775 -g docker $(image_state_sys)
 The entries from the user's file move there the next time ncmake reads them.
 endef
 
+define help_php-containerfile
+make php-containerfile
+
+Prints the Containerfile of the PHP build image: php_base_image with the PHP
+extensions of a Nextcloud server (php_extensions), Composer 2, git, unzip and
+su-exec. The php-images workflow of the ncmake repository publishes it as
+ghcr.io/ernolf/ncmake-php:<minor>; ncmake builds it on the host as
+localhost/ncmake-php:<minor> when that image cannot be pulled or php_extensions
+adds an extension it lacks. It takes the build arguments base and composer.
+endef
+
 define help_self-update
 make self-update
 
@@ -1798,6 +1839,7 @@ help::
 	@echo "  $(ct)image-clean$(c0)          List the container images on the host and remove the picked ones"
 	@echo "                       $(cv)OWN=1$(c0) ncmake's own, $(cv)OLD=1$(c0) dangling and unused, $(cv)DRY=1$(c0) only show"
 	@echo "  $(ct)image-setup$(c0)          Show where the image record lives; share it for rootful docker"
+	@echo "  $(ct)php-containerfile$(c0)    Print the Containerfile of the PHP build image"
 	@echo "  $(ct)self-update$(c0)          Fetch the newest ncmake Makefile"
 	@echo "  $(ct)skill-install$(c0)        Install or refresh the skill file for an AI coding assistant"
 	@echo "                       $(cd)→ $(skill_dir)/SKILL.md ($(if $(wildcard $(skill_dir)/SKILL.md),present,not installed))$(c0)"
