@@ -180,10 +180,11 @@ endif
 RUNTIME     ?= $(default_runtime)
 no_runtime   = sh -c 'echo >&2; echo "ERROR: no container runtime found (podman/docker). Install podman: apt-get install podman, or use RUNTIME=bare to build on the host." >&2; echo >&2; exit 1'
 # Two container images, picked per task, both maintained upstream (nothing to build here):
-#   php_image      - the Nextcloud CI image for the PHP floor (php_min), fully tooled
-#                    (composer, git, unzip). 'make build' uses it so dependencies resolve
-#                    against the support floor, which is what package-correct output needs;
-#                    its frozen patch level does not matter for shipping runtime deps.
+#   php_image      - the official PHP image for the PHP floor (php_min), on Alpine, at the
+#                    newest patch of that minor. 'make build' uses it so dependencies
+#                    resolve against the support floor, which is what package-correct
+#                    output needs. It carries no composer, git or unzip; php_floor_setup
+#                    adds them to every run, see there.
 #   analysis_image - the official composer image: always the newest PHP patch plus composer,
 #                    git and unzip. Everything interactive (composer, psalm) runs here, where
 #                    a current runtime matters - psalm needs a recent patch - while the
@@ -197,16 +198,15 @@ nc_server_raw = https://raw.githubusercontent.com/nextcloud/server
 php_declared  = $(call info_xml,dependencies/php,min-version,[0-9.]+)
 nc_min        = $(firstword $(subst ., ,$(call info_xml,dependencies/nextcloud,min-version,[0-9.]+)))
 nc_php_floor  = $(shell { curl -fsSL "$(nc_server_raw)/stable$(1)/lib/versioncheck.php" 2>/dev/null || curl -fsSL "$(nc_server_raw)/master/lib/versioncheck.php" 2>/dev/null; } | sed -n 's/.*PHP_VERSION_ID < \([0-9]*\).*/\1/p' | head -1 | awk '{ printf "%d.%d", $$1 / 10000, $$1 % 10000 / 100 }')
-# The CI images are tagged by major and minor, so a declared "8" means 8.0 and a
+# The PHP images are tagged by major and minor, so a declared "8" means 8.0 and a
 # patch level is dropped.
 php_major_minor = $(if $(1),$(word 1,$(subst ., ,$(1))).$(or $(word 2,$(subst ., ,$(1))),0))
 php_app       = $(or $(call php_major_minor,$(php_declared)),$(call nc_php_floor,$(nc_min)))
 # The floor never drops below the one of the newest end-of-life Nextcloud major,
 # whatever the app declares: an app in the App Store supports current servers, none
-# of which runs on an older PHP, and the older CI images carry tools that no longer
-# resolve current dependencies (php8.0 ships Composer 1). That major is the first
-# row under "EOL Versions" in the server's Maintenance and Release Schedule;
-# nc_eol_fallback stands in when the page cannot be read.
+# of which runs on an older PHP. That major is the first row under "EOL Versions" in
+# the server's Maintenance and Release Schedule; nc_eol_fallback stands in when the
+# page cannot be read.
 nc_schedule_url = https://raw.githubusercontent.com/wiki/nextcloud/server/Maintenance-and-Release-Schedule.md
 nc_eol_fallback = 32
 nc_eol        = $(or $(shell curl -fsSL "$(nc_schedule_url)" 2>/dev/null | sed -n '/^## EOL Versions/,$$ s/^| \*\*\([0-9]*\)\*\*.*/\1/p' | head -1),$(nc_eol_fallback))
@@ -223,7 +223,7 @@ node_schedule_fallback = {"v20":{"lts":"2023-10-24","end":"2026-04-30"},"v22":{"
 node_pick   = $(if $(wildcard package.json),$(shell { curl -fsSL "$(node_schedule_url)" 2>/dev/null || echo '$(node_schedule_fallback)'; } | python3 -c 'import json,re,sys,datetime; r=re.sub(r"([<>=^~]+)\s+",r"\1",re.sub(r"(\S+)\s+-\s+(\S+)",r">=\1 <=\2",str(json.load(open("package.json")).get("engines",{}).get("node","")).strip())); s=json.load(sys.stdin); t=datetime.date.today().isoformat(); I=(1e9,0,0); P=lambda x:[int(n) for n in re.match(r"[v=]*([0-9.]*)",x).group(1).split(".") if n][:3]; pad=lambda p:tuple((p+[0,0,0])[:3]); up=lambda p:pad(p[:-1]+[p[-1]+1]) if p else I; C=lambda o,p:{"^":(pad(p),up(p[:1])),"~":(pad(p),up(p[:2])),">=":(pad(p),I),">":(up(p),I),"<":((0,0,0),pad(p)),"<=":((0,0,0),up(p))}.get(o,(pad(p),up(p))); ok=lambda M:any(all(max(lo,(M,0,0))<min(hi,(M+1,0,0)) for lo,hi in (C(m.group(1),P(m.group(2))) for m in (re.match(r"([<>]=?|[\^~]?)(.*)",c) for c in a.split()))) for a in r.split("||")); M=sorted((int(k[1:]) for k in s if re.fullmatch(r"v[0-9]+",k)),reverse=True); live=lambda m:s["v"+str(m)].get("end","")>t; lts=lambda m:s["v"+str(m)].get("lts","9")<=t; c=[m for m in M if ok(m) and live(m) and lts(m)] or [m for m in M if ok(m) and live(m)]; x=c[:1] or [m for m in M if ok(m)][:1]; print(" ".join([str(x[0])]+([] if c else ["eol"])) if r and x else "")' 2>/dev/null))
 node_major  = $(call node_major_of,$(node_pick))
 node_major_of = $(if $(filter eol,$(1)),$(warning engines.node in package.json allows only end-of-life Node lines - building on Node $(firstword $(1))))$(firstword $(1))
-php_image      ?= ghcr.io/nextcloud/continuous-integration-php$(php_min):latest
+php_image      ?= docker.io/library/php:$(php_min)-cli-alpine
 analysis_image ?= docker.io/library/composer:2
 node_image     ?= docker.io/library/node:$(or $(node_major),lts)
 # The ncmake analysers that only read run here, whatever Node the app declares.
@@ -251,8 +251,10 @@ else ifeq ($(RUNTIME),docker-rootless)
   container_cli = docker
   container     = docker run --rm --label ncmake -v "$(CURDIR)":/app -w /app
 else ifeq ($(RUNTIME),docker)
-  container_cli = docker
-  container     = docker run --rm --label ncmake --user $(shell id -u):$(shell id -g) -v "$(CURDIR)":/app -w /app
+  container_cli  = docker
+  container_user = $(shell id -u):$(shell id -g)
+  container_root = docker run --rm --label ncmake -v "$(CURDIR)":/app -w /app
+  container      = $(container_root) --user $(container_user)
 else
   $(error Unknown RUNTIME '$(RUNTIME)'. Use: podman | docker | docker-rootless | bare)
 endif
@@ -415,11 +417,26 @@ image_idle = sh -c ' \
 	) </dev/null >/dev/null 2>&1 & \
 	exit 0' image-idle
 # $(call container_run,<image>,<run options>) prepares the image, then starts it. The
-# preparation never stands in the way of the run, whatever it runs into.
-container_run = { $(image_prep) $(container_cli) '$(1)' '$(image_sources)' '$(image_sources_url)' || :; $(image_idle) '$(image_stamp)' '$(this_ncmake)' '$(NCMAKE)' || :; } && $(container) $(2) $(1)
+# preparation never stands in the way of the run, whatever it runs into. container_prep
+# is the preparation alone, for a run that starts its container itself.
+container_prep = { $(image_prep) $(container_cli) '$(1)' '$(image_sources)' '$(image_sources_url)' || :; $(image_idle) '$(image_stamp)' '$(this_ncmake)' '$(NCMAKE)' || :; }
+container_run  = $(call container_prep,$(1)) && $(container) $(2) $(1)
+
+# php_image is the bare PHP image, so every run on it first installs what composer
+# needs: git and unzip from the Alpine packages, and the newest Composer 2 release,
+# checked against its published SHA-256. A tool the image already carries is not
+# installed again, so a php_image set in ncmake.mk that ships them all runs as it is.
+# apk needs root, so this container starts as root on every runtime; RUNTIME=docker,
+# which otherwise maps the caller's uid and gid, hands the command to that user
+# through su-exec once the tools are in place.
+php_env           = -e COMPOSER_HOME=/tmp/composer -e COMPOSER_ALLOW_SUPERUSER=1
+composer_phar_url = https://getcomposer.org/download/latest-2.x/composer.phar
+php_floor_tools   = git unzip$(if $(container_user), su-exec)
+php_floor_setup   = for t in $(php_floor_tools); do command -v $$t >/dev/null || { apk add --no-cache --quiet $(php_floor_tools) >&2 || exit 1; break; }; done; command -v composer >/dev/null || { curl -fsSL -o /usr/local/bin/composer $(composer_phar_url) && echo "$$(curl -fsSL $(composer_phar_url).sha256)  /usr/local/bin/composer" | sha256sum -c >/dev/null && chmod +x /usr/local/bin/composer; } || { echo "composer download failed" >&2; exit 1; };
+php_floor_run     = $(call container_prep,$(php_image)) && $(or $(container_root),$(container)) $(php_env) $(php_image) sh -c '$(php_floor_setup) exec $(if $(container_user),su-exec $(container_user) )sh -lc "$$1"' php-floor
 
 ifeq ($(filter $(RUNTIME),bare none),)
-  php_run   = $(call container_run,$(active_php_image),-e COMPOSER_HOME=/tmp/composer -e COMPOSER_ALLOW_SUPERUSER=1) sh -lc
+  php_run   = $(if $(filter min,$(PHP)),$(php_floor_run),$(call container_run,$(analysis_image),$(php_env)) sh -lc)
   node_run  = $(call container_run,$(node_image),-e npm_config_cache=/tmp/.npm -e COREPACK_HOME=/tmp/.corepack) sh -lc
   reuse_run = $(call container_run,$(reuse_image))
 endif

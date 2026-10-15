@@ -95,7 +95,7 @@ Follow these before proposing any command. They are the mistakes that cost the m
 
 | Image | Used by | Purpose |
 | --- | --- | --- |
-| `ghcr.io/nextcloud/continuous-integration-php<floor>` | `make build` | dependencies resolve against the PHP floor, which is what a correct package needs: the declared `min-version`, raised to the floor of the newest end-of-life Nextcloud major when it is lower |
+| `docker.io/library/php:<floor>-cli-alpine` | `make build`, anything with `PHP=min` | dependencies resolve against the PHP floor, which is what a correct package needs: the declared `min-version`, raised to the floor of the newest end-of-life Nextcloud major when it is lower; every run first adds git, unzip and the newest Composer 2 |
 | `docker.io/library/composer:2` | `make composer`, `make psalm` | newest PHP patch plus composer, git and unzip, which current dev tools need |
 | `docker.io/library/node:<major>`, the newest LTS line `engines.node` allows that is not end of life, fallback `docker.io/library/node:lts` | every npm run, `build-verify` | the Node version the app declares |
 | `docker.io/library/node:lts` (`lib_node_image`) | `consistency-audit`, `changelog-lint`, `bundle-report`, `build-audit` | the analysers need Node 18 or newer and build nothing, so the app's Node does not apply |
