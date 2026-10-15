@@ -186,7 +186,8 @@ no_runtime   = sh -c 'echo >&2; echo "ERROR: no container runtime found (podman/
 #                    and Composer, published by ncmake for every PHP minor a Nextcloud
 #                    server supports, see php_containerfile. 'make build' uses it so
 #                    dependencies resolve against the support floor, which is what
-#                    package-correct output needs.
+#                    package-correct output needs. 'make php-compat' runs it for other
+#                    minors too, through php_version.
 #   analysis_image - the official composer image: always the newest PHP patch plus composer,
 #                    git and unzip. Everything interactive (composer, psalm) runs here, where
 #                    a current runtime matters - psalm needs a recent patch - while the
@@ -214,6 +215,17 @@ nc_eol_fallback = 32
 nc_eol        = $(or $(shell curl -fsSL "$(nc_schedule_url)" 2>/dev/null | sed -n '/^## EOL Versions/,$$ s/^| \*\*\([0-9]*\)\*\*.*/\1/p' | head -1),$(nc_eol_fallback))
 php_eol_floor = $(call nc_php_floor,$(nc_eol))
 php_min       = $(or $(lastword $(shell printf '%s\n' $(php_app) $(php_eol_floor) | sort -V)),$(error No PHP floor: neither appinfo/info.xml nor lib/versioncheck.php of Nextcloud $(nc_min) and $(nc_eol) gave one))
+# The ceiling is the newest PHP minor the highest declared server runs on, from the
+# same file: it refuses PHP_VERSION_ID >= N, so the ceiling is the minor below N. A
+# max-version without a stable branch, a major in development or one that does not
+# exist, is read from master. <php max-version> can only raise it.
+nc_max          = $(firstword $(subst ., ,$(call info_xml,dependencies/nextcloud,max-version,[0-9.]+)))
+nc_php_ceiling  = $(shell { curl -fsSL "$(nc_server_raw)/stable$(1)/lib/versioncheck.php" 2>/dev/null || curl -fsSL "$(nc_server_raw)/master/lib/versioncheck.php" 2>/dev/null; } | sed -n 's/.*PHP_VERSION_ID >= \([0-9]*\).*/\1/p' | head -1 | awk '{ $$1 -= 100; printf "%d.%d", $$1 / 10000, $$1 % 10000 / 100 }')
+php_declared_max = $(call php_major_minor,$(call info_xml,dependencies/php,max-version,[0-9.]+))
+php_server_max  = $(call nc_php_ceiling,$(nc_max))
+# The PHP minor of the build images. make php-compat sets it per run, for each minor
+# it checks.
+php_version     = $(php_min)
 # The build Node is the newest LTS line that engines.node allows and that is not
 # end of life by the Node.js release schedule: an open range such as >=18 is a
 # floor, not the version to build on. When no LTS line fits, the newest current
@@ -225,8 +237,8 @@ node_schedule_fallback = {"v20":{"lts":"2023-10-24","end":"2026-04-30"},"v22":{"
 node_pick   = $(if $(wildcard package.json),$(shell { curl -fsSL "$(node_schedule_url)" 2>/dev/null || echo '$(node_schedule_fallback)'; } | python3 -c 'import json,re,sys,datetime; r=re.sub(r"([<>=^~]+)\s+",r"\1",re.sub(r"(\S+)\s+-\s+(\S+)",r">=\1 <=\2",str(json.load(open("package.json")).get("engines",{}).get("node","")).strip())); s=json.load(sys.stdin); t=datetime.date.today().isoformat(); I=(1e9,0,0); P=lambda x:[int(n) for n in re.match(r"[v=]*([0-9.]*)",x).group(1).split(".") if n][:3]; pad=lambda p:tuple((p+[0,0,0])[:3]); up=lambda p:pad(p[:-1]+[p[-1]+1]) if p else I; C=lambda o,p:{"^":(pad(p),up(p[:1])),"~":(pad(p),up(p[:2])),">=":(pad(p),I),">":(up(p),I),"<":((0,0,0),pad(p)),"<=":((0,0,0),up(p))}.get(o,(pad(p),up(p))); ok=lambda M:any(all(max(lo,(M,0,0))<min(hi,(M+1,0,0)) for lo,hi in (C(m.group(1),P(m.group(2))) for m in (re.match(r"([<>]=?|[\^~]?)(.*)",c) for c in a.split()))) for a in r.split("||")); M=sorted((int(k[1:]) for k in s if re.fullmatch(r"v[0-9]+",k)),reverse=True); live=lambda m:s["v"+str(m)].get("end","")>t; lts=lambda m:s["v"+str(m)].get("lts","9")<=t; c=[m for m in M if ok(m) and live(m) and lts(m)] or [m for m in M if ok(m) and live(m)]; x=c[:1] or [m for m in M if ok(m)][:1]; print(" ".join([str(x[0])]+([] if c else ["eol"])) if r and x else "")' 2>/dev/null))
 node_major  = $(call node_major_of,$(node_pick))
 node_major_of = $(if $(filter eol,$(1)),$(warning engines.node in package.json allows only end-of-life Node lines - building on Node $(firstword $(1))))$(firstword $(1))
-php_base_image ?= docker.io/library/php:$(php_min)-cli-alpine
-php_image      ?= ghcr.io/ernolf/ncmake-php:$(php_min)
+php_base_image ?= docker.io/library/php:$(php_version)-cli-alpine
+php_image      ?= ghcr.io/ernolf/ncmake-php:$(php_version)
 analysis_image ?= docker.io/library/composer:2
 node_image     ?= docker.io/library/node:$(or $(node_major),lts)
 # The ncmake analysers that only read run here, whatever Node the app declares.
@@ -478,7 +490,7 @@ php_floor_tools   = git unzip$(if $(container_user), su-exec)
 php_floor_setup   = for t in $(php_floor_tools); do command -v $$t >/dev/null || { apk add --no-cache --quiet $(php_floor_tools) >&2 || exit 1; break; }; done; command -v composer >/dev/null || { curl -fsSL -o /usr/local/bin/composer $(composer_phar_url) && echo "$$(curl -fsSL $(composer_phar_url).sha256)  /usr/local/bin/composer" | sha256sum -c >/dev/null && chmod +x /usr/local/bin/composer; } || { echo "composer download failed" >&2; exit 1; };
 # php_floor_mode: pull for the published image, local for one built on this host, empty
 # for a php_image of one's own. php_floor_pick leaves the image to run in img.
-php_local_image   = $(if $(filter localhost/ncmake-php:%,$(php_image)),$(php_image),localhost/ncmake-php:$(php_min))
+php_local_image   = $(if $(filter localhost/ncmake-php:%,$(php_image)),$(php_image),localhost/ncmake-php:$(php_version))
 php_floor_mode    = $(if $(filter localhost/ncmake-php:%,$(php_image)),local,$(if $(filter ghcr.io/ernolf/ncmake-php:%,$(php_image)),$(if $(filter-out $(php_extensions_published),$(php_extensions)),local,pull)))
 php_floor_build   = { $(image_prep) $(container_cli) '$(php_base_image)' '$(image_sources)' '$(image_sources_url)' || :; } && { $(image_prep) $(container_cli) '$(analysis_image)' '$(image_sources)' '$(image_sources_url)' || :; } && $(php_image_build) $(container_cli) '$(php_base_image)' '$(analysis_image)' '$(php_local_image)' && $(call container_prep,$(php_local_image))
 php_floor_pick    = { img='$(php_image)'; \
