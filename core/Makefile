@@ -181,12 +181,12 @@ else
 endif
 RUNTIME     ?= $(default_runtime)
 no_runtime   = sh -c 'echo >&2; echo "ERROR: no container runtime found (podman/docker). Install podman: apt-get install podman, or use RUNTIME=bare to build on the host." >&2; echo >&2; exit 1'
-# Two container images, picked per task, both maintained upstream (nothing to build here):
-#   php_image      - the official PHP image for the PHP floor (php_min), on Alpine, at the
-#                    newest patch of that minor. 'make build' uses it so dependencies
-#                    resolve against the support floor, which is what package-correct
-#                    output needs. It carries no composer, git or unzip; php_floor_setup
-#                    adds them to every run, see there.
+# Two PHP images, picked per task:
+#   php_image      - the PHP floor (php_min) with the extensions a Nextcloud server offers,
+#                    built locally from php_base_image, the official PHP image of that
+#                    minor on Alpine, see php_image_build. 'make build' uses it so
+#                    dependencies resolve against the support floor, which is what
+#                    package-correct output needs.
 #   analysis_image - the official composer image: always the newest PHP patch plus composer,
 #                    git and unzip. Everything interactive (composer, psalm) runs here, where
 #                    a current runtime matters - psalm needs a recent patch - while the
@@ -225,7 +225,8 @@ node_schedule_fallback = {"v20":{"lts":"2023-10-24","end":"2026-04-30"},"v22":{"
 node_pick   = $(if $(wildcard package.json),$(shell { curl -fsSL "$(node_schedule_url)" 2>/dev/null || echo '$(node_schedule_fallback)'; } | python3 -c 'import json,re,sys,datetime; r=re.sub(r"([<>=^~]+)\s+",r"\1",re.sub(r"(\S+)\s+-\s+(\S+)",r">=\1 <=\2",str(json.load(open("package.json")).get("engines",{}).get("node","")).strip())); s=json.load(sys.stdin); t=datetime.date.today().isoformat(); I=(1e9,0,0); P=lambda x:[int(n) for n in re.match(r"[v=]*([0-9.]*)",x).group(1).split(".") if n][:3]; pad=lambda p:tuple((p+[0,0,0])[:3]); up=lambda p:pad(p[:-1]+[p[-1]+1]) if p else I; C=lambda o,p:{"^":(pad(p),up(p[:1])),"~":(pad(p),up(p[:2])),">=":(pad(p),I),">":(up(p),I),"<":((0,0,0),pad(p)),"<=":((0,0,0),up(p))}.get(o,(pad(p),up(p))); ok=lambda M:any(all(max(lo,(M,0,0))<min(hi,(M+1,0,0)) for lo,hi in (C(m.group(1),P(m.group(2))) for m in (re.match(r"([<>]=?|[\^~]?)(.*)",c) for c in a.split()))) for a in r.split("||")); M=sorted((int(k[1:]) for k in s if re.fullmatch(r"v[0-9]+",k)),reverse=True); live=lambda m:s["v"+str(m)].get("end","")>t; lts=lambda m:s["v"+str(m)].get("lts","9")<=t; c=[m for m in M if ok(m) and live(m) and lts(m)] or [m for m in M if ok(m) and live(m)]; x=c[:1] or [m for m in M if ok(m)][:1]; print(" ".join([str(x[0])]+([] if c else ["eol"])) if r and x else "")' 2>/dev/null))
 node_major  = $(call node_major_of,$(node_pick))
 node_major_of = $(if $(filter eol,$(1)),$(warning engines.node in package.json allows only end-of-life Node lines - building on Node $(firstword $(1))))$(firstword $(1))
-php_image      ?= docker.io/library/php:$(php_min)-cli-alpine
+php_base_image ?= docker.io/library/php:$(php_min)-cli-alpine
+php_image      ?= localhost/ncmake-php:$(php_min)
 analysis_image ?= docker.io/library/composer:2
 node_image     ?= docker.io/library/node:$(or $(node_major),lts)
 # The ncmake analysers that only read run here, whatever Node the app declares.
@@ -281,6 +282,10 @@ endif
 # a pull first needs it and refreshed on the same TTL and ETag terms as this file, so
 # a new mirror needs no ncmake update. IMAGE_SOURCES names a list of one's own, which
 # is used as it is.
+# An image ncmake builds itself (localhost/ncmake-*) has no registry to pull from;
+# image_prep only records its use, and records it as built (2), which make image-clean
+# OWN=1 leaves alone, so the idle clean-up does not throw away a build that takes
+# minutes.
 # The record is state, not cache: deleting the cache must not turn the images ncmake
 # pulled into foreign ones that no clean-up touches again. It lives beside the image
 # store it describes, which depends on who runs the CLI, so image_rec_fn asks the CLI
@@ -348,6 +353,7 @@ image_prep = sh -c ' \
 		case " $$srcs " in *" $$ref "*) ;; *) srcs="$$srcs $$ref" ;; esac; \
 	}; \
 	pull() { \
+		case "$$ref" in localhost/ncmake-*) return 1 ;; esac; \
 		sources; err=; t=$$(mktemp) || return 1; \
 		for s in $$srcs; do \
 			if [ "$$1" = quiet ]; then "$$cli" pull -q "$$s" >"$$t" 2>&1 </dev/null; rc=$$?; \
@@ -368,7 +374,7 @@ image_prep = sh -c ' \
 		if pull; then checked=$$now; else echo "==> No source could pull $$ref ($$cli):$$err" >&2; fi; \
 		new=$$("$$cli" image inspect --format "{{.Id}}" "$$ref" 2>/dev/null); \
 	else \
-		own=$${own:-0}; \
+		case "$$ref" in localhost/ncmake-*) own=2 ;; *) own=$${own:-0} ;; esac; \
 		if [ $$((now - checked)) -ge $$(($(IMAGE_CHECK_MIN) * 60)) ] && pull quiet; then \
 			checked=$$now; new=$$("$$cli" image inspect --format "{{.Id}}" "$$ref" 2>/dev/null); \
 			if [ -n "$$new" ] && [ "$$new" != "$$old" ]; then \
@@ -424,18 +430,37 @@ image_idle = sh -c ' \
 container_prep = { $(image_prep) $(container_cli) '$(1)' '$(image_sources)' '$(image_sources_url)' || :; $(image_idle) '$(image_stamp)' '$(this_ncmake)' '$(NCMAKE)' || :; }
 container_run  = $(call container_prep,$(1)) && $(container) $(2) $(1)
 
-# php_image is the bare PHP image, so every run on it first installs what composer
-# needs: git and unzip from the Alpine packages, and the newest Composer 2 release,
-# checked against its published SHA-256. A tool the image already carries is not
-# installed again, so a php_image set in ncmake.mk that ships them all runs as it is.
-# apk needs root, so this container starts as root on every runtime; RUNTIME=docker,
-# which otherwise maps the caller's uid and gid, hands the command to that user
-# through su-exec once the tools are in place.
+# php_base_image lacks most of the extensions a Nextcloud server loads, so composer
+# would refuse a dependency that requires one of them (phpspreadsheet requires gd),
+# and the build would not test what the server offers. php_image_build therefore
+# builds php_image from it once: git, unzip and su-exec from the Alpine packages, and
+# php_extensions, compiled by install-php-extensions, which also removes the build
+# packages again. An extension the base image already loads is skipped. The image is
+# labelled with the ID of its base image and built again when image_prep has pulled a
+# newer one; the image it supersedes is removed. A php_image set in ncmake.mk is used
+# as it is, nothing is built.
+# Every run then installs what the image still lacks: the newest Composer 2 release,
+# checked against its published SHA-256, and for a php_image of one's own git and
+# unzip as well. apk needs root, so this container starts as root on every runtime;
+# RUNTIME=docker, which otherwise maps the caller's uid and gid, hands the command to
+# that user through su-exec once the tools are in place.
+php_extensions ?= apcu bcmath bz2 calendar decimal exif ffi ftp gd gettext gmp igbinary imagick inotify intl ldap memcached mysqli pcntl pdo_mysql pdo_pgsql pgsql redis shmop smbclient sockets sysvmsg sysvsem sysvshm xsl zip
+php_ext_installer_url = https://github.com/mlocati/docker-php-extension-installer/releases/latest/download/install-php-extensions
+php_image_build = sh -c ' \
+	cli=$$1 base=$$2 ref=$$3; \
+	id=$$("$$cli" image inspect --format "{{.Id}}" "$$base" 2>/dev/null) || exit 0; \
+	[ "$$("$$cli" image inspect --format "{{index .Config.Labels \"ncmake.base\"}}" "$$ref" 2>/dev/null)" != "$$id" ] || exit 0; \
+	old=$$("$$cli" image inspect --format "{{.Id}}" "$$ref" 2>/dev/null); \
+	echo "==> Building $$ref from $$base with the PHP extensions of a Nextcloud server ($$cli), once per base image" >&2; \
+	printf "%s\n" "FROM $$base" "ARG exts" "RUN apk add --no-cache git unzip su-exec && curl -fsSL -o /usr/local/bin/install-php-extensions $(php_ext_installer_url) && chmod +x /usr/local/bin/install-php-extensions && for e in \$$exts; do php -m | grep -qix \"\$$e\" || set -- \"\$$@\" \"\$$e\"; done && { [ -z \"\$$*\" ] || install-php-extensions \"\$$@\"; } && rm /usr/local/bin/install-php-extensions" \
+	| "$$cli" build --build-arg "exts=$(php_extensions)" --label "ncmake.base=$$id" -t "$$ref" - >&2 || { echo "==> Building $$ref failed" >&2; exit 1; }; \
+	[ -z "$$old" ] || [ "$$old" = "$$("$$cli" image inspect --format "{{.Id}}" "$$ref" 2>/dev/null)" ] || "$$cli" rmi "$$old" >/dev/null 2>&1 || :' php-image-build
 php_env           = -e COMPOSER_HOME=/tmp/composer -e COMPOSER_ALLOW_SUPERUSER=1
 composer_phar_url = https://getcomposer.org/download/latest-2.x/composer.phar
 php_floor_tools   = git unzip$(if $(container_user), su-exec)
 php_floor_setup   = for t in $(php_floor_tools); do command -v $$t >/dev/null || { apk add --no-cache --quiet $(php_floor_tools) >&2 || exit 1; break; }; done; command -v composer >/dev/null || { curl -fsSL -o /usr/local/bin/composer $(composer_phar_url) && echo "$$(curl -fsSL $(composer_phar_url).sha256)  /usr/local/bin/composer" | sha256sum -c >/dev/null && chmod +x /usr/local/bin/composer; } || { echo "composer download failed" >&2; exit 1; };
-php_floor_run     = $(call container_prep,$(php_image)) && $(or $(container_root),$(container)) $(php_env) $(php_image) sh -c '$(php_floor_setup) exec $(if $(container_user),su-exec $(container_user) )sh -lc "$$1"' php-floor
+php_floor_build   = $(if $(filter localhost/ncmake-php:%,$(php_image)),{ $(image_prep) $(container_cli) '$(php_base_image)' '$(image_sources)' '$(image_sources_url)' || :; } && $(php_image_build) $(container_cli) '$(php_base_image)' '$(php_image)' &&)
+php_floor_run     = $(php_floor_build) $(call container_prep,$(php_image)) && $(or $(container_root),$(container)) $(php_env) $(php_image) sh -c '$(php_floor_setup) exec $(if $(container_user),su-exec $(container_user) )sh -lc "$$1"' php-floor
 
 ifeq ($(filter $(RUNTIME),bare none),)
   php_run   = $(if $(filter min,$(PHP)),$(php_floor_run),$(call container_run,$(analysis_image),$(php_env)) sh -lc)
@@ -1307,7 +1332,7 @@ image-clean:
 			if [ -n "$$ref" ] && [ -f "$$rec" ]; then key=$$(norm "$$ref"); \
 				while read -r c r i o u k; do [ "$$c" = "$$cli" ] && [ "$$(norm "$$r")" = "$$key" ] && own=$$o last=$$u; done <"$$rec"; fi; \
 			case "$$used" in *" $$id "*) st="in use" ;; \
-			*) if [ "$$own" = 1 ]; then st=ncmake; elif [ -n "$$own" ]; then st=ncmake-used; \
+			*) if [ "$$own" = 1 ]; then st=ncmake; elif [ "$$own" = 2 ]; then st=built; elif [ -n "$$own" ]; then st=ncmake-used; \
 			   elif [ -z "$$ref" ]; then st=dangling; else st=foreign; fi ;; esac; \
 			echo "$$cli|$${ref:-$$id}|$${ref:-$$(printf %.12s "$$id")}|$$size|$$last|$$st|$$rec"; \
 		done; \
@@ -1317,7 +1342,7 @@ image-clean:
 	printf "%5s  %-6s  %9s  %-11s  %-11s  %s\n" "" CLI size "last used" status image; \
 	while IFS="|" read -r cli target name size last st rec; do i=$$((i + 1)); mark=" "; \
 		if { [ -n "$(OWN)" ] && [ "$$st" = ncmake ]; } || \
-		   { [ -n "$(OLD)" ] && { [ "$$st" = dangling ] || { [ "$$st" = ncmake ] && [ $$((now - $${last:-0})) -ge $$idle ]; }; }; }; then \
+		   { [ -n "$(OLD)" ] && { [ "$$st" = dangling ] || { { [ "$$st" = ncmake ] || [ "$$st" = built ]; } && [ $$((now - $${last:-0})) -ge $$idle ]; }; }; }; then \
 			mark="*"; pick="$$pick $$i"; fi; \
 		printf "%s%4d  %-6s  %9s  %-11s  %-11s  %s\n" "$$mark" "$$i" "$$cli" "$$size" "$$(age "$$last")" "$$st" "$$name"; \
 	done <"$$list"; \
@@ -1666,6 +1691,7 @@ make image-clean [OWN=1] [OLD=1] [DRY=1] [ENGINE=podman|docker]
 Lists the images of every container CLI on the host, numbered, with their size,
 when ncmake last used them and their status:
   ncmake       pulled by ncmake
+  built        built by ncmake (the PHP floor image)
   ncmake-used  on the host before, used by ncmake
   dangling     without a tag
   foreign      neither from ncmake nor dangling
@@ -1673,9 +1699,9 @@ when ncmake last used them and their status:
 Without a flag it asks which images to remove, by number or range (1 3-5), and
 reports the space that freed. Without a terminal it only lists.
 
-  OWN=1     remove every image ncmake pulled itself
-  OLD=1     remove every image without a tag, and every image ncmake pulled and
-            has not used for IMAGE_IDLE_MIN minutes (now: $(IMAGE_IDLE_MIN))
+  OWN=1     remove every image ncmake pulled itself; an image ncmake built stays
+  OLD=1     remove every image without a tag, and every image ncmake pulled or
+            built and has not used for IMAGE_IDLE_MIN minutes (now: $(IMAGE_IDLE_MIN))
   DRY=1     list and mark what OWN=1 or OLD=1 would remove, remove nothing
   ENGINE=   on the command line, limit the target to podman or docker
 
