@@ -55,10 +55,10 @@
 # every analyser module adds to it.
 
 # == Analyser configuration ==
-# What each analyser needs next to it. report-text.mjs prints; the analyser itself
-# decides what is worth saying.
+# What each analyser needs next to it. bundler-config.mjs reads the bundler and its
+# config, report-text.mjs prints; the analyser itself decides what is worth saying.
 consistency_libs = consistency-audit.mjs report-text.mjs
-verify_libs      = build-verify.mjs report-text.mjs
+verify_libs      = build-verify.mjs bundler-config.mjs report-text.mjs
 changelog_libs   = changelog-lint.mjs report-text.mjs
 compat_libs      = php-compat.mjs report-text.mjs
 
@@ -292,7 +292,8 @@ is, nothing is installed into it, and the scratch tree is removed again.
 
 ARGS is passed to the analyser; a bare word in it is the checkout to verify
 (default: the current directory):
-  make build-verify                         this app, js/ and css/
+  make build-verify                         this app, where its bundler config
+                                            writes, else js/ and css/
   make build-verify ARGS=--build=dist       another output directory
   make build-verify ARGS=--details          every table behind the findings
   make build-verify ARGS=--once             one build instead of two
