@@ -84,6 +84,13 @@ consistency_cmdline = make consistency-audit ARGS=\"%s\"
 # read it stays empty and the analyser falls back on its own table of majors.
 consistency_nc_master = $(shell curl -fsSL "$(nc_server_raw)/master/version.php" 2>/dev/null | sed -n 's/^\$$OC_Version[^0-9]*\([0-9]*\).*/\1/p' | head -1)
 
+# The Node.js release schedule the core picks the build Node from, so the audit
+# can tell when engines.node admits only end-of-life lines. It is handed in as one
+# word per line, v<major>=<start>,<lts>,<end>, which needs no quoting in the
+# recipe. Read only for an app with a package.json; where it cannot be read it
+# stays empty and the analyser falls back on its own snapshot.
+consistency_node_schedule = $(if $(wildcard package.json),$(shell curl -fsSL "$(node_schedule_url)" 2>/dev/null | python3 -c 'import json,sys; s=json.load(sys.stdin); print(" ".join(k+"="+",".join(s[k].get(f,"") for f in ("start","lts","end")) for k in sorted(s) if k[:1]=="v" and k[1:].isdigit()))' 2>/dev/null))
+
 # The verifier prints how to run it again as well, and has nothing to say about the
 # name of the checkout: it names the root it resolved, which inside the container
 # is the mount point, so no second variable is handed in.
@@ -130,7 +137,7 @@ consistency-audit:
 	@$(audit_core)
 	@$(call ncmake_lib_need,$(consistency_libs))
 	@echo "==> consistency-audit$(if $(strip $(ARGS)), $(ARGS)) (RUNTIME=$(RUNTIME))" >&2
-	@$(ncmake_lib_read_run) '$(call ncmake_lib_guard,consistency-audit) CONSISTENCY_AUDIT_CMDLINE="$(consistency_cmdline)" CONSISTENCY_AUDIT_APPDIR="$(notdir $(CURDIR))" CONSISTENCY_AUDIT_NC_MASTER="$(consistency_nc_master)" node $(ncmake_lib_path)/consistency-audit.mjs $(ARGS)'
+	@$(ncmake_lib_read_run) '$(call ncmake_lib_guard,consistency-audit) CONSISTENCY_AUDIT_CMDLINE="$(consistency_cmdline)" CONSISTENCY_AUDIT_APPDIR="$(notdir $(CURDIR))" CONSISTENCY_AUDIT_NC_MASTER="$(consistency_nc_master)" CONSISTENCY_AUDIT_NODE_SCHEDULE="$(consistency_node_schedule)" node $(ncmake_lib_path)/consistency-audit.mjs $(ARGS)'
 
 build-verify:
 	@$(audit_core)
@@ -193,7 +200,10 @@ released Nextcloud majors, which is written into the analyser, and the report
 names the month that list is from. The major nextcloud/server develops on master
 is read from its version.php instead: a <nextcloud max-version> beyond it names
 servers nobody has run the app on. Without the network the list stands in for it,
-and the report says so.
+and the report says so. The Node.js release schedule is read the same way, so an
+engines.node that admits only end-of-life Node lines is reported with the line
+the release is built on and the oldest line still maintained; without the network
+a snapshot in the analyser stands in for the schedule.
 
 It reads metadata only: no build, no install, no installed dependency tree, no
 bytes. That makes it useful on a fresh clone, and on an app that never heard of
