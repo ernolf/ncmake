@@ -243,7 +243,8 @@ php_base_image ?= docker.io/library/php:$(php_version)-cli-alpine
 php_image      ?= ghcr.io/ernolf/ncmake-php:$(php_version)
 analysis_image ?= docker.io/library/composer:2
 node_image     ?= docker.io/library/node:$(or $(node_major),lts)
-# The ncmake analysers that only read run here, whatever Node the app declares.
+# The ncmake analysers run here, whatever Node the app declares; the one that builds
+# the app takes the app's Node from node_image (see ncmake_lib_run).
 lib_node_image ?= docker.io/library/node:lts
 reuse_image    ?= docker.io/fsfe/reuse:latest
 # PHP picks the image per task: max (default) runs on analysis_image, the newest tooled
@@ -1900,14 +1901,21 @@ ncmake_lib_need = for f in $(1); do test -s "$(ncmake_lib_dir)/$$f" || { echo "E
 # The library directory is mounted at /ncmake, read-only, alongside the app at
 # /app, and gets the writable npm cache every other npm call here gets: an
 # analyser that builds runs npm, and the container user has no home of its own.
-# An analyser that builds the app (ncmake_lib_run) needs the app's Node; one that
-# only reads (ncmake_lib_read_run) runs on lib_node_image, so an old engines.node
-# cannot keep it from loading.
+# Every analyser runs on lib_node_image, so an old engines.node cannot keep it from
+# loading. One that builds the app (ncmake_lib_run) builds with the app's Node all
+# the same. /usr/local of node_image, where the Node images keep node, npm and
+# corepack, is copied into a temporary directory out of a container that is created
+# from node_image and never started. The directory is mounted at /ncmake-node,
+# NCMAKE_APP_NODE names it, and the analyser puts its bin first on PATH for the
+# build steps alone; it is removed when the run ends.
 # With RUNTIME=bare there is no container and the host path is used as it is; with
 # no runtime at all $(node_run) carries the "install podman" abort.
 ifeq ($(filter $(RUNTIME),bare none),)
-  ncmake_lib_in       = $(call container_run,$(1),-v "$(ncmake_lib_dir)":/ncmake:ro -e npm_config_cache=/tmp/.npm) sh -lc
-  ncmake_lib_run      = $(call ncmake_lib_in,$(node_image))
+  ncmake_lib_in       = $(call container_run,$(1),-v "$(ncmake_lib_dir)":/ncmake:ro -e npm_config_cache=/tmp/.npm $(2)) sh -lc
+  ncmake_lib_run      = $(call container_prep,$(node_image)) && ncmake_node=$$(mktemp -d) && trap 'rm -rf "$$ncmake_node"' EXIT \
+	&& { cid=$$($(container_cli) create --label ncmake $(node_image)) && { $(container_cli) cp "$$cid":/usr/local "$$ncmake_node/"; ok=$$?; $(container_cli) rm "$$cid" >/dev/null; [ $$ok -eq 0 ]; } \
+		|| { echo "ERROR: could not copy the Node of $(node_image) out of its image" >&2; exit 1; }; } \
+	&& $(call ncmake_lib_in,$(lib_node_image),-v "$$ncmake_node/local":/ncmake-node:ro -e NCMAKE_APP_NODE=/ncmake-node)
   ncmake_lib_read_run = $(call ncmake_lib_in,$(lib_node_image))
   ncmake_lib_path     = /ncmake
 else
@@ -1920,7 +1928,7 @@ endif
 # the first command of an analyser script, stops below that with the reason instead
 # of letting node fail on syntax it does not know.
 ncmake_lib_node_min = 18
-ncmake_lib_guard = v=$$(node -p process.versions.node); [ "$${v%%.*}" -ge $(ncmake_lib_node_min) ] || { echo "ERROR: $(1) needs Node $(ncmake_lib_node_min) or newer and found Node $$v$(if $(filter build-verify,$(1)), - it builds with the Node that engines.node in package.json declares)" >&2; exit 1; };
+ncmake_lib_guard = v=$$(node -p process.versions.node); [ "$${v%%.*}" -ge $(ncmake_lib_node_min) ] || { echo "ERROR: $(1) needs Node $(ncmake_lib_node_min) or newer and found Node $$v" >&2; exit 1; };
 
 help::
 	@echo ""
