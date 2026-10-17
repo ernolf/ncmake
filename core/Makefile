@@ -461,8 +461,9 @@ container_run  = $(call container_prep,$(1)) && $(container) $(2) $(1)
 # no source serves php_image, for a PHP minor that is not published or a registry out
 # of reach. That image carries a fingerprint of its inputs, the Containerfile and the
 # IDs of its base image and of analysis_image, as the label ncmake.inputs, and is built
-# again when one of them changes; the image it supersedes is removed. A php_image set
-# in ncmake.mk is used as it is, nothing is built.
+# again when one of them changes; the image it supersedes is removed. A build that
+# fails removes the untagged images it left behind, found by that label. A php_image
+# set in ncmake.mk is used as it is, nothing is built.
 # Every run then installs what a php_image of one's own may lack: the newest Composer 2
 # release, checked against its published SHA-256, git and unzip. apk needs root, so
 # this container starts as root on every runtime; RUNTIME=docker, which otherwise maps
@@ -484,7 +485,10 @@ php_image_build = sh -c ' \
 	[ "$$("$$cli" image inspect --format "{{index .Config.Labels \"ncmake.inputs\"}}" "$$ref" 2>/dev/null)" != "$$sum" ] || exit 0; \
 	old=$$("$$cli" image inspect --format "{{.Id}}" "$$ref" 2>/dev/null); \
 	echo "==> Building $$ref from $$base with the PHP extensions of a Nextcloud server ($$cli), once per change of its inputs" >&2; \
-	printf "%s\n" "$$file" | "$$cli" build --build-arg "base=$$base" --build-arg "composer=$$composer" --label "ncmake.inputs=$$sum" -t "$$ref" - >&2 || { echo "==> Building $$ref failed" >&2; exit 1; }; \
+	printf "%s\n" "$$file" | "$$cli" build --build-arg "base=$$base" --build-arg "composer=$$composer" --label "ncmake.inputs=$$sum" -t "$$ref" - >&2 || { echo "==> Building $$ref failed" >&2; \
+		set -- $$("$$cli" images -q --filter dangling=true --filter "label=ncmake.inputs=$$sum"); \
+		[ -z "$$*" ] || ! "$$cli" rmi "$$@" >/dev/null 2>&1 || echo "==> Removed the untagged images the failed build left behind: $$*" >&2; \
+		exit 1; }; \
 	[ -z "$$old" ] || [ "$$old" = "$$("$$cli" image inspect --format "{{.Id}}" "$$ref" 2>/dev/null)" ] || "$$cli" rmi "$$old" >/dev/null 2>&1 || :' php-image-build
 php_env           = -e COMPOSER_HOME=/tmp/composer -e COMPOSER_ALLOW_SUPERUSER=1
 composer_phar_url = https://getcomposer.org/download/latest-2.x/composer.phar
