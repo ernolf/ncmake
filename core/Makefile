@@ -1162,7 +1162,7 @@ build: check-app
 	@echo "==> Building via RUNTIME=$(RUNTIME)"
 	@if [ -n "$(php_build_cmd)" ]; then \
 		app="$(php_app)"; min="$(php_min)"; \
-		if [ "$$app" != "$$min" ]; then echo "composer: building on PHP $$min, the floor of Nextcloud $(nc_eol), the newest end-of-life major; the app's own floor is $${app:+PHP $$app}$${app:-unknown}"; fi; \
+		if [ "$$app" != "$$min" ]; then echo "composer: building on PHP $$min, the floor of Nextcloud $(nc_eol), the newest end-of-life major; the app's own floor is $${app:+PHP }$${app:-unknown}"; fi; \
 		echo "+ $(php_build_cmd)"; \
 		$(php_run) 'export COMPOSER_IGNORE_PLATFORM_REQ="$$($(php_ignored_ext))"; $(php_build_cmd)' || exit 1; \
 	else echo "(composer: nothing to build)"; fi
