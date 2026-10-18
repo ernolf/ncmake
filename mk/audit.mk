@@ -91,6 +91,11 @@ consistency_nc_master = $(shell curl -fsSL "$(nc_server_raw)/master/version.php"
 # stays empty and the analyser falls back on its own snapshot.
 consistency_node_schedule = $(if $(wildcard package.json),$(shell curl -fsSL "$(node_schedule_url)" 2>/dev/null | python3 -c 'import json,sys; s=json.load(sys.stdin); print(" ".join(k+"="+",".join(s[k].get(f,"") for f in ("start","lts","end")) for k in sorted(s) if k[:1]=="v" and k[1:].isdigit()))' 2>/dev/null))
 
+# The paths a release ships, so the audit can name a directory the app reads at run
+# time that the tarball lacks. The patterns as the core packs them, keep_extra
+# included, not what exists of them: the audit decides what a path covers.
+consistency_keep = $(keep_dirs) $(keep_files) $(keep_extra)
+
 # The verifier prints how to run it again as well, and has nothing to say about the
 # name of the checkout: it names the root it resolved, which inside the container
 # is the mount point, so no second variable is handed in.
@@ -137,7 +142,7 @@ consistency-audit:
 	@$(audit_core)
 	@$(call ncmake_lib_need,$(consistency_libs))
 	@echo "==> consistency-audit$(if $(strip $(ARGS)), $(ARGS)) (RUNTIME=$(RUNTIME))" >&2
-	@$(ncmake_lib_read_run) '$(call ncmake_lib_guard,consistency-audit) CONSISTENCY_AUDIT_CMDLINE="$(consistency_cmdline)" CONSISTENCY_AUDIT_APPDIR="$(notdir $(CURDIR))" CONSISTENCY_AUDIT_NC_MASTER="$(consistency_nc_master)" CONSISTENCY_AUDIT_NODE_SCHEDULE="$(consistency_node_schedule)" node $(ncmake_lib_path)/consistency-audit.mjs $(ARGS)'
+	@$(ncmake_lib_read_run) '$(call ncmake_lib_guard,consistency-audit) CONSISTENCY_AUDIT_CMDLINE="$(consistency_cmdline)" CONSISTENCY_AUDIT_APPDIR="$(notdir $(CURDIR))" CONSISTENCY_AUDIT_NC_MASTER="$(consistency_nc_master)" CONSISTENCY_AUDIT_NODE_SCHEDULE="$(consistency_node_schedule)" CONSISTENCY_AUDIT_KEEP="$(consistency_keep)" node $(ncmake_lib_path)/consistency-audit.mjs $(ARGS)'
 
 build-verify:
 	@$(audit_core)
@@ -190,8 +195,10 @@ The second half is what a release needs and a checkout can be missing: the
 back to the project; a <nextcloud> range that names servers that exist, measured
 against the majors released when the analyser was last refreshed; a lockfile, and
 one rather than two; a licence stated the same way everywhere; a linter that a
-script calls while no configuration for it is in the tree. Each of those is
-reported once, with the reason it matters, and never as a score.
+script calls while no configuration for it is in the tree; a directory the code
+reads at run time, through __DIR__ in PHP or linkTo in the frontend, that the
+shipped file set leaves out. Each of those is reported once, with the reason it
+matters, and never as a score.
 
 Findings are marked [!] worth changing, [i] worth knowing, [ok] nothing found,
 and each says which files it was read from. What the checkout does not state is
