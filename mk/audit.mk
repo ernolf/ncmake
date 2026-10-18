@@ -310,7 +310,10 @@ A difference both builds reproduce means the output in the checkout was built
 from another source, and make build is the remedy. Where git ignores the output
 and make build has just run on this working tree, that cannot be the reason:
 ARGS=--fresh says so, and the same difference then reads as a build that depends
-on something a fresh clone does not have, or on the directory it ran in.
+on something a fresh clone does not have, or on the directory it ran in. That
+output is a build of this source in another directory as well: where it matches
+the first build on every file name and every byte but build metadata, it stands
+in for the second build, which then does not run.
 
 Hashed file names are paired by content, so app-3f9c1a2b.js and app-8b20de41.js
 are read as one file under two names, and a reference that carries the hash
