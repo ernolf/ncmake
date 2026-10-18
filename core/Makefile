@@ -244,14 +244,16 @@ php_base_image ?= docker.io/library/php:$(php_version)-cli-alpine
 php_image      ?= ghcr.io/ernolf/ncmake-php:$(php_version)
 analysis_image ?= docker.io/library/composer:2
 # One image runs Node for every line: node_tool_image, Debian slim with git, the CA
-# certificates and the compiler node-gyp builds a native module with, published by
-# the node-images workflow of the ncmake repository for amd64 and arm64. The line
-# itself is the official build from nodejs.org, fetched by node_fetch and mounted
-# read-only at /usr/local, where the Node images keep node, npm and corepack too. A
-# host so keeps one image and one directory per line instead of an image per line.
-# When no source serves node_tool_image, its runs fall back to node_tool_fallback,
-# the image the official Node images build on, which carries the same tools. A
-# node_image or lib_node_image set in ncmake.mk runs as it is, on its own Node.
+# certificates, the compiler node-gyp builds a native module with and Yarn 1, which
+# the official Node images carry for a build script that calls yarn without a
+# yarn.lock, published by the node-images workflow of the ncmake repository for
+# amd64 and arm64. The line itself is the official build from nodejs.org, fetched by
+# node_fetch and mounted read-only at /usr/local, where the Node images keep node,
+# npm and corepack too. A host so keeps one image and one directory per line instead
+# of an image per line. When no source serves node_tool_image, its runs fall back to
+# node_tool_fallback, the image the official Node images build on, which carries the
+# same tools but Yarn 1. A node_image or lib_node_image set in ncmake.mk runs as it
+# is, on its own Node.
 node_tool_image    ?= ghcr.io/ernolf/ncmake-node:latest
 node_tool_fallback  = docker.io/library/buildpack-deps:trixie
 node_image         ?= $(node_tool_image)
@@ -564,7 +566,7 @@ node_fetch = sh -c ' \
 # node_tool_pick prepares node_tool_image and leaves the image to run in ncmake_ti:
 # node_tool_fallback when no source serves it.
 node_tool_pick = { ncmake_ti='$(node_tool_image)'; $(call container_prep,$(node_tool_image)); \
-	$(container_cli) image inspect "$$ncmake_ti" >/dev/null 2>&1 || { echo "==> $(node_tool_image) is not available; running on $(node_tool_fallback) instead" >&2; \
+	$(container_cli) image inspect "$$ncmake_ti" >/dev/null 2>&1 || { echo "==> $(node_tool_image) is not available; running on $(node_tool_fallback) instead, which carries no Yarn 1" >&2; \
 	ncmake_ti='$(node_tool_fallback)'; $(call container_prep,$(node_tool_fallback)); }; }
 # $(call node_in,<image>,<line>,<run options>) starts a container of the image; one of
 # node_tool_image with the Node line mounted at /usr/local.
