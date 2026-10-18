@@ -575,7 +575,7 @@ node_tool_pick = { ncmake_ti='$(node_tool_image)'; $(call container_prep,$(node_
 # node_modules, and npm ci checks every tarball against the integrity the lockfile
 # records, from the cache as from the registry. The directories are created before
 # the mount, so they belong to the caller and not to a runtime that creates a
-# missing one as root. npm never prunes its cache.
+# missing one as root. npm never prunes its cache; make cache-clean removes it.
 node_cache_dirs = "$(ncmake_cache)/npm" "$(ncmake_cache)/corepack"
 node_cache_opts = -v "$(ncmake_cache)/npm":/ncmake-cache/npm -v "$(ncmake_cache)/corepack":/ncmake-cache/corepack \
 	-e npm_config_cache=/ncmake-cache/npm -e COREPACK_HOME=/ncmake-cache/corepack
@@ -591,7 +591,7 @@ ifeq ($(filter $(RUNTIME),bare none),)
 endif
 
 .PHONY: all version changelog tag stable-branch build check-app check-build stage dist rsync cp composer npm reuse psalm \
-        clean dist-clean image-clean image-setup php-containerfile self-update skill-install dev-init dev-clean help
+        clean dist-clean image-clean cache-clean image-setup php-containerfile self-update skill-install dev-init dev-clean help
 
 # == Changelog configuration (git-cliff) ==
 # Keep a Changelog sections from Conventional Commits, user-visible changes only:
@@ -1494,6 +1494,80 @@ image-clean:
 	[ "$$before" -gt 0 ] || exit 0; d=$$((before - after)); [ $$d -ge 0 ] || d=0; \
 	echo "Freed: $$(awk -v b=$$d 'BEGIN { if (b >= 1e9) printf "%.2f GB", b / 1e9; else printf "%.0f MB", b / 1e6 }')"
 
+# List what the per-machine cache holds, entry by entry, with its size, last change
+# and status, and remove the entries picked: by number at the prompt, or every one
+# with all or ALL=1. The cache directory follows NCMAKE_DIR, XDG_CACHE_HOME or the
+# directory of NCMAKE and may hold files of the user, so a file ncmake does not know
+# is foreign and never removed, and the directory goes only once it is empty. An
+# entry a running ncmake container mounts is in use and stays, and so does last-run
+# while one runs, since the idle removal of the images reads it.
+cache-clean:
+	@dir="$(ncmake_cache)"; now=$$(date +%s); \
+	[ -d "$$dir" ] && cd "$$dir" || { echo "No ncmake cache at $$dir."; exit 0; }; pdir=$$(pwd -P); \
+	age() { [ -n "$$1" ] && [ "$$1" -gt 0 ] || return 0; a=$$((now - $$1)); \
+		if [ $$a -lt 3600 ]; then echo "$$((a / 60)) min ago"; elif [ $$a -lt 172800 ]; then echo "$$((a / 3600)) h ago"; else echo "$$((a / 86400)) d ago"; fi; }; \
+	mtime() { m=0; for p in "$$@"; do t=$$(stat -c %Y "$$p" 2>/dev/null || stat -f %m "$$p" 2>/dev/null); [ "$${t:-0}" -le "$$m" ] || m=$$t; done; echo "$$m"; }; \
+	human() { awk -v k="$$1" 'BEGIN { if (k >= 1048576) printf "%.1f GB", k / 1048576; else if (k >= 1024) printf "%.0f MB", k / 1024; else printf "%d kB", k }'; }; \
+	list=$$(mktemp) && mf=$$(mktemp) || exit 1; trap 'rm -f "$$list" "$$mf"' EXIT; \
+	ids=; for c in $(image_engines); do i=$$("$$c" ps -q --filter label=ncmake 2>/dev/null); [ -z "$$i" ] || { ids="$$ids $$i"; \
+		"$$c" inspect --format '{{range .Mounts}}{{println .Source}}{{end}}' $$i >>"$$mf" 2>/dev/null; }; done; \
+	used() { for p in "$$@"; do awk -v a="$$dir/$$p" -v b="$$pdir/$$p" '$$0 == a || $$0 == b || index($$0, a "/") == 1 || index($$0, b "/") == 1 { f = 1 } END { exit !f }' "$$mf" && return 0; done; return 1; }; \
+	add() { st=$$1 name=$$2 note=$$3; shift 3; [ "$$st" = foreign ] || ! used "$$@" || st="in use"; \
+		echo "$$st|$$name|$$note|$$(du -sk "$$@" 2>/dev/null | awk '{ s += $$1 } END { print s + 0 }')|$$(mtime "$$@")|$$*" >>"$$list"; }; \
+	etag() { [ ! -e "$$1.etag" ] || echo "$$1.etag"; }; \
+	mrefs=; for f in * .[!.]* ..?*; do [ -e "$$f" ] || continue; case "$$f" in \
+		*.new) add leftover "$$f" "left by an interrupted download" "$$f" ;; \
+		*.etag) [ -e "$${f%.etag}" ] || add leftover "$$f" "the ETag of a file no longer here" "$$f" ;; \
+		Makefile-*) add ncmake "$$f" "the core of ref $${f#Makefile-}" "$$f" $$(etag "$$f") ;; \
+		*.mk-*) r=$${f#*.mk-}; case " $$mrefs " in *" $$r "*) ;; *) mrefs="$$mrefs $$r" ;; esac ;; \
+		image-sources-*) add ncmake "$$f" "the registry list of ref $${f#image-sources-}" "$$f" $$(etag "$$f") ;; \
+		lib-*) add ncmake "$$f/" "the analyser libraries of ref $${f#lib-}" "$$f" ;; \
+		*.mjs) add leftover "$$f" "an analyser library where an older ncmake kept it" "$$f" $$(etag "$$f") ;; \
+		npm|corepack) add ncmake "$$f/" "the download cache of $$f" "$$f" ;; \
+		last-run) if [ -n "$$ids" ]; then st="in use"; else st=ncmake; fi; add "$$st" "$$f" "the last container run, read by the idle removal of the images" "$$f" ;; \
+		node) [ -d node ] || add foreign "$$f" "" "$$f" ;; \
+		*) add foreign "$$f" "" "$$f" ;; \
+	esac; done; \
+	for r in $$mrefs; do set --; for m in *.mk-"$$r" *.mk-"$$r".etag; do [ ! -e "$$m" ] || set -- "$$@" "$$m"; done; \
+		add ncmake "*.mk-$$r" "the developer modules of ref $$r; only make dev-init brings them back" "$$@"; done; \
+	if [ -d node ]; then for f in node/* node/.[!.]* node/..?*; do [ -e "$$f" ] || continue; case "$${f#node/}" in \
+		v*-linux-*) add ncmake "$$f/" "Node.js $${f#node/}" "$$f" ;; \
+		index.json) add ncmake "$$f" "the release index of nodejs.org" "$$f" ;; \
+		.fetch.*|index.json.*) add leftover "$$f" "left by an interrupted download" "$$f" ;; \
+		*) add foreign "$$f" "" "$$f" ;; \
+	esac; done; fi; \
+	n=$$(wc -l <"$$list"); [ "$$n" -gt 0 ] || { echo "The ncmake cache at $$dir is empty."; exit 0; }; \
+	if [ -n "$(ALL)" ] && [ -n "$$ids" ]; then echo "ERROR: an ncmake container is running; ALL=1 waits until none does." >&2; exit 1; fi; \
+	echo "ncmake cache: $$dir"; pick=; i=0; \
+	printf "%5s  %9s  %-11s  %-8s  %s\n" "" size changed status entry; \
+	while IFS="|" read -r st name note size last paths; do i=$$((i + 1)); mark=" "; \
+		if [ -n "$(ALL)" ] && [ "$$st" != foreign ]; then mark="*"; pick="$$pick $$i"; fi; \
+		printf "%s%4d  %9s  %-11s  %-8s  %s%s\n" "$$mark" "$$i" "$$(human "$$size")" "$$(age "$$last")" "$$st" "$$name" "$${note:+  $$note}"; \
+	done <"$$list"; \
+	if [ -z "$(ALL)" ]; then \
+		[ -z "$(DRY)" ] && [ -t 0 ] || exit 0; \
+		printf "Entries to remove (numbers or ranges, e.g. 1 3-5, or all; empty removes nothing): "; read -r ans || ans=; \
+		ans=$$(echo "$$ans" | tr "," " "); \
+		case " $$ans " in *" all "*) \
+			[ -z "$$ids" ] || { echo "ERROR: an ncmake container is running; all waits until none does." >&2; exit 1; }; \
+			pick=$$(awk -F"|" '$$1 != "foreign" { printf " %d", NR }' "$$list"); ans= ;; esac; \
+		for t in $$ans; do \
+			case "$$t" in *[!0-9-]*|-*|*-|*-*-*) echo "ERROR: not a number or a range: $$t" >&2; exit 1 ;; esac; \
+			a=$${t%-*}; b=$${t#*-}; \
+			[ "$$a" -ge 1 ] && [ "$$a" -le "$$b" ] && [ "$$b" -le "$$n" ] || { echo "ERROR: outside 1-$$n: $$t" >&2; exit 1; }; \
+			while [ "$$a" -le "$$b" ]; do pick="$$pick $$a"; a=$$((a + 1)); done; \
+		done; \
+	fi; \
+	test -n "$$pick" || { echo "Nothing to remove."; exit 0; }; \
+	if [ -n "$(DRY)" ]; then echo "DRY=1: the entries marked * would be removed."; exit 0; fi; \
+	freed=0; i=0; while IFS="|" read -r st name note size last paths; do i=$$((i + 1)); \
+		case " $$pick " in *" $$i "*) ;; *) continue ;; esac; \
+		case "$$st" in foreign|"in use") echo "stays    $$name: $$st"; continue ;; esac; \
+		if rm -rf $$paths; then echo "removed  $$name"; freed=$$((freed + size)); else echo "stays    $$name: could not be removed"; fi; \
+	done <"$$list"; \
+	rmdir node 2>/dev/null; cd / && rmdir "$$dir" 2>/dev/null && echo "removed  $$dir, empty now"; \
+	echo "Freed: $$(human "$$freed")"
+
 # The Containerfile of the PHP floor image, from which the php-images workflow of the
 # ncmake repository publishes php_image. It needs no app.
 php-containerfile:
@@ -1836,6 +1910,31 @@ The flags never pick a foreign image or one a container uses. Nothing is removed
 with -f: an image that a container uses or another tag names stays and says why.
 endef
 
+define help_cache-clean
+make cache-clean [ALL=1] [DRY=1]
+
+Lists what the per-machine ncmake cache holds ($(ncmake_cache)),
+numbered, with the size, the last change and the status of each entry:
+  ncmake    the core, the developer modules, the analyser libraries and the
+            registry list of a ref, a Node.js line, the release index of
+            nodejs.org, the download caches npm/ and corepack/, last-run
+  leftover  what an interrupted download left, or a file where an older
+            ncmake kept it
+  in use    mounted by a running ncmake container; last-run while one runs
+  foreign   a file ncmake does not know
+It asks which entries to remove, by number or range (1 3-5) or all, and reports
+the space that freed. Without a terminal it only lists.
+
+  ALL=1     remove every entry but a foreign one: the whole cache
+  DRY=1     list and mark what ALL=1 would remove, remove nothing
+
+An entry in use and a foreign one always stay, and all and ALL=1 are refused
+while an ncmake container runs. The cache directory goes only once it is empty.
+The next run that needs a removed entry fetches it again, as on a new machine;
+the developer modules come back only with make dev-init. The container images
+are make image-clean's, and the image record is not part of the cache.
+endef
+
 define help_image-setup
 make image-setup [ENGINE=podman|docker]
 
@@ -1935,6 +2034,8 @@ help::
 	@echo "  $(ct)dist-clean$(c0)           Remove ALL git-ignored build outputs (vendor, node_modules, js, …)"
 	@echo "  $(ct)image-clean$(c0)          List the container images on the host and remove the picked ones"
 	@echo "                       $(cv)OWN=1$(c0) ncmake's own, $(cv)OLD=1$(c0) dangling and unused, $(cv)DRY=1$(c0) only show"
+	@echo "  $(ct)cache-clean$(c0)          List the ncmake cache and remove the picked entries"
+	@echo "                       $(cv)ALL=1$(c0) the whole cache, $(cv)DRY=1$(c0) only show"
 	@echo "  $(ct)image-setup$(c0)          Show where the image record lives; share it for rootful docker"
 	@echo "  $(ct)php-containerfile$(c0)    Print the Containerfile of the PHP build image"
 	@echo "  $(ct)self-update$(c0)          Fetch the newest ncmake Makefile"

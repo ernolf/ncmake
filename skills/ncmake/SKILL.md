@@ -87,6 +87,7 @@ Follow these before proposing any command. They are the mistakes that cost the m
 | Remove every git-ignored build output | `make dist-clean` |
 | List the container images on the host and remove some | `make image-clean` |
 | Remove the images ncmake pulled, unattended | `make image-clean OWN=1` |
+| List the ncmake cache and remove some | `make cache-clean` |
 | Update ncmake itself | `make self-update` |
 | Install or refresh this skill file | `make skill-install` |
 
@@ -110,6 +111,8 @@ Every container runs with `--rm` and `--label ncmake`. Before it starts, its ima
 Which registry serves an image is data, not code: `core/image-sources` in the ncmake repo lists, per image reference prefix, the registries to try in order (for the Docker Official Images ECR Public, then `mirror.gcr.io`, then Docker Hub, whose anonymous pull limit is the strictest). A pull that fails, through a rate limit or otherwise, falls through to the next source. The image is tagged with its reference afterwards, so the host keeps one name whatever served it. The list is cached and refreshed like the Makefile; `IMAGE_SOURCES=<file>` uses a list of one's own instead.
 
 `make image-clean` lists the images of every container CLI on the host with size, last use and status (`ncmake`, `built`, `ncmake-used`, `dangling`, `foreign`, `in use`) and removes the ones picked at the prompt. `OWN=1` picks every image ncmake pulled but not the one it built, `OLD=1` every dangling image and every image ncmake pulled or built unused for `IMAGE_IDLE_MIN` minutes (default 10), `DRY=1` only shows the pick. The flags never pick a foreign image or one in use, and nothing is removed with `-f`. It removes images from the host, so run it only when the user asks for it.
+
+`make cache-clean` lists the per-machine ncmake cache entry by entry, with size, last change and status (`ncmake`, `leftover`, `in use`, `foreign`): the core, developer modules, analyser libraries and registry list of each ref, every Node.js line, the release index of nodejs.org, `npm/`, `corepack/`, `last-run` and what an interrupted download left. It removes the entries picked at the prompt, by number or `all`; `ALL=1` picks every entry but a foreign one, `DRY=1` only shows the pick. An entry a running ncmake container mounts stays, `all` and `ALL=1` are refused while one runs, and the directory itself goes only once it is empty. The next run fetches a removed entry again, except the developer modules, which come back only with `make dev-init`. It removes files from the host, so run it only when the user asks for it.
 
 Once no ncmake container has run for `IMAGE_IDLE_MIN` minutes (default 10), the images ncmake pulled itself are removed, as `make image-clean OWN=1` does; a PHP floor image it built on the host stays. A detached waiter that each container run starts does this, so a sequence of targets reuses the images in between. `KEEP=1` starts no waiter, for a series of runs that should keep the images; CI (`CI` set) and `RUNTIME=bare` start none either.
 
