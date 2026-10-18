@@ -222,7 +222,7 @@ Two analysers on one set of measurements, for an app with a frontend. Neither bu
 
 `build-audit` reads the half that never ships and prices what it finds there through the same maps, so a statement about how this app imports something comes with what that costs here. It names only what the app itself can change: the toolchain the checkout is built with, whether the build emits source maps, a page that arrives as one chunk, every package the source imports by its root together with what the build delivers of that package, and moment or a set of statically bound date-fns locales where the source is what pulls them in. What the bundler or a library decides on its own is measured and tabled under `--details` instead of dressed up as a verdict.
 
-Both mark findings `[!]` worth changing, `[i]` worth knowing, `[ok]` nothing found, and each finding says what it is derived from. `ARGS="--details"` adds the tables behind them, `ARGS=--json` emits the whole result for a script. `make help-bundle-report` and `make help-build-audit` list every option.
+Both mark findings `[!]` worth changing, `[i]` worth knowing, `[ok]` nothing found, and each finding says what it is derived from. `ARGS="--details"` adds the tables behind them, `ARGS=--json` emits the whole result for a script, and `JSON=<file>` writes that result to a file from the same run that prints the report. `make help-bundle-report` and `make help-build-audit` list every option.
 
 The analysers are dependency-free ESM files that share their measuring core, so both count the same way. They are fetched into the per-machine ncmake cache on first use, on the same TTL and ETag terms as the modules, and mounted read-only into the throwaway Node container, so the host needs no Node. The fetch happens only when one of the two targets is on the command line, so no other target in any app pays for it.
 
@@ -247,7 +247,7 @@ Four more analysers, in `mk/audit.mk`, about the checkout rather than the bundle
 
 `php-compat` runs the checkout on two PHP versions, each in the build image of that minor (`ghcr.io/ernolf/ncmake-php:<minor>`): the floor `make build` resolves against, and the ceiling, the newest PHP minor that the server of `<nextcloud max-version>` runs on, read from `lib/versioncheck.php` of its stable branch, or of master for a major without one; a higher `<php max-version>` raises it. `PHP=all` adds every minor in between. On each it runs `composer check-platform-reqs --no-dev` and `php -l` over `appinfo/`, `lib/`, `templates/` and `vendor/`. `[!]` marks a package or the app's `composer.json` that refuses one of those PHP versions, a shipped file that does not parse, a `<php max-version>` below the ceiling (a server on a newer PHP refuses to enable the app) and a PHP version that could not be checked; `[i]` a deprecation, an extension the build image lacks, a file of a dev package and a check without `vendor/` or `composer.lock`. Run it after `make build`, so `vendor/` holds what ships; the output of each run stays in `build/php-compat/<minor>`. It needs the network and exits 1 on a `[!]` finding.
 
-`make help-consistency-audit`, `make help-build-verify`, `make help-changelog-lint` and `make help-php-compat` list every option.
+Like the bundle analysers, each takes `ARGS=--json` and `JSON=<file>`. `make help-consistency-audit`, `make help-build-verify`, `make help-changelog-lint` and `make help-php-compat` list every option.
 
 ## CI workflow manager
 

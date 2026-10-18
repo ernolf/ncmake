@@ -118,7 +118,7 @@ verify_transient = $(if $(filter $(RUNTIME),bare none),,BUILD_VERIFY_TRANSIENT=1
 # Makefile refreshes that one by hand - so the core here can be older than the
 # analyser section this module expects. Say which side is behind rather than run an
 # empty command.
-audit_core = $(if $(ncmake_lib_read_run),:,echo "ERROR: this module needs a newer ncmake core - run 'make self-update'" >&2; exit 1)
+audit_core = $(if $(ncmake_lib_read_run),$(if $(and $(JSON),$(if $(value ncmake_json_arg),,1)),echo "ERROR: JSON= needs a newer ncmake core - run 'make self-update'" >&2; exit 1,:),echo "ERROR: this module needs a newer ncmake core - run 'make self-update'" >&2; exit 1)
 
 # make tag checks the changelog the way the App Store reads it rather than by the
 # core's heading grep. A second make, so that the goal changelog-lint fetches the
@@ -154,19 +154,19 @@ consistency-audit:
 	@$(audit_core)
 	@$(call ncmake_lib_need,$(consistency_libs))
 	@echo "==> consistency-audit$(if $(strip $(ARGS)), $(ARGS)) (RUNTIME=$(RUNTIME))" >&2
-	@$(ncmake_lib_read_run) '$(call ncmake_lib_guard,consistency-audit) CONSISTENCY_AUDIT_CMDLINE="$(consistency_cmdline)" CONSISTENCY_AUDIT_APPDIR="$(notdir $(CURDIR))" CONSISTENCY_AUDIT_NC_MASTER="$(consistency_nc_master)" CONSISTENCY_AUDIT_NC_NEWEST="$(consistency_nc_newest)" CONSISTENCY_AUDIT_NODE_SCHEDULE="$(consistency_node_schedule)" CONSISTENCY_AUDIT_KEEP="$(consistency_keep)" node $(ncmake_lib_path)/consistency-audit.mjs $(ARGS)'
+	@$(ncmake_lib_read_run) '$(call ncmake_lib_guard,consistency-audit) CONSISTENCY_AUDIT_CMDLINE="$(consistency_cmdline)" CONSISTENCY_AUDIT_APPDIR="$(notdir $(CURDIR))" CONSISTENCY_AUDIT_NC_MASTER="$(consistency_nc_master)" CONSISTENCY_AUDIT_NC_NEWEST="$(consistency_nc_newest)" CONSISTENCY_AUDIT_NODE_SCHEDULE="$(consistency_node_schedule)" CONSISTENCY_AUDIT_KEEP="$(consistency_keep)" node $(ncmake_lib_path)/consistency-audit.mjs $(ARGS) $(ncmake_json_arg)'
 
 build-verify:
 	@$(audit_core)
 	@$(call ncmake_lib_need,$(verify_libs))
 	@echo "==> build-verify$(if $(strip $(ARGS)), $(ARGS)) (RUNTIME=$(RUNTIME))" >&2
-	@$(ncmake_lib_run) '$(call ncmake_lib_guard,build-verify) $(verify_transient) BUILD_VERIFY_CMDLINE="$(verify_cmdline)" node $(ncmake_lib_path)/build-verify.mjs $(ARGS)'
+	@$(ncmake_lib_run) '$(call ncmake_lib_guard,build-verify) $(verify_transient) BUILD_VERIFY_CMDLINE="$(verify_cmdline)" node $(ncmake_lib_path)/build-verify.mjs $(ARGS) $(ncmake_json_arg)'
 
 changelog-lint:
 	@$(audit_core)
 	@$(call ncmake_lib_need,$(changelog_libs))
 	@echo "==> changelog-lint$(if $(strip $(ARGS)), $(ARGS)) (RUNTIME=$(RUNTIME))" >&2
-	@$(ncmake_lib_read_run) '$(call ncmake_lib_guard,changelog-lint) CHANGELOG_LINT_CMDLINE="$(changelog_cmdline)" node $(ncmake_lib_path)/changelog-lint.mjs $(ARGS)'
+	@$(ncmake_lib_read_run) '$(call ncmake_lib_guard,changelog-lint) CHANGELOG_LINT_CMDLINE="$(changelog_cmdline)" node $(ncmake_lib_path)/changelog-lint.mjs $(ARGS) $(ncmake_json_arg)'
 
 php-compat: check-app
 	@$(audit_core)
@@ -187,13 +187,13 @@ php-compat: check-app
 		echo "==> PHP $$m" >&2; mkdir -p $(compat_dir)/$$m; \
 		$(MAKE) --no-print-directory php-compat-run php_version=$$m php_image=$(compat_image):$$m PHP=min || echo "$$?" >$(compat_dir)/$$m/failed; \
 	done; \
-	$(ncmake_lib_read_run) '$(call ncmake_lib_guard,php-compat) PHP_COMPAT_CMDLINE="$(compat_cmdline)" node $(ncmake_lib_path)/php-compat.mjs $(ARGS)'
+	$(ncmake_lib_read_run) '$(call ncmake_lib_guard,php-compat) PHP_COMPAT_CMDLINE="$(compat_cmdline)" node $(ncmake_lib_path)/php-compat.mjs $(ARGS) $(ncmake_json_arg)'
 
 php-compat-run:
 	@$(php_run) '$(compat_run)'
 
 define help_consistency-audit
-make consistency-audit [ARGS="<audit arguments>"]
+make consistency-audit [ARGS="<audit arguments>"] [JSON=<file>]
 
 Checks whether the checkout agrees with itself. An app states the same fact in
 several files, and each file is valid on its own: appinfo/info.xml and
@@ -238,14 +238,19 @@ ARGS is passed to the analyser; a bare word in it is the checkout to audit
   make consistency-audit ARGS=--details       every table behind the findings
   make consistency-audit ARGS="--details --top=0"  and no row limit in them
   make consistency-audit ARGS=--json > audit.json  machine-readable, nothing else
+  make consistency-audit JSON=audit.json      the report, and the JSON in audit.json
   make consistency-audit ARGS=--help          the analyser's own option list
+
+JSON=<file> writes the JSON of ARGS=--json to <file> as well, from the same run,
+and the report is printed as without it. The file can lie outside the app; it is
+replaced once the run is complete, and a run that stops on an error writes none.
 
 Only the app itself is mounted into the container, so auditing a checkout outside
 it needs RUNTIME=bare and Node on the host.
 endef
 
 define help_php-compat
-make php-compat [PHP=all] [ARGS="<analyser arguments>"]
+make php-compat [PHP=all] [ARGS="<analyser arguments>"] [JSON=<file>]
 
 Checks whether the app runs on the PHP versions its servers run it on. A server
 states the PHP it accepts in lib/versioncheck.php, and the app states the servers
@@ -282,14 +287,19 @@ make build fails on it. ARGS is passed to the analyser:
   make php-compat PHP=all               every minor in between too
   make php-compat ARGS=--details        every file behind the findings
   make php-compat ARGS=--json > compat.json  machine-readable, nothing else
+  make php-compat JSON=compat.json      the report, and the JSON in compat.json
   make php-compat ARGS=--help           the analyser's own option list
+
+JSON=<file> writes the JSON of ARGS=--json to <file> as well, from the same run,
+and the report is printed as without it. The file can lie outside the app; it is
+replaced once the run is complete, and a run that stops on an error writes none.
 
 It needs the network for versioncheck.php and the images. With RUNTIME=bare it
 runs on the PHP of the host, once per minor, and says so.
 endef
 
 define help_build-verify
-make build-verify [ARGS="<verify arguments>"]
+make build-verify [ARGS="<verify arguments>"] [JSON=<file>]
 
 Answers one question: does the build output in this checkout come from the source
 beside it. It copies the tracked files into a scratch tree outside the app,
@@ -334,7 +344,12 @@ ARGS is passed to the analyser; a bare word in it is the checkout to verify
   make build-verify ARGS=--once             one build instead of two
   make build && make build-verify ARGS=--fresh  output built right before
   make build-verify ARGS=--json > verify.json  machine-readable, nothing else
+  make build-verify JSON=verify.json        the report, and the JSON in verify.json
   make build-verify ARGS=--help             the analyser's own option list
+
+JSON=<file> writes the JSON of ARGS=--json to <file> as well, from the same run,
+and the report is printed as without it. The file can lie outside the app; it is
+replaced once the run is complete, and a run that stops on an error writes none.
 
 It installs and builds, so unlike consistency-audit it needs the network and
 takes minutes rather than a second. Where it runs it needs git and npm. In a
@@ -349,7 +364,7 @@ printed apart, which in a container is the only record of why.
 endef
 
 define help_changelog-lint
-make changelog-lint [ARGS="<lint arguments>"]
+make changelog-lint [ARGS="<lint arguments>"] [JSON=<file>]
 
 Checks whether the App Store finds this release in the changelog. The store takes
 the changelog from the tarball and reads exactly two kinds of file there:
@@ -389,7 +404,12 @@ ARGS is passed to the analyser; a bare word in it is the checkout to check
   make changelog-lint                      this app, this version
   make changelog-lint ARGS=--nightly       the section a nightly is read from
   make changelog-lint ARGS=--json > changelog.json  machine-readable, nothing else
+  make changelog-lint JSON=changelog.json  the report, and the JSON in changelog.json
   make changelog-lint ARGS=--help          the analyser's own option list
+
+JSON=<file> writes the JSON of ARGS=--json to <file> as well, from the same run,
+and the report is printed as without it. The file can lie outside the app; it is
+replaced once the run is complete, and a run that stops on an error writes none.
 
 It reads the checkout only: no build, no network. The analyser runs in the
 throwaway Node container and is mounted in from the ncmake cache, so nothing is
