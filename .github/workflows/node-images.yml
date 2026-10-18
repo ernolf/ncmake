@@ -53,8 +53,11 @@ env:
   YARN_VERSION: 1.22.22
   YARN_KEY: 6A010C5166006599AA17F08146C2130DFD2497F5
   # Yarn is fetched and verified in a stage of its own, so curl and gnupg stay out of
-  # the image. libatomic1 is a library Node itself loads; the apt lists only serve the
-  # install and go in the same layer.
+  # the image. keys.openpgp.org serves the Yarn key without its user ID, which gpg
+  # skips with a success status, so only gpg --fingerprint tells whether the key
+  # arrived and the next keyserver is needed, as in the official Dockerfiles.
+  # libatomic1 is a library Node itself loads; the apt lists only serve the install
+  # and go in the same layer.
   CONTAINERFILE: |
     ARG base
     FROM $base AS yarn
@@ -62,7 +65,7 @@ env:
     ARG yarn_key
     RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl gnupg dirmngr \
       && export GNUPGHOME="$(mktemp -d)" \
-      && { gpg --batch --keyserver hkps://keys.openpgp.org --recv-keys "$yarn_key" || gpg --batch --keyserver keyserver.ubuntu.com --recv-keys "$yarn_key"; } \
+      && { { gpg --batch --keyserver hkps://keys.openpgp.org --recv-keys "$yarn_key" && gpg --batch --fingerprint "$yarn_key"; } || { gpg --batch --keyserver keyserver.ubuntu.com --recv-keys "$yarn_key" && gpg --batch --fingerprint "$yarn_key"; }; } \
       && curl -fsSLO --compressed "https://yarnpkg.com/downloads/$yarn/yarn-v$yarn.tar.gz" \
       && curl -fsSLO --compressed "https://yarnpkg.com/downloads/$yarn/yarn-v$yarn.tar.gz.asc" \
       && gpg --batch --verify "yarn-v$yarn.tar.gz.asc" "yarn-v$yarn.tar.gz" \
