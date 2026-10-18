@@ -1989,8 +1989,17 @@ ncmake_lib_need = for f in $(1); do test -s "$(ncmake_lib_dir)/$$f" || { echo "E
 # and mounted there instead; the directory is removed when the run ends.
 # With RUNTIME=bare there is no container and the host path is used as it is; with
 # no runtime at all $(node_run) carries the "install podman" abort.
+#
+# JSON=<file> has an analyser write the JSON of --json to <file> as well, from the
+# run that prints the text report. The container sees only /app and /ncmake, so the
+# directory of the file is mounted writable at /ncmake-json and the analyser gets
+# the path in there as --json-file; a module puts $(ncmake_json_arg) after ARGS.
+# The directory is created before the mount, so it belongs to the caller.
+ncmake_json_file  = $(abspath $(JSON))
+ncmake_json_mkdir = $(if $(JSON),mkdir -p "$(dir $(ncmake_json_file))" && )
 ifeq ($(filter $(RUNTIME),bare none),)
-  ncmake_lib_in       = $(call node_in,$(1),lts,-v "$(ncmake_lib_dir)":/ncmake:ro $(2)) sh -lc
+  ncmake_json_arg     = $(if $(JSON),--json-file="/ncmake-json/$(notdir $(ncmake_json_file))")
+  ncmake_lib_in       = $(ncmake_json_mkdir)$(call node_in,$(1),lts,-v "$(ncmake_lib_dir)":/ncmake:ro $(if $(JSON),-v "$(dir $(ncmake_json_file))":/ncmake-json) $(2)) sh -lc
   ncmake_lib_copy     = $(call container_prep,$(node_image)) && ncmake_node=$$(mktemp -d) && trap 'rm -rf "$$ncmake_node"' EXIT \
 	&& { cid=$$($(container_cli) create --label ncmake $(node_image)) && { $(container_cli) cp "$$cid":/usr/local "$$ncmake_node/"; ok=$$?; $(container_cli) rm "$$cid" >/dev/null; [ $$ok -eq 0 ]; } \
 		|| { echo "ERROR: could not copy the Node of $(node_image) out of its image" >&2; exit 1; }; } \
@@ -2000,8 +2009,9 @@ ifeq ($(filter $(RUNTIME),bare none),)
   ncmake_lib_read_run = $(call ncmake_lib_in,$(lib_node_image))
   ncmake_lib_path     = /ncmake
 else
-  ncmake_lib_run      = $(node_run)
-  ncmake_lib_read_run = $(node_run)
+  ncmake_json_arg     = $(if $(JSON),--json-file="$(ncmake_json_file)")
+  ncmake_lib_run      = $(ncmake_json_mkdir)$(node_run)
+  ncmake_lib_read_run = $(ncmake_json_mkdir)$(node_run)
   ncmake_lib_path     = $(ncmake_lib_dir)
 endif
 

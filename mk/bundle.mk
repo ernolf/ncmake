@@ -41,7 +41,7 @@ audit_cmdline  = make build-audit ARGS=\"%s\"
 # Makefile refreshes that one by hand - so the core here can be older than the
 # analyser section this module expects. Say which side is behind rather than run an
 # empty command.
-analyse_core = $(if $(ncmake_lib_read_run),:,echo "ERROR: this module needs a newer ncmake core - run 'make self-update'" >&2; exit 1)
+analyse_core = $(if $(ncmake_lib_read_run),$(if $(and $(JSON),$(if $(value ncmake_json_arg),,1)),echo "ERROR: JSON= needs a newer ncmake core - run 'make self-update'" >&2; exit 1,:),echo "ERROR: this module needs a newer ncmake core - run 'make self-update'" >&2; exit 1)
 
 .PHONY: bundle-report build-audit
 
@@ -49,16 +49,16 @@ bundle-report:
 	@$(analyse_core)
 	@$(call ncmake_lib_need,$(report_libs))
 	@echo "==> bundle-report$(if $(strip $(ARGS)), $(ARGS)) (RUNTIME=$(RUNTIME))" >&2
-	@$(ncmake_lib_read_run) '$(call ncmake_lib_guard,bundle-report) BUNDLE_REPORT_CMDLINE="$(report_cmdline)" node $(ncmake_lib_path)/bundle-report.mjs $(ARGS)'
+	@$(ncmake_lib_read_run) '$(call ncmake_lib_guard,bundle-report) BUNDLE_REPORT_CMDLINE="$(report_cmdline)" node $(ncmake_lib_path)/bundle-report.mjs $(ARGS) $(ncmake_json_arg)'
 
 build-audit:
 	@$(analyse_core)
 	@$(call ncmake_lib_need,$(audit_libs))
 	@echo "==> build-audit$(if $(strip $(ARGS)), $(ARGS)) (RUNTIME=$(RUNTIME))" >&2
-	@$(ncmake_lib_read_run) '$(call ncmake_lib_guard,build-audit) BUILD_AUDIT_CMDLINE="$(audit_cmdline)" node $(ncmake_lib_path)/build-audit.mjs $(ARGS)'
+	@$(ncmake_lib_read_run) '$(call ncmake_lib_guard,build-audit) BUILD_AUDIT_CMDLINE="$(audit_cmdline)" node $(ncmake_lib_path)/build-audit.mjs $(ARGS) $(ncmake_json_arg)'
 
 define help_bundle-report
-make bundle-report [ARGS="<report arguments>"]
+make bundle-report [ARGS="<report arguments>"] [JSON=<file>]
 
 Reports what a browser downloads when a page of this app opens. Every file in the
 built directory that no other file there imports counts as an entry; from each
@@ -109,11 +109,16 @@ ARGS is passed to the analyser; a bare word in it is the directory to read
   make bundle-report ARGS=dist                report on dist/, stylesheets included
   make bundle-report ARGS=--css=build/css     stylesheets outside ../css
   make bundle-report ARGS=--json > report.json   machine-readable, nothing else
+  make bundle-report JSON=report.json         the report, and the JSON in report.json
   make bundle-report ARGS=--help              the analyser's own option list
+
+JSON=<file> writes the JSON of ARGS=--json to <file> as well, from the same run,
+and the report is printed as without it. The file can lie outside the app; it is
+replaced once the run is complete, and a run that stops on an error writes none.
 endef
 
 define help_build-audit
-make build-audit [ARGS="<audit arguments>"]
+make build-audit [ARGS="<audit arguments>"] [JSON=<file>]
 
 Audits why the bundle is the size it is. bundle-report measures what ships; this
 reads the half that never does - the bundler config, package.json and the source
@@ -153,7 +158,12 @@ ARGS is passed to the analyser; a bare word in it is the checkout to audit
   make build-audit ARGS=--build=dist          built assets in dist/, not js/
   make build-audit ARGS=--src=srcjs           source outside src/
   make build-audit ARGS=--json > audit.json   machine-readable, nothing else
+  make build-audit JSON=audit.json            the report, and the JSON in audit.json
   make build-audit ARGS=--help                the analyser's own option list
+
+JSON=<file> writes the JSON of ARGS=--json to <file> as well, from the same run,
+and the report is printed as without it. The file can lie outside the app; it is
+replaced once the run is complete, and a run that stops on an error writes none.
 endef
 
 help::
