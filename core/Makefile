@@ -568,13 +568,25 @@ node_fetch = sh -c ' \
 node_tool_pick = { ncmake_ti='$(node_tool_image)'; $(call container_prep,$(node_tool_image)); \
 	$(container_cli) image inspect "$$ncmake_ti" >/dev/null 2>&1 || { echo "==> $(node_tool_image) is not available; running on $(node_tool_fallback) instead, which carries no Yarn 1" >&2; \
 	ncmake_ti='$(node_tool_fallback)'; $(call container_prep,$(node_tool_fallback)); }; }
-# $(call node_in,<image>,<line>,<run options>) starts a container of the image; one of
-# node_tool_image with the Node line mounted at /usr/local.
-node_in = $(if $(filter $(node_tool_image),$(1)),ncmake_nl=$$($(node_fetch) '$(2)' '$(node_dir)') && $(node_tool_pick) && $(container) -v "$$ncmake_nl":/usr/local:ro $(3) "$$ncmake_ti",$(call container_run,$(1),$(3)))
+# npm and corepack keep what they download below the ncmake cache, which every Node
+# container mounts read-write: the tarballs of a lockfile and the package managers
+# corepack fetches are downloaded once per host instead of once per run, and make
+# build, build-verify and the next app share them. The cache holds downloads, not
+# node_modules, and npm ci checks every tarball against the integrity the lockfile
+# records, from the cache as from the registry. The directories are created before
+# the mount, so they belong to the caller and not to a runtime that creates a
+# missing one as root. npm never prunes its cache.
+node_cache_dirs = "$(ncmake_cache)/npm" "$(ncmake_cache)/corepack"
+node_cache_opts = -v "$(ncmake_cache)/npm":/ncmake-cache/npm -v "$(ncmake_cache)/corepack":/ncmake-cache/corepack \
+	-e npm_config_cache=/ncmake-cache/npm -e COREPACK_HOME=/ncmake-cache/corepack
+# $(call node_in,<image>,<line>,<run options>) starts a container of the image, with
+# the npm and corepack cache mounted; one of node_tool_image with the Node line
+# mounted at /usr/local.
+node_in = mkdir -p $(node_cache_dirs) && $(if $(filter $(node_tool_image),$(1)),ncmake_nl=$$($(node_fetch) '$(2)' '$(node_dir)') && $(node_tool_pick) && $(container) -v "$$ncmake_nl":/usr/local:ro $(node_cache_opts) $(3) "$$ncmake_ti",$(call container_run,$(1),$(node_cache_opts) $(3)))
 
 ifeq ($(filter $(RUNTIME),bare none),)
   php_run   = $(if $(filter min,$(PHP)),$(php_floor_run),$(call container_run,$(analysis_image),$(php_env)) sh -lc)
-  node_run  = $(call node_in,$(node_image),$(node_line),-e npm_config_cache=/tmp/.npm -e COREPACK_HOME=/tmp/.corepack) sh -lc
+  node_run  = $(call node_in,$(node_image),$(node_line)) sh -lc
   reuse_run = $(call container_run,$(reuse_image))
 endif
 
@@ -1965,7 +1977,7 @@ endif
 ncmake_lib_need = for f in $(1); do test -s "$(ncmake_lib_dir)/$$f" || { echo "ERROR: could not fetch $(ncmake_raw)/lib/$$f - network?" >&2; exit 1; }; done
 
 # The library directory is mounted at /ncmake, read-only, alongside the app at
-# /app, and gets the writable npm cache every other npm call here gets: an
+# /app, and gets the npm and corepack cache every other npm call here gets: an
 # analyser that builds runs npm, and the container user has no home of its own.
 # Every analyser runs on lib_node_image with the newest LTS line, so an old
 # engines.node cannot keep it from loading. One that builds the app (ncmake_lib_run)
@@ -1978,7 +1990,7 @@ ncmake_lib_need = for f in $(1); do test -s "$(ncmake_lib_dir)/$$f" || { echo "E
 # With RUNTIME=bare there is no container and the host path is used as it is; with
 # no runtime at all $(node_run) carries the "install podman" abort.
 ifeq ($(filter $(RUNTIME),bare none),)
-  ncmake_lib_in       = $(call node_in,$(1),lts,-v "$(ncmake_lib_dir)":/ncmake:ro -e npm_config_cache=/tmp/.npm $(2)) sh -lc
+  ncmake_lib_in       = $(call node_in,$(1),lts,-v "$(ncmake_lib_dir)":/ncmake:ro $(2)) sh -lc
   ncmake_lib_copy     = $(call container_prep,$(node_image)) && ncmake_node=$$(mktemp -d) && trap 'rm -rf "$$ncmake_node"' EXIT \
 	&& { cid=$$($(container_cli) create --label ncmake $(node_image)) && { $(container_cli) cp "$$cid":/usr/local "$$ncmake_node/"; ok=$$?; $(container_cli) rm "$$cid" >/dev/null; [ $$ok -eq 0 ]; } \
 		|| { echo "ERROR: could not copy the Node of $(node_image) out of its image" >&2; exit 1; }; } \
