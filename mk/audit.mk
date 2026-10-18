@@ -84,6 +84,12 @@ consistency_cmdline = make consistency-audit ARGS=\"%s\"
 # read it stays empty and the analyser falls back on its own table of majors.
 consistency_nc_master = $(shell curl -fsSL "$(nc_server_raw)/master/version.php" 2>/dev/null | sed -n 's/^\$$OC_Version[^0-9]*\([0-9]*\).*/\1/p' | head -1)
 
+# The newest major nextcloud/server has released, the highest major among its
+# release tags vX.Y.Z; a tag with a beta or rc suffix is no release. The App Store
+# rules let a <nextcloud max-version> reach one major beyond it. Read and, where it
+# cannot be read, left to the analyser like the master major.
+consistency_nc_newest = $(shell git ls-remote --tags --refs https://github.com/nextcloud/server.git 'v*' 2>/dev/null | sed -n 's|.*refs/tags/v\([0-9]*\)\.[0-9]*\.[0-9]*$$|\1|p' | sort -n | tail -1)
+
 # The Node.js release schedule the core picks the build Node from, so the audit
 # can tell when engines.node admits only end-of-life lines. It is handed in as one
 # word per line, v<major>=<start>,<lts>,<end>, which needs no quoting in the
@@ -142,7 +148,7 @@ consistency-audit:
 	@$(audit_core)
 	@$(call ncmake_lib_need,$(consistency_libs))
 	@echo "==> consistency-audit$(if $(strip $(ARGS)), $(ARGS)) (RUNTIME=$(RUNTIME))" >&2
-	@$(ncmake_lib_read_run) '$(call ncmake_lib_guard,consistency-audit) CONSISTENCY_AUDIT_CMDLINE="$(consistency_cmdline)" CONSISTENCY_AUDIT_APPDIR="$(notdir $(CURDIR))" CONSISTENCY_AUDIT_NC_MASTER="$(consistency_nc_master)" CONSISTENCY_AUDIT_NODE_SCHEDULE="$(consistency_node_schedule)" CONSISTENCY_AUDIT_KEEP="$(consistency_keep)" node $(ncmake_lib_path)/consistency-audit.mjs $(ARGS)'
+	@$(ncmake_lib_read_run) '$(call ncmake_lib_guard,consistency-audit) CONSISTENCY_AUDIT_CMDLINE="$(consistency_cmdline)" CONSISTENCY_AUDIT_APPDIR="$(notdir $(CURDIR))" CONSISTENCY_AUDIT_NC_MASTER="$(consistency_nc_master)" CONSISTENCY_AUDIT_NC_NEWEST="$(consistency_nc_newest)" CONSISTENCY_AUDIT_NODE_SCHEDULE="$(consistency_node_schedule)" CONSISTENCY_AUDIT_KEEP="$(consistency_keep)" node $(ncmake_lib_path)/consistency-audit.mjs $(ARGS)'
 
 build-verify:
 	@$(audit_core)
@@ -192,25 +198,27 @@ holds the files against each other and reports where they disagree.
 
 The second half is what a release needs and a checkout can be missing: the
 <repository> and <bugs> links, which are the only way from a published release
-back to the project; a <nextcloud> range that names servers that exist, measured
-against the majors released when the analyser was last refreshed; a lockfile, and
-one rather than two; a licence stated the same way everywhere; a linter that a
-script calls while no configuration for it is in the tree; a directory the code
-reads at run time, through __DIR__ in PHP or linkTo in the frontend, that the
-shipped file set leaves out. Each of those is reported once, with the reason it
-matters, and never as a score.
+back to the project; a <nextcloud> range that names servers that exist and
+reaches no further than the App Store rules allow, the newest released major plus
+one; an app name without Nextcloud in it, which those rules also demand; a
+lockfile, and one rather than two; a licence stated the same way everywhere; a
+linter that a script calls while no configuration for it is in the tree; a
+directory the code reads at run time, through __DIR__ in PHP or linkTo in the
+frontend, that the shipped file set leaves out. Each of those is reported once,
+with the reason it matters, and never as a score.
 
 Findings are marked [!] worth changing, [i] worth knowing, [ok] nothing found,
 and each says which files it was read from. What the checkout does not state is
-named as not stated instead of being guessed at - with one exception, the list of
-released Nextcloud majors, which is written into the analyser, and the report
-names the month that list is from. The major nextcloud/server develops on master
-is read from its version.php instead: a <nextcloud max-version> beyond it names
-servers nobody has run the app on. Without the network the list stands in for it,
-and the report says so. The Node.js release schedule is read the same way, so an
-engines.node that admits only end-of-life Node lines is reported with the line
-the release is built on and the oldest line still maintained; without the network
-a snapshot in the analyser stands in for the schedule.
+named as not stated instead of being guessed at - with one exception, the oldest
+Nextcloud major still maintained, which is written into the analyser, and the
+report names the month that is from. The newest released major is read from the
+release tags of nextcloud/server, and the major it develops on master from its
+version.php: a <nextcloud max-version> beyond that names servers nobody has run
+the app on. Without the network a list of majors in the analyser stands in for
+both, and the report says so. The Node.js release schedule is read the same way,
+so an engines.node that admits only end-of-life Node lines is reported with the
+line the release is built on and the oldest line still maintained; without the
+network a snapshot in the analyser stands in for the schedule.
 
 It reads metadata only: no build, no install, no installed dependency tree, no
 bytes. That makes it useful on a fresh clone, and on an app that never heard of
