@@ -1,0 +1,125 @@
+# SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
+# SPDX-License-Identifier: MIT
+#
+# Publishes the Node image of ncmake, ghcr.io/ernolf/ncmake-node:latest, for amd64
+# and arm64. https://github.com/ernolf/ncmake
+#
+# One image serves every Node line: Debian slim with git, the CA certificates and the
+# compiler node-gyp builds a native module with. It carries no Node. The core Makefile
+# mounts the official build of the line from nodejs.org at /usr/local, so the image
+# does not change with a Node release.
+#
+# The image is built again only when its inputs change: the digest of its base image
+# or the Containerfile. Their fingerprint is the label ncmake.inputs of the published
+# image, so a day without a change costs a few registry requests. workflow_dispatch
+# with rebuild builds it whether they changed or not.
+
+name: Node image
+
+on:
+  schedule:
+    - cron: '47 4 * * *'
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/node-images.yml
+  workflow_dispatch:
+    inputs:
+      rebuild:
+        description: Build the image, whether its inputs changed or not
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: node-images
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/ernolf/ncmake-node:latest
+  BASE: docker.io/library/debian:trixie-slim
+  # libatomic1 is a library Node itself loads; the apt lists only serve the install
+  # and go in the same layer.
+  CONTAINERFILE: |
+    ARG base
+    FROM $base
+    RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git python3 make g++ libatomic1 && rm -rf /var/lib/apt/lists/*
+
+jobs:
+  plan:
+    name: Compare the inputs with the published image
+    if: github.repository == 'ernolf/ncmake'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      build: ${{ steps.plan.outputs.build }}
+      base: ${{ steps.plan.outputs.base }}
+      sum: ${{ steps.plan.outputs.sum }}
+    steps:
+      - name: Compare the inputs with the published image
+        id: plan
+        env:
+          REBUILD: ${{ inputs.rebuild || false }}
+          GH_ACTOR: ${{ github.actor }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          printf '%s\n' "$GH_TOKEN" | skopeo login ghcr.io -u "$GH_ACTOR" --password-stdin >/dev/null
+          digest=$(skopeo inspect --no-tags --format '{{.Digest}}' "docker://$BASE")
+          sum=$(printf '%s\n' "$CONTAINERFILE" "$digest" | sha256sum | cut -d ' ' -f 1)
+          published=$(skopeo inspect --no-tags --format '{{index .Labels "ncmake.inputs"}}' "docker://$IMAGE" 2>/dev/null || :)
+          if [ "$REBUILD" != true ] && [ "$published" = "$sum" ]; then
+            echo "$IMAGE: unchanged"
+            build=false
+          else
+            echo "$IMAGE: to build"
+            build=true
+          fi
+          {
+            echo "build=$build"
+            echo "base=$BASE@$digest"
+            echo "sum=$sum"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build and push the Node image
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Write the Containerfile
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/node-image"
+          printf '%s\n' "$CONTAINERFILE" > "$RUNNER_TEMP/node-image/Containerfile"
+
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ runner.temp }}/node-image
+          file: ${{ runner.temp }}/node-image/Containerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          tags: ${{ env.IMAGE }}
+          build-args: |
+            base=${{ needs.plan.outputs.base }}
+          labels: |
+            ncmake.inputs=${{ needs.plan.outputs.sum }}
+            org.opencontainers.image.source=https://github.com/ernolf/ncmake

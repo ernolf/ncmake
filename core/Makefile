@@ -193,7 +193,8 @@ no_runtime   = sh -c 'echo >&2; echo "ERROR: no container runtime found (podman/
 #                    a current runtime matters - psalm needs a recent patch - while the
 #                    analysed PHP level stays pinned through psalm.xml, so the image's fixed
 #                    PHP version does not affect the result.
-# The Node image comes from package.json's engines.node, see node_major.
+# The Node line comes from package.json's engines.node, see node_major, and runs in
+# node_tool_image.
 # An info.xml without <php> still has a PHP floor: the one its oldest declared server
 # refuses to run below. Each server states it in its own lib/versioncheck.php, read
 # here from its stable branch, or from master for a major that has none yet.
@@ -231,7 +232,7 @@ php_version     = $(php_min)
 # floor, not the version to build on. When no LTS line fits, the newest current
 # line that does; when only end-of-life lines fit, the newest of them, with a
 # warning. A line the schedule lists before its start date has no image yet and
-# counts in none of these. Without engines.node the image is node:lts. When the
+# counts in none of these. Without engines.node it is the newest LTS line. When the
 # schedule cannot be read, node_schedule_fallback stands in, a snapshot of it from
 # 2026-10.
 node_schedule_url      = https://raw.githubusercontent.com/nodejs/Release/main/schedule.json
@@ -242,10 +243,22 @@ node_major_of = $(if $(filter eol,$(1)),$(warning engines.node in package.json a
 php_base_image ?= docker.io/library/php:$(php_version)-cli-alpine
 php_image      ?= ghcr.io/ernolf/ncmake-php:$(php_version)
 analysis_image ?= docker.io/library/composer:2
-node_image     ?= docker.io/library/node:$(or $(node_major),lts)
-# The ncmake analysers run here, whatever Node the app declares; the one that builds
-# the app takes the app's Node from node_image (see ncmake_lib_run).
-lib_node_image ?= docker.io/library/node:lts
+# One image runs Node for every line: node_tool_image, Debian slim with git, the CA
+# certificates and the compiler node-gyp builds a native module with, published by
+# the node-images workflow of the ncmake repository for amd64 and arm64. The line
+# itself is the official build from nodejs.org, fetched by node_fetch and mounted
+# read-only at /usr/local, where the Node images keep node, npm and corepack too. A
+# host so keeps one image and one directory per line instead of an image per line.
+# When no source serves node_tool_image, its runs fall back to node_tool_fallback,
+# the image the official Node images build on, which carries the same tools. A
+# node_image or lib_node_image set in ncmake.mk runs as it is, on its own Node.
+node_tool_image    ?= ghcr.io/ernolf/ncmake-node:latest
+node_tool_fallback  = docker.io/library/buildpack-deps:trixie
+node_image         ?= $(node_tool_image)
+node_line           = $(or $(node_major),lts)
+# The ncmake analysers run on the newest LTS line, whatever Node the app declares; the
+# one that builds the app takes the app's line besides (see ncmake_lib_run).
+lib_node_image     ?= $(node_tool_image)
 reuse_image    ?= docker.io/fsfe/reuse:latest
 # PHP picks the image per task: max (default) runs on analysis_image, the newest tooled
 # runtime, right for dev tools and psalm; min runs on php_image, the support floor, for
@@ -506,9 +519,60 @@ php_floor_pick    = { img='$(php_image)'; \
 	$(if $(php_floor_mode),,$(call container_prep,$(php_image)); ) }
 php_floor_run     = $(php_floor_pick) && $(or $(container_root),$(container)) $(php_env) "$$img" sh -c '$(php_floor_setup) exec $(if $(container_user),su-exec $(container_user) )sh -lc "$$1"' php-floor
 
+# node_fetch prints the directory of a Node line, a major or lts for the newest LTS
+# line, below node_dir. The release index of nodejs.org names the newest release of
+# the line; it is read again once it is older than IMAGE_CHECK_MIN minutes, as the
+# images are checked, and without the network the copy on the host still answers.
+# The tarball is checked against the SHASUMS256.txt of its release and unpacked once,
+# without the OpenSSL headers of the other architectures, which the Node images drop
+# too. A release that does not arrive leaves the newest one of the line already on
+# the host. The release it supersedes is removed once no ncmake container runs, since
+# a running one may have it mounted.
+node_dist_url = https://nodejs.org/dist
+node_dir      = $(ncmake_cache)/node
+node_fetch = sh -c ' \
+	line=$$1 dir=$$2 url=$(node_dist_url); \
+	case "$$(uname -m)" in x86_64|amd64) arch=x64 ossl=linux-x86_64 ;; aarch64|arm64) arch=arm64 ossl=linux-aarch64 ;; \
+		*) echo "ERROR: nodejs.org has no Linux build of Node.js for $$(uname -m)" >&2; exit 1 ;; esac; \
+	mkdir -p "$$dir" || exit 1; idx=$$dir/index.json; \
+	if [ ! -s "$$idx" ] || [ -n "$$(find "$$idx" -mmin +$(IMAGE_CHECK_MIN) 2>/dev/null)" ]; then \
+		t=$$(mktemp "$$idx.XXXXXX") && { curl -fsSL "$$url/index.json" -o "$$t" 2>/dev/null && [ -s "$$t" ] && mv -f "$$t" "$$idx" || rm -f "$$t"; }; \
+	fi; \
+	v=$$(grep "^{\"version\":\"v[0-9]" "$$idx" 2>/dev/null | grep "\"linux-$$arch\"" \
+		| if [ "$$line" = lts ]; then grep -v "\"lts\":false"; else grep "^{\"version\":\"v$$line\."; fi \
+		| head -n 1 | sed "s/^{\"version\":\"\([^\"]*\)\".*/\1/"); \
+	rel=$$dir/$$v-linux-$$arch; \
+	if [ -n "$$v" ] && [ ! -x "$$rel/bin/node" ] && t=$$(mktemp -d "$$dir/.fetch.XXXXXX"); then \
+		echo "==> Fetching Node.js $$v for linux-$$arch from nodejs.org" >&2; f=node-$$v-linux-$$arch.tar.gz; \
+		if curl -fsSL "$$url/$$v/$$f" -o "$$t/$$f" && curl -fsSL "$$url/$$v/SHASUMS256.txt" -o "$$t/SHASUMS256.txt" \
+			&& ( cd "$$t" && grep " $$f\$$" SHASUMS256.txt | sha256sum -c - >/dev/null ) \
+			&& mkdir "$$t/node" && tar -xzf "$$t/$$f" -C "$$t/node" --strip-components=1 --no-same-owner; then \
+			find "$$t/node/include/node/openssl/archs" -mindepth 1 -maxdepth 1 ! -name "$$ossl" -exec rm -rf {} + 2>/dev/null; \
+			[ -e "$$rel" ] || mv "$$t/node" "$$rel"; \
+		else echo "==> Fetching Node.js $$v failed" >&2; fi; \
+		rm -rf "$$t"; \
+	fi; \
+	if [ ! -x "$$rel/bin/node" ]; then \
+		case "$$line" in lts) maj=$${v%%.*} ;; *) maj=v$$line ;; esac; \
+		rel=$$([ -z "$$maj" ] || ls -d "$$dir/$$maj".*-linux-$$arch 2>/dev/null | sort -V | tail -n 1); \
+	fi; \
+	[ -n "$$rel" ] && [ -x "$$rel/bin/node" ] || { echo "ERROR: no Node.js $$line for linux-$$arch on this host, and $$url could not provide it" >&2; exit 1; }; \
+	if [ "$$rel" = "$$dir/$$v-linux-$$arch" ] && ! { for c in $(image_engines); do "$$c" ps -q --filter label=ncmake 2>/dev/null; done | grep -q .; }; then \
+		for d in "$$dir/$${v%%.*}".*-linux-$$arch; do [ "$$d" = "$$rel" ] || [ ! -d "$$d" ] || rm -rf "$$d"; done; \
+	fi; \
+	echo "$$rel"' node-fetch
+# node_tool_pick prepares node_tool_image and leaves the image to run in ncmake_ti:
+# node_tool_fallback when no source serves it.
+node_tool_pick = { ncmake_ti='$(node_tool_image)'; $(call container_prep,$(node_tool_image)); \
+	$(container_cli) image inspect "$$ncmake_ti" >/dev/null 2>&1 || { echo "==> $(node_tool_image) is not available; running on $(node_tool_fallback) instead" >&2; \
+	ncmake_ti='$(node_tool_fallback)'; $(call container_prep,$(node_tool_fallback)); }; }
+# $(call node_in,<image>,<line>,<run options>) starts a container of the image; one of
+# node_tool_image with the Node line mounted at /usr/local.
+node_in = $(if $(filter $(node_tool_image),$(1)),ncmake_nl=$$($(node_fetch) '$(2)' '$(node_dir)') && $(node_tool_pick) && $(container) -v "$$ncmake_nl":/usr/local:ro $(3) "$$ncmake_ti",$(call container_run,$(1),$(3)))
+
 ifeq ($(filter $(RUNTIME),bare none),)
   php_run   = $(if $(filter min,$(PHP)),$(php_floor_run),$(call container_run,$(analysis_image),$(php_env)) sh -lc)
-  node_run  = $(call container_run,$(node_image),-e npm_config_cache=/tmp/.npm -e COREPACK_HOME=/tmp/.corepack) sh -lc
+  node_run  = $(call node_in,$(node_image),$(node_line),-e npm_config_cache=/tmp/.npm -e COREPACK_HOME=/tmp/.corepack) sh -lc
   reuse_run = $(call container_run,$(reuse_image))
 endif
 
@@ -1554,9 +1618,9 @@ endef
 define help_npm
 make npm ARGS="<npm arguments>"
 
-Runs any npm command in the throwaway Node container; no Node on the host. The
-image is the newest Node LTS line that engines.node in package.json allows and
-that is not end of life.
+Runs any npm command in the throwaway Node container; no Node on the host. Node
+is the newest LTS line that engines.node in package.json allows and that is not
+end of life, the official build from nodejs.org.
 
 Examples:
   make npm ARGS=ci                   install from package-lock.json
@@ -1901,21 +1965,24 @@ ncmake_lib_need = for f in $(1); do test -s "$(ncmake_lib_dir)/$$f" || { echo "E
 # The library directory is mounted at /ncmake, read-only, alongside the app at
 # /app, and gets the writable npm cache every other npm call here gets: an
 # analyser that builds runs npm, and the container user has no home of its own.
-# Every analyser runs on lib_node_image, so an old engines.node cannot keep it from
-# loading. One that builds the app (ncmake_lib_run) builds with the app's Node all
-# the same. /usr/local of node_image, where the Node images keep node, npm and
-# corepack, is copied into a temporary directory out of a container that is created
-# from node_image and never started. The directory is mounted at /ncmake-node,
-# NCMAKE_APP_NODE names it, and the analyser puts its bin first on PATH for the
-# build steps alone; it is removed when the run ends.
+# Every analyser runs on lib_node_image with the newest LTS line, so an old
+# engines.node cannot keep it from loading. One that builds the app (ncmake_lib_run)
+# builds with the app's line all the same: its directory from node_fetch is mounted
+# at /ncmake-node, NCMAKE_APP_NODE names it, and the analyser puts its bin first on
+# PATH for the build steps alone. For a node_image of one's own, its /usr/local,
+# where the Node images keep node, npm and corepack, is copied into a temporary
+# directory out of a container that is created from node_image and never started,
+# and mounted there instead; the directory is removed when the run ends.
 # With RUNTIME=bare there is no container and the host path is used as it is; with
 # no runtime at all $(node_run) carries the "install podman" abort.
 ifeq ($(filter $(RUNTIME),bare none),)
-  ncmake_lib_in       = $(call container_run,$(1),-v "$(ncmake_lib_dir)":/ncmake:ro -e npm_config_cache=/tmp/.npm $(2)) sh -lc
-  ncmake_lib_run      = $(call container_prep,$(node_image)) && ncmake_node=$$(mktemp -d) && trap 'rm -rf "$$ncmake_node"' EXIT \
+  ncmake_lib_in       = $(call node_in,$(1),lts,-v "$(ncmake_lib_dir)":/ncmake:ro -e npm_config_cache=/tmp/.npm $(2)) sh -lc
+  ncmake_lib_copy     = $(call container_prep,$(node_image)) && ncmake_node=$$(mktemp -d) && trap 'rm -rf "$$ncmake_node"' EXIT \
 	&& { cid=$$($(container_cli) create --label ncmake $(node_image)) && { $(container_cli) cp "$$cid":/usr/local "$$ncmake_node/"; ok=$$?; $(container_cli) rm "$$cid" >/dev/null; [ $$ok -eq 0 ]; } \
 		|| { echo "ERROR: could not copy the Node of $(node_image) out of its image" >&2; exit 1; }; } \
 	&& $(call ncmake_lib_in,$(lib_node_image),-v "$$ncmake_node/local":/ncmake-node:ro -e NCMAKE_APP_NODE=/ncmake-node)
+  ncmake_lib_run      = $(if $(filter $(node_tool_image),$(node_image)),ncmake_nd=$$($(node_fetch) '$(node_line)' '$(node_dir)') \
+	&& $(call ncmake_lib_in,$(lib_node_image),-v "$$ncmake_nd":/ncmake-node:ro -e NCMAKE_APP_NODE=/ncmake-node),$(ncmake_lib_copy))
   ncmake_lib_read_run = $(call ncmake_lib_in,$(lib_node_image))
   ncmake_lib_path     = /ncmake
 else
