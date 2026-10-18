@@ -5,9 +5,10 @@
 # and arm64. https://github.com/ernolf/ncmake
 #
 # One image serves every Node line: Debian slim with git, the CA certificates, the
-# compiler node-gyp builds a native module with and Yarn 1. It carries no Node. The
-# core Makefile mounts the official build of the line from nodejs.org at /usr/local,
-# so the image does not change with a Node release.
+# compiler node-gyp builds a native module with, the distutils an older node-gyp
+# imports and Yarn 1. It carries no Node. The core Makefile mounts the official
+# build of the line from nodejs.org at /usr/local, so the image does not change
+# with a Node release.
 #
 # The official Node images install Yarn 1 beside Node, and a build script that calls
 # yarn without a yarn.lock relies on it. Its tarball is installed the way their
@@ -56,8 +57,10 @@ env:
   # the image. keys.openpgp.org serves the Yarn key without its user ID, which gpg
   # skips with a success status, so only gpg --fingerprint tells whether the key
   # arrived and the next keyserver is needed, as in the official Dockerfiles.
-  # libatomic1 is a library Node itself loads; the apt lists only serve the install
-  # and go in the same layer.
+  # Python 3.12 dropped distutils, which the gyp of a node-gyp before 10 imports, and
+  # an app's lockfile can still pin one; python3-setuptools puts its own copy in
+  # place of the module. libatomic1 is a library Node itself loads; the apt lists
+  # only serve the install and go in the same layer.
   CONTAINERFILE: |
     ARG base
     FROM $base AS yarn
@@ -73,7 +76,7 @@ env:
     FROM $base
     ARG yarn
     COPY --from=yarn /opt/yarn-v$yarn /opt/yarn-v$yarn
-    RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git python3 make g++ libatomic1 && rm -rf /var/lib/apt/lists/* \
+    RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git python3 python3-setuptools make g++ libatomic1 && rm -rf /var/lib/apt/lists/* \
       && ln -s /opt/yarn-v$yarn/bin/yarn /usr/bin/yarn && ln -s /opt/yarn-v$yarn/bin/yarnpkg /usr/bin/yarnpkg
 
 jobs:
