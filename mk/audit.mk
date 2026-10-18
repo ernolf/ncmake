@@ -138,8 +138,14 @@ compat_dir   = build/php-compat
 compat_image = $(if $(filter local,$(php_floor_mode)),localhost,ghcr.io/ernolf)/ncmake-php
 # Every PHP file that ships, linted by as many PHP processes as the runtime has
 # processors. busybox xargs stops at the first command that fails, and php -l fails
-# on every file it cannot parse, so the loop exits 0 and the output tells.
-compat_lint  = find appinfo lib templates vendor -type f -name "*.php" -print0 2>/dev/null | xargs -0 -n 64 -P "$$(nproc)" sh -c "for f; do php -d error_reporting=-1 -d display_errors=stderr -d log_errors=0 -l \"\$$f\" 2>&1 | grep -v \"^No syntax errors detected in \"; done; exit 0" php-lint
+# on every file it cannot parse, so each batch exits 0 and the output tells.
+# The lint runs without the ini files: a parse calls no extension, and loading the
+# ones of the build image costs about 150 ms per process, smbclient most of it. -n
+# also drops the memory_limit of ncmake.ini, which -d puts back. From PHP 8.3 on
+# php -l takes several files and lints each of them; below, it lints only the first,
+# so there every file gets a process of its own.
+compat_php   = php -n -d error_reporting=-1 -d display_errors=stderr -d log_errors=0 -d memory_limit=768M
+compat_lint  = many=$$(php -n -r "echo PHP_VERSION_ID >= 80300 ? 1 : 0;"); find appinfo lib templates vendor -type f -name "*.php" -print0 2>/dev/null | LINT_MANY=$$many xargs -0 -n 64 -P "$$(nproc)" sh -c "if [ \"\$$LINT_MANY\" = 1 ]; then $(compat_php) -l \"\$$@\"; else for f; do $(compat_php) -l \"\$$f\"; done; fi 2>&1; exit 0" php-lint | { grep -v "^No syntax errors detected in " || :; }
 compat_run   = out=$(compat_dir)/$(php_version); php -r "echo PHP_VERSION;" >"$$out/version"; if [ -f vendor/composer/installed.json ] || [ -f composer.lock ]; then composer check-platform-reqs --no-dev --format=json >"$$out/platform.json" 2>"$$out/platform.err"; echo $$? >"$$out/platform.rc"; fi; $(compat_lint) >"$$out/lint.txt"
 
 .PHONY: consistency-audit build-verify changelog-lint php-compat php-compat-run
@@ -257,7 +263,8 @@ with the extensions a Nextcloud server offers, and does two things there:
       a PHP below the ceiling installs on the floor and breaks on a newer server.
   php -l over appinfo/, lib/, templates/ and vendor/
       whether every PHP file that ships parses on this PHP, and what it reports
-      as deprecated there.
+      as deprecated there. The lint loads no extension, since a parse calls
+      none, and from PHP 8.3 on lints 64 files per process.
 Findings are marked [!] worth changing, [i] worth knowing, [ok] nothing found:
 [!] for a package that refuses one of the PHP versions, a file that does not
 parse, and a <php max-version> below the server's ceiling, which keeps the app
