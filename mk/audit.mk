@@ -328,9 +328,10 @@ ARGS is passed to the analyser; a bare word in it is the checkout to verify
 
 It installs and builds, so unlike consistency-audit it needs the network and
 takes minutes rather than a second. Where it runs it needs git and npm. In a
-container it runs on lib_node_image, which carries git, and the build steps run on
-the Node of node_image, copied out of that image together with its npm, so an app
-on an end-of-life Node line is rebuilt like any other. In a container the scratch
+container it runs on the newest Node LTS line in ncmake's Node image, which carries
+git, and the build steps run on the Node line the app declares, mounted beside it
+together with its npm, so an app on an end-of-life Node line is rebuilt like any
+other. In a container the scratch
 tree lives in the container's own /tmp and goes with it, so ARGS=--keep and the
 log each build step writes only survive with RUNTIME=bare and Node on the host.
 Where a step fails, the last lines of its output and of its error output are
