@@ -159,7 +159,9 @@ compat_next  = ghcr.io/ernolf/ncmake-php
 # so there every file gets a process of its own.
 compat_php   = php -n -d error_reporting=-1 -d display_errors=stderr -d log_errors=0 -d memory_limit=768M
 compat_lint  = many=$$(php -n -r "echo PHP_VERSION_ID >= 80300 ? 1 : 0;"); find appinfo lib templates vendor -type f -name "*.php" -print0 2>/dev/null | LINT_MANY=$$many xargs -0 -n 64 -P "$$(nproc)" sh -c "if [ \"\$$LINT_MANY\" = 1 ]; then $(compat_php) -l \"\$$@\"; else for f; do $(compat_php) -l \"\$$f\"; done; fi 2>&1; exit 0" php-lint | { grep -v "^No syntax errors detected in " || :; }
-compat_run   = out=$(compat_dir)/$(php_version); php -r "echo PHP_VERSION;" >"$$out/version"; if [ -f vendor/composer/installed.json ] || [ -f composer.lock ]; then composer check-platform-reqs --no-dev --format=json >"$$out/platform.json" 2>"$$out/platform.err"; echo $$? >"$$out/platform.rc"; fi; $(compat_lint) >"$$out/lint.txt"
+# The version is read without the ini files too: the CLI prints the startup warning
+# of an extension that does not load to stdout, which would end up in the file.
+compat_run   = out=$(compat_dir)/$(php_version); php -n -r "echo PHP_VERSION;" >"$$out/version"; if [ -f vendor/composer/installed.json ] || [ -f composer.lock ]; then composer check-platform-reqs --no-dev --format=json >"$$out/platform.json" 2>"$$out/platform.err"; echo $$? >"$$out/platform.rc"; fi; $(compat_lint) >"$$out/lint.txt"
 
 .PHONY: consistency-audit build-verify changelog-lint php-compat php-compat-run
 
