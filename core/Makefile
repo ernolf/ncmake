@@ -467,7 +467,9 @@ container_run  = $(call container_prep,$(1)) && $(container) $(2) $(1)
 # analysis_image, the memory_limit of the Nextcloud CI images instead of the 128M of
 # an image without a php.ini, and php_extensions, compiled by install-php-extensions,
 # which also removes the build packages again. An extension the base image already
-# loads is skipped.
+# loads is skipped. The build then fails when an extension does not load or PHP
+# prints a startup warning: an extension that compiles can still miss a library it
+# links against, and php would print that warning before every output.
 # The php-images workflow of the ncmake repository publishes that image as php_image,
 # for amd64 and arm64, for every PHP minor from the floor of the newest end-of-life
 # Nextcloud major (see nc_eol) to the ceiling of master, and builds a minor again when
@@ -493,7 +495,7 @@ php_ext_installer_url = https://github.com/mlocati/docker-php-extension-installe
 # php_image_build builds.
 php_containerfile = "ARG base" "ARG composer" "FROM \$$composer AS composer" "FROM \$$base" \
 	"COPY --from=composer /usr/bin/composer /usr/local/bin/composer" \
-	"RUN apk add --no-cache git unzip su-exec && curl -fsSL -o /usr/local/bin/install-php-extensions $(php_ext_installer_url) && chmod +x /usr/local/bin/install-php-extensions && for e in $(php_extensions); do php -m | grep -qix \"\$$e\" || set -- \"\$$@\" \"\$$e\"; done && { [ -z \"\$$*\" ] || install-php-extensions \"\$$@\"; } && rm /usr/local/bin/install-php-extensions && echo \"memory_limit = 768M\" >\"\$$PHP_INI_DIR/conf.d/ncmake.ini\""
+	"RUN apk add --no-cache git unzip su-exec && curl -fsSL -o /usr/local/bin/install-php-extensions $(php_ext_installer_url) && chmod +x /usr/local/bin/install-php-extensions && for e in $(php_extensions); do php -m | grep -qix \"\$$e\" || set -- \"\$$@\" \"\$$e\"; done && { [ -z \"\$$*\" ] || install-php-extensions \"\$$@\"; } && for e in $(php_extensions); do php -m | grep -qix \"\$$e\" || { echo \"\$$e does not load\" >&2; exit 1; }; done && ! php -m 2>&1 | grep -i \"PHP Startup\" && rm /usr/local/bin/install-php-extensions && echo \"memory_limit = 768M\" >\"\$$PHP_INI_DIR/conf.d/ncmake.ini\""
 php_image_build = sh -c ' \
 	cli=$$1 base=$$2 composer=$$3 ref=$$4; \
 	id=$$("$$cli" image inspect --format "{{.Id}}" "$$base" 2>/dev/null) && cid=$$("$$cli" image inspect --format "{{.Id}}" "$$composer" 2>/dev/null) || exit 0; \

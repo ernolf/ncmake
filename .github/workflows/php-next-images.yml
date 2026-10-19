@@ -15,9 +15,9 @@
 #
 # The Containerfile and the inputs fingerprint are those of php-images.yml. When the
 # build fails, the extensions of the Containerfile are installed one by one on the
-# base image, and the image is built again without those that do not build on that
-# PHP. It is published so that php-compat can run, with the label ncmake.missing
-# naming them, and the run still fails on them.
+# base image, and the image is built again without those that do not build or do
+# not load on that PHP. It is published so that php-compat can run, with the label
+# ncmake.missing naming them, and the run still fails on them.
 
 name: PHP next images
 
@@ -164,8 +164,9 @@ jobs:
 
       # A PHP ahead of its release is mostly ahead of the PECL extensions too. Each
       # extension is installed on its own, as the Containerfile skips one the base
-      # image already loads, which names the ones that do not build.
-      - name: Find the extensions that do not build on PHP ${{ matrix.php }}
+      # image already loads, which names the ones that do not build. One that builds
+      # can still miss a library it links against, so each must also load.
+      - name: Find the extensions that do not build or load on PHP ${{ matrix.php }}
         id: probe
         if: steps.full.outcome == 'failure'
         env:
@@ -178,10 +179,10 @@ jobs:
           # shellcheck disable=SC2016 # the single quotes keep $($*) for make
           installer=$(make -s -f core/Makefile --eval 'print-%: ; @echo $($*)' print-php_ext_installer_url)
           # shellcheck disable=SC2016,SC2086 # the script runs in the container, and exts is a list
-          failed=$(docker run --rm "$BASE" sh -c 'curl -fsSL -o /usr/local/bin/install-php-extensions "$1" && chmod +x /usr/local/bin/install-php-extensions || exit 1; shift; for e; do php -m | grep -qix "$e" && continue; install-php-extensions "$e" >/dev/null 2>&1 || echo "$e"; done' probe "$installer" $exts) \
+          failed=$(docker run --rm "$BASE" sh -c 'curl -fsSL -o /usr/local/bin/install-php-extensions "$1" && chmod +x /usr/local/bin/install-php-extensions || exit 1; shift; for e; do php -m | grep -qix "$e" && continue; { install-php-extensions "$e" >/dev/null 2>&1 && php -m 2>/dev/null | grep -qix "$e"; } || echo "$e"; done' probe "$installer" $exts) \
             || { echo "::error::PHP $PHP: install-php-extensions could not be fetched into $BASE"; exit 1; }
           if [ -z "$failed" ]; then
-            echo "::error::PHP $PHP: every extension builds on its own, so the build failed in another step; its log above names it"
+            echo "::error::PHP $PHP: every extension builds and loads on its own, so the build failed in another step; its log above names it"
             exit 1
           fi
           failed=$(printf '%s' "$failed" | tr '\n' ' ')
@@ -228,5 +229,5 @@ jobs:
           MISSING: ${{ steps.probe.outputs.missing }}
           PHP: ${{ matrix.php }}
         run: |
-          echo "::error::PHP $PHP: these extensions do not build on it, and the image was published without them: $MISSING"
+          echo "::error::PHP $PHP: these extensions do not build or load on it, and the image was published without them: $MISSING"
           exit 1
