@@ -128,6 +128,13 @@ tag_check = $(MAKE) --no-print-directory changelog-lint || { echo "ERROR: make t
 # php-compat needs the PHP ceiling and a build image per PHP minor from the core.
 compat_core = $(if $(value php_server_max),:,echo "ERROR: php-compat needs a newer ncmake core - run 'make self-update'" >&2; exit 1)
 
+# The newest PHP minor any Nextcloud server runs on, the ceiling of master. Called
+# without a major, the core's nc_php_ceiling reads master, as it does for an app
+# without a <nextcloud max-version>. A <php max-version> raises the ceiling no further than
+# this: no server has run the app on a newer PHP, and the analyser reports the
+# declaration instead of a run that could not be checked.
+compat_master = $(if $(nc_max),$(call nc_php_ceiling,),$(php_server_max))
+
 # Each minor runs in a make of its own, because the build image is chosen while a
 # make reads its variables: php_version picks the minor, PHP=min the build image
 # rather than analysis_image. A php_image of one's own names a single minor, so the
@@ -172,9 +179,10 @@ php-compat: check-app
 	@$(audit_core)
 	@$(compat_core)
 	@$(call ncmake_lib_need,$(compat_libs))
-	@floor='$(php_min)'; server='$(php_server_max)'; declared='$(php_declared_max)'; \
+	@floor='$(php_min)'; server='$(php_server_max)'; declared='$(php_declared_max)'; master='$(compat_master)'; \
 	[ -n "$$server" ] || { echo "ERROR: no PHP ceiling - lib/versioncheck.php of Nextcloud $(or $(nc_max),master) could not be read" >&2; exit 1; }; \
-	ceiling=$$(printf '%s\n' "$$server" $$declared | sort -V | tail -1); \
+	raise=$$declared; [ -z "$$declared" ] || [ -z "$$master" ] || raise=$$(printf '%s\n' "$$declared" "$$master" | sort -V | head -1); \
+	ceiling=$$(printf '%s\n' "$$server" $$raise | sort -V | tail -1); \
 	if [ "$(PHP)" = all ]; then \
 		minors=$$(for M in $$(seq "$${floor%%.*}" "$${ceiling%%.*}"); do for n in $$(seq 0 9); do v=$$M.$$n; \
 			[ "$$(printf '%s\n' "$$floor" "$$v" | sort -V | head -1)" = "$$floor" ] && [ "$$(printf '%s\n' "$$v" "$$ceiling" | sort -V | tail -1)" = "$$ceiling" ] && echo "$$v"; \
@@ -182,7 +190,7 @@ php-compat: check-app
 	else minors=$$(printf '%s\n' "$$floor" "$$ceiling" | sort -uV); fi; \
 	echo "==> php-compat on PHP" $$minors "(RUNTIME=$(RUNTIME))" >&2; \
 	rm -rf $(compat_dir) && mkdir -p $(compat_dir) || exit 1; \
-	printf 'floor=%s\nceiling=%s\nserver=%s\ndeclared=%s\nnextcloud=%s\n' "$$floor" "$$ceiling" "$$server" "$$declared" '$(nc_max)' >$(compat_dir)/range; \
+	printf 'floor=%s\nceiling=%s\nserver=%s\ndeclared=%s\nmaster=%s\nnextcloud=%s\n' "$$floor" "$$ceiling" "$$server" "$$declared" "$$master" '$(nc_max)' >$(compat_dir)/range; \
 	for m in $$minors; do \
 		echo "==> PHP $$m" >&2; mkdir -p $(compat_dir)/$$m; \
 		$(MAKE) --no-print-directory php-compat-run php_version=$$m php_image=$(compat_image):$$m PHP=min || echo "$$?" >$(compat_dir)/$$m/failed; \
@@ -258,7 +266,8 @@ in appinfo/info.xml. Two of those PHP versions are checked:
   the floor     the PHP make build resolves the dependencies against
   the ceiling   the newest PHP minor that Nextcloud <max-version> accepts, read
                 from its stable branch, or from master for a max-version that
-                has none; <php max-version> in info.xml can only raise it
+                has none; <php max-version> in info.xml can only raise it,
+                and no further than the ceiling of master
 PHP=all checks every minor in between as well.
 
 Each runs in the build image of that minor, ghcr.io/ernolf/ncmake-php:<minor>,
@@ -272,9 +281,12 @@ with the extensions a Nextcloud server offers, and does two things there:
       none, and from PHP 8.3 on lints 64 files per process.
 Findings are marked [!] worth changing, [i] worth knowing, [ok] nothing found:
 [!] for a package that refuses one of the PHP versions, a file that does not
-parse, and a <php max-version> below the server's ceiling, which keeps the app
-off servers that run a newer PHP; [i] for a deprecation, an extension the build
-image lacks, and a file of a dev package, which make build does not ship.
+parse, a <php max-version> below the server's ceiling, which keeps the app
+off servers that run a newer PHP, and a <php max-version> above the ceiling of
+master, a PHP no server runs yet: once one allows it, the server enables the
+app on it although nobody has checked the app there; [i] for a deprecation,
+an extension the build image lacks, and a file of a dev package, which make
+build does not ship.
 
 The check reads what is installed: run make build first, so vendor/ holds what
 ships. Without vendor/, composer reads composer.lock and only the app's own files
