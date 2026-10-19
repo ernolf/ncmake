@@ -143,6 +143,12 @@ compat_master = $(if $(nc_max),$(call nc_php_ceiling,),$(php_server_max))
 # runtime that ignores the minor, RUNTIME=bare above all, from one that did not.
 compat_dir   = build/php-compat
 compat_image = $(if $(filter local,$(php_floor_mode)),localhost,ghcr.io/ernolf)/ncmake-php
+# The PHP ahead of master runs once more, in the image the php-next-images workflow
+# publishes for it: <minor>-next for a <php max-version> above master, next, the
+# newest minor of that workflow, for NEXT=1. Only the published image carries that
+# PHP, as php_base_image names no alpha, beta or RC, so php_floor_mode is emptied and
+# the run uses it as an image of one's own, with nothing built in its place.
+compat_next  = ghcr.io/ernolf/ncmake-php
 # Every PHP file that ships, linted by as many PHP processes as the runtime has
 # processors. busybox xargs stops at the first command that fails, and php -l fails
 # on every file it cannot parse, so each batch exits 0 and the output tells.
@@ -195,6 +201,14 @@ php-compat: check-app
 		echo "==> PHP $$m" >&2; mkdir -p $(compat_dir)/$$m; \
 		$(MAKE) --no-print-directory php-compat-run php_version=$$m php_image=$(compat_image):$$m PHP=min || echo "$$?" >$(compat_dir)/$$m/failed; \
 	done; \
+	next=; \
+	if [ -n "$$declared" ] && [ -n "$$master" ] && [ "$$(printf '%s\n' "$$declared" "$$master" | sort -V | tail -1)" != "$$master" ]; then next=$$declared-next; \
+	elif [ "$(NEXT)" = 1 ]; then next=next; fi; \
+	if [ -n "$$next" ]; then \
+		$(if $(filter bare none,$(RUNTIME)),echo "==> PHP ahead of master: RUNTIME=$(RUNTIME) runs no image; $(compat_next):$$next is left out" >&2;, \
+		echo "==> PHP ahead of master ($(compat_next):$$next)" >&2; mkdir -p $(compat_dir)/next; echo "next=$$next" >>$(compat_dir)/range; \
+		$(MAKE) --no-print-directory php-compat-run php_version=next php_image=$(compat_next):$$next php_floor_mode= PHP=min || echo "$$?" >$(compat_dir)/next/failed;) \
+	fi; \
 	$(ncmake_lib_read_run) '$(call ncmake_lib_guard,php-compat) PHP_COMPAT_CMDLINE="$(compat_cmdline)" node $(ncmake_lib_path)/php-compat.mjs $(ARGS) $(ncmake_json_arg)'
 
 php-compat-run:
@@ -258,7 +272,7 @@ it needs RUNTIME=bare and Node on the host.
 endef
 
 define help_php-compat
-make php-compat [PHP=all] [ARGS="<analyser arguments>"] [JSON=<file>]
+make php-compat [PHP=all] [NEXT=1] [ARGS="<analyser arguments>"] [JSON=<file>]
 
 Checks whether the app runs on the PHP versions its servers run it on. A server
 states the PHP it accepts in lib/versioncheck.php, and the app states the servers
@@ -293,10 +307,21 @@ ships. Without vendor/, composer reads composer.lock and only the app's own file
 are linted; without either, composer has nothing to check. The output of each
 run stays in build/php-compat/<minor>.
 
+A <php max-version> above the ceiling of master names a PHP no server runs yet.
+That minor runs once more, in ghcr.io/ernolf/ncmake-php:<minor>-next, which the
+php-next-images workflow of the ncmake repository builds for every PHP minor
+above master: from its release, or before it from the newest alpha, beta or RC.
+NEXT=1 runs the newest of them, ghcr.io/ernolf/ncmake-php:next, for an app that
+does not declare it. The findings of that run are marked [i] and named after the
+exact PHP, for example 8.6.0RC3: they are for preparing the app, not proof that
+a server runs it, and they leave the exit code alone. The report says whether
+that PHP has a release yet. Its output stays in build/php-compat/next.
+
 The exit code is 1 when a finding is marked [!], so a CI job that runs it after
 make build fails on it. ARGS is passed to the analyser:
   make php-compat                       the floor and the ceiling
   make php-compat PHP=all               every minor in between too
+  make php-compat NEXT=1                and the newest PHP ahead of master
   make php-compat ARGS=--details        every file behind the findings
   make php-compat ARGS=--json > compat.json  machine-readable, nothing else
   make php-compat JSON=compat.json      the report, and the JSON in compat.json
@@ -307,7 +332,8 @@ and the report is printed as without it. The file can lie outside the app; it is
 replaced once the run is complete, and a run that stops on an error writes none.
 
 It needs the network for versioncheck.php and the images. With RUNTIME=bare it
-runs on the PHP of the host, once per minor, and says so.
+runs on the PHP of the host, once per minor, and says so; the PHP ahead of
+master, which only its image carries, is left out there.
 endef
 
 define help_build-verify

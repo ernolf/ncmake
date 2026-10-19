@@ -1960,7 +1960,11 @@ extensions of a Nextcloud server (php_extensions), Composer 2, git, unzip and
 su-exec. The php-images workflow of the ncmake repository publishes it as
 ghcr.io/ernolf/ncmake-php:<minor>; ncmake builds it on the host as
 localhost/ncmake-php:<minor> when that image cannot be pulled or php_extensions
-adds an extension it lacks. It takes the build arguments base and composer.
+adds an extension it lacks. The php-next-images workflow publishes it for every
+PHP minor above the ceiling of Nextcloud master as
+ghcr.io/ernolf/ncmake-php:<minor>-next, built from the release of that minor or
+from its newest alpha, beta or RC, for make php-compat. It takes the build
+arguments base and composer.
 endef
 
 define help_self-update
