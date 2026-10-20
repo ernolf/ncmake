@@ -264,6 +264,7 @@ The workflows ncmake ships itself, all of them generic:
 | `lint-php-syntax.yml` | `php -l` over every tracked PHP file, without composer and without `appinfo/info.xml`; the version matrix comes from the `PHP_VERSIONS` variable, a `.php-version` file or the template default |
 | `lint-shell.yml` | shellcheck over every tracked shell script, found by extension or by shebang, so extensionless commands are covered; a repository without shell scripts passes |
 | `lint-vue-imports.yml` | fails when a tracked source file imports the `@nextcloud/vue` root instead of a per-component entry point, which pulls the whole library into the module graph before tree shaking; a repository without a hit passes |
+| `lint-web.yml` | ESLint, Stylelint and html-validate over the tracked JavaScript, CSS and HTML of a repository without a Node project, each at a pinned version; a configuration in the repository root wins over the tool's recommended set; a repository with a `package.json`, which lints through its own scripts, or without such files passes |
 | `branch-cleanup.yml` | deletes a merged pull request's head branch if it still exists, a workflow-shipped equivalent of the repository setting |
 | `release.yml` | builds the release tarball with ncmake and attaches it to the published GitHub release |
 | `workflow-updater.yml` | refreshes the managed workflows on a schedule and opens a pull request when anything changed (see below) |
