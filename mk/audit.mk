@@ -382,6 +382,7 @@ ARGS is passed to the analyser; a bare word in it is the checkout to verify
   make build-verify ARGS=--build=dist       another output directory
   make build-verify ARGS=--details          every table behind the findings
   make build-verify ARGS=--once             one build instead of two
+  make build-verify ARGS=--step-timeout=120  two hours for each install and build
   make build && make build-verify ARGS=--fresh  output built right before
   make build-verify ARGS=--json > verify.json  machine-readable, nothing else
   make build-verify JSON=verify.json        the report, and the JSON in verify.json
@@ -401,6 +402,11 @@ tree lives in the container's own /tmp and goes with it, so ARGS=--keep and the
 log each build step writes only survive with RUNTIME=bare and Node on the host.
 Where a step fails, the last lines of its output and of its error output are
 printed apart, which in a container is the only record of why.
+
+Each install and build step may take 60 minutes. A step still running then is
+stopped together with every process it started, its last lines are printed as for
+a failed step, and the report says the rebuild could not be completed, without a
+verdict on the output. ARGS=--step-timeout=<minutes> sets another limit, 0 none.
 endef
 
 define help_changelog-lint
