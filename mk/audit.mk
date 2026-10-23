@@ -143,9 +143,9 @@ compat_master = $(if $(nc_max),$(call nc_php_ceiling,),$(php_server_max))
 # runtime that ignores the minor, RUNTIME=bare above all, from one that did not.
 compat_dir   = build/php-compat
 compat_image = $(if $(filter local,$(php_floor_mode)),localhost,ghcr.io/ernolf)/ncmake-php
-# The PHP ahead of master runs once more, in the image the php-next-images workflow
+# The PHP ahead of master runs once more, in the image the ncmake-images repository
 # publishes for it: <minor>-next for a <php max-version> above master, next, the
-# newest minor of that workflow, for NEXT=1. Only the published image carries that
+# newest minor it publishes, for NEXT=1. Only the published image carries that
 # PHP, as php_base_image names no alpha, beta or RC, so php_floor_mode is emptied and
 # the run uses it as an image of one's own, with nothing built in its place.
 compat_next  = ghcr.io/ernolf/ncmake-php
@@ -311,8 +311,8 @@ run stays in build/php-compat/<minor>.
 
 A <php max-version> above the ceiling of master names a PHP no server runs yet.
 That minor runs once more, in ghcr.io/ernolf/ncmake-php:<minor>-next, which the
-php-next-images workflow of the ncmake repository builds for every PHP minor
-above master: from its release, or before it from the newest alpha, beta or RC.
+ncmake-images repository builds for every PHP minor above master: from its
+release, or before it from the newest alpha, beta or RC.
 NEXT=1 runs the newest of them, ghcr.io/ernolf/ncmake-php:next, for an app that
 does not declare it. The findings of that run are marked [i] and named after the
 exact PHP, for example 8.6.0RC3: they are for preparing the app, not proof that
