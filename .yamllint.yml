@@ -1,8 +1,7 @@
 # SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
 # SPDX-License-Identifier: MIT
 #
-# yamllint configuration for ncmake's own YAML: the self-CI workflows and the
-# templates in workflows/ that ncmake deploys into apps.
+# yamllint configuration for ncmake's own YAML, the self-CI workflows above all.
 
 extends: default
 

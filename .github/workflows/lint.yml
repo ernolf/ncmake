@@ -4,10 +4,10 @@
 # ncmake self-CI - static quality gates. https://github.com/ernolf/ncmake
 #
 # ncmake ships no composer.json or package.json, so these checks target what the
-# repository actually is: workflow YAML (both the self-CI here and the templates
-# in workflows/ that ncmake deploys into apps) and Markdown docs. REUSE licensing
-# has its own workflow (reuse.yml, installed via the workflow manager); the
-# functional end-to-end run lives in another (smoke.yml).
+# repository actually is: the self-CI workflow YAML and Markdown docs. The
+# templates ncmake deploys into apps are linted in ernolf/ncmake-workflows.
+# REUSE licensing has its own workflow (reuse.yml, installed via the workflow
+# manager); the functional end-to-end run lives in another (smoke.yml).
 
 name: Lint
 
@@ -45,10 +45,9 @@ jobs:
           persist-credentials: false
       - name: Install actionlint
         run: go install github.com/rhysd/actionlint/cmd/actionlint@latest
-      - name: Lint workflows (self-CI and shipped templates)
+      - name: Lint workflows (self-CI)
         run: |
-          "$(go env GOPATH)/bin/actionlint" -color \
-            .github/workflows/*.yml workflows/*.yml
+          "$(go env GOPATH)/bin/actionlint" -color .github/workflows/*.yml
 
   markdown:
     name: markdownlint

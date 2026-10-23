@@ -255,9 +255,9 @@ Like the bundle analysers, each takes `ARGS=--json` and `JSON=<file>`. `make hel
 
 ## CI workflow manager
 
-`make workflows-list` (alias `make workflows`) shows every workflow the configured sources offer, with source, status and description. Sources are ncmake's own workflows and the `nextcloud/.github` templates; on a name collision ncmake wins. Discovery is live through the GitHub API, so new upstream workflows appear without an ncmake update.
+`make workflows-list` (alias `make workflows`) shows every workflow the configured sources offer, with source, status and description. Sources, in lookup order: `local`, the folder `ncmake-workflows/` of the app; `ncmake`, the templates of [ernolf/ncmake-workflows](https://github.com/ernolf/ncmake-workflows); `nextcloud`, the `nextcloud/.github` templates. On a name collision the first listed source wins, so an app's own workflow overrides a template of the same name. Discovery is live through the GitHub API, so new upstream workflows appear without an ncmake update.
 
-The workflows ncmake ships itself, all of them generic:
+The templates of ernolf/ncmake-workflows, all of them generic:
 
 | File | What it does |
 | --- | --- |
@@ -269,7 +269,9 @@ The workflows ncmake ships itself, all of them generic:
 | `release.yml` | builds the release tarball with ncmake and attaches it to the published GitHub release |
 | `workflow-updater.yml` | refreshes the managed workflows on a schedule and opens a pull request when anything changed (see below) |
 
-A further source is a three-line addition to `ncmake.mk`: append a name to `wf_sources` and define `wf_src_<name>_list` (a GitHub contents API URL) and `wf_src_<name>_raw` (the prefix the files are downloaded from). Lookup follows the order of `wf_sources`, so the first source listed wins a name collision.
+A workflow of the app's own lives in `ncmake-workflows/<name>.yml`, optionally with `<name>.properties.json` for its description, and is installed into `.github/workflows/` like any template. Dependabot keeps that folder current with `directory: "/ncmake-workflows"`, which never touches `.github/workflows/`; `make workflows-update` then installs the change. Once such a workflow is generic, it belongs in ernolf/ncmake-workflows.
+
+A further source is one line in `ncmake.mk`, `wf_sources += <owner>/<repo>[@<ref>][:<dir>]`, for a GitHub repository with the same layout (`dir` defaults to `workflows`, `ref` to the default branch); it ranks after `local` and before `ncmake` and `nextcloud`. For anything not GitHub-shaped, add a name instead and define `wf_src_<name>_list` (a GitHub contents API URL) and `wf_src_<name>_raw` (the prefix the files are downloaded from). The source `ncmake` reads `main`; `NCMAKE_WORKFLOWS_REF=<ref>` reads another branch or a tag. Each remote source costs one GitHub API call per run; `GITHUB_TOKEN` or `GH_TOKEN` raises the anonymous limit.
 
 Status per file: `installed`, `update available`, `modified` (local edits, never overwritten), `missing` (in the lock but deleted locally), `unmanaged` (present but not installed through ncmake), `gone upstream`.
 
