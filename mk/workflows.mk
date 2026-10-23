@@ -26,9 +26,9 @@ wf_sources := local $(filter-out local ncmake nextcloud,$(wf_sources)) ncmake ne
 export wf_sources
 
 # The app's own workflows: the folder wf_local_dir of the checkout, the source
-# local. Dependabot keeps it current with directory: "/ncmake-workflows", which
+# local. Dependabot keeps it current with directory: "/.ncmake/workflows", which
 # never reaches .github/workflows, and workflows-update installs the change.
-wf_local_dir ?= ncmake-workflows
+wf_local_dir ?= .ncmake/workflows
 export wf_local_dir
 
 # The templates release on their own, so the source ncmake does not follow
@@ -338,10 +338,10 @@ wf_run = mkdir -p "$(cache_dir)" && printf '%s\n' "$$wf_tool" > "$(cache_dir)/nc
 # survive into the shell as literal text instead of being taken for command
 # substitution.
 define wf_install_body
-`make workflows-install` added these ncmake-managed workflows from their sources (the app's ncmake-workflows/, ernolf/ncmake-workflows, nextcloud/.github). Review the diff and merge.
+`make workflows-install` added these ncmake-managed workflows from their sources (the app's .ncmake/workflows/, ernolf/ncmake-workflows, nextcloud/.github). Review the diff and merge.
 endef
 define wf_update_body
-`make workflows-update` refreshed these ncmake-managed workflows from their sources (the app's ncmake-workflows/, ernolf/ncmake-workflows, nextcloud/.github). Locally modified workflows are left untouched. Review the diff and merge.
+`make workflows-update` refreshed these ncmake-managed workflows from their sources (the app's .ncmake/workflows/, ernolf/ncmake-workflows, nextcloud/.github). Locally modified workflows are left untouched. Review the diff and merge.
 endef
 export wf_install_body
 export wf_update_body
@@ -407,7 +407,7 @@ define help_workflows
 make workflows    (alias for workflows-list)
 
 The CI workflow manager: installs GitHub Actions workflows from their sources
-(the app's own folder ncmake-workflows/, the templates of ernolf/ncmake-workflows
+(the app's own folder .ncmake/workflows/, the templates of ernolf/ncmake-workflows
 and those of nextcloud/.github, first listed wins) and keeps them updatable. See make help-workflows-list, -install, -update and
 https://github.com/ernolf/ncmake/wiki/Workflows for the full picture.
 endef
@@ -422,7 +422,7 @@ lock but deleted locally), unmanaged (present but not installed through ncmake),
 gone upstream (managed but no longer offered). Discovery is live via the GitHub
 API, so new upstream workflows appear without any ncmake update.
 
-Sources, first listed wins a name collision: local (the folder ncmake-workflows/
+Sources, first listed wins a name collision: local (the folder .ncmake/workflows/
 of the app, wf_local_dir), the ones ncmake.mk adds with wf_sources += <source>,
 ncmake (ernolf/ncmake-workflows at main, NCMAKE_WORKFLOWS_REF=<ref> for another
 branch or a tag) and nextcloud (nextcloud/.github). A source is owner/repo,
