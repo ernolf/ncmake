@@ -12,13 +12,32 @@
 # distinguishable: up to date, update available, locally modified.
 
 # Sources, in lookup order: on a name collision the first listed source wins,
-# so ncmake's own workflows override upstream templates of the same name.
-# Each source needs a _list (GitHub contents API) and a _raw (download) URL;
-# extend in ncmake.mk by appending to wf_sources and defining both URLs.
-wf_sources ?= ncmake nextcloud
+# so a workflow of the app's own folder overrides a template of the same name,
+# and a template of ernolf/ncmake-workflows one of nextcloud/.github. A source
+# added in ncmake.mk (wf_sources += <source>) ranks between the app's folder and
+# the two built-in sources. ncmake.mk is read before this module, so the list is
+# assembled here instead of defaulted: a += there would otherwise replace it.
+#
+# A source is either the shorthand owner/repo[@ref][:dir] of a GitHub repository
+# (dir defaults to workflows, ref to the default branch) or a name with a _list
+# (GitHub contents API) and a _raw (download) URL, defined as wf_src_<name>_list
+# and wf_src_<name>_raw - the form for anything that is not GitHub-shaped.
+wf_sources := local $(filter-out local ncmake nextcloud,$(wf_sources)) ncmake nextcloud
 export wf_sources
-export wf_src_ncmake_list    = https://api.github.com/repos/ernolf/ncmake/contents/workflows?ref=$(ncmake_ref)
-export wf_src_ncmake_raw     = $(ncmake_raw)/workflows
+
+# The app's own workflows: the folder wf_local_dir of the checkout, the source
+# local. Dependabot keeps it current with directory: "/ncmake-workflows", which
+# never reaches .github/workflows, and workflows-update installs the change.
+wf_local_dir ?= ncmake-workflows
+export wf_local_dir
+
+# The templates release on their own, so the source ncmake does not follow
+# NCMAKE_REF: it reads main of ernolf/ncmake-workflows, and NCMAKE_WORKFLOWS_REF
+# names another branch or a tag. The name ncmake stays, so the lock entries of
+# the apps keep resolving.
+wf_ref = $(or $(NCMAKE_WORKFLOWS_REF),main)
+export wf_src_ncmake_list    = https://api.github.com/repos/ernolf/ncmake-workflows/contents/workflows?ref=$(wf_ref)
+export wf_src_ncmake_raw     = https://raw.githubusercontent.com/ernolf/ncmake-workflows/$(wf_ref)/workflows
 export wf_src_nextcloud_list = https://api.github.com/repos/nextcloud/.github/contents/workflow-templates
 export wf_src_nextcloud_raw  = https://raw.githubusercontent.com/nextcloud/.github/master/workflow-templates
 
@@ -57,6 +76,7 @@ define wf_tool
 import hashlib
 import json
 import os
+import pathlib
 import re
 import subprocess
 import sys
@@ -65,27 +85,60 @@ import urllib.request
 WF_DIR = '.github/workflows'
 LOCK = os.path.join(WF_DIR, '.ncmake-workflows.json')
 SOURCES = os.environ.get('wf_sources', '').split()
+SHORTHAND = re.compile(r'^([\w.-]+)/([\w.-]+)(?:@([^:]+))?(?::(.+))?$$')
 
 def fetch(url):
-    req = urllib.request.Request(url, headers={'User-Agent': 'ncmake'})
+    headers = {'User-Agent': 'ncmake'}
+    # Anonymous, the contents API allows 60 requests per hour and source IP, which
+    # a hosted runner shares with every other job on it; a token, where the
+    # environment offers one, raises that to 5000, as for make dev-init.
+    tok = os.environ.get('GITHUB_TOKEN') or os.environ.get('GH_TOKEN')
+    if tok and url.startswith('https://api.github.com/'):
+        headers['Authorization'] = 'Bearer ' + tok
+    req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=30) as r:
         return r.read()
 
+def urls(src):
+    m = SHORTHAND.match(src)
+    if not m:
+        return os.environ['wf_src_%s_list' % src], os.environ['wf_src_%s_raw' % src]
+    owner, repo, ref, path = m.groups()
+    path = (path or 'workflows').strip('/')
+    lst = 'https://api.github.com/repos/%s/%s/contents/%s' % (owner, repo, path)
+    if ref:
+        lst += '?ref=' + ref
+    # raw resolves HEAD to the default branch, as the listing without a ref does.
+    return lst, 'https://raw.githubusercontent.com/%s/%s/%s/%s' % (owner, repo, ref or 'HEAD', path)
+
+def entries(src):
+    if src != 'local':
+        lst, raw = urls(src)
+        return [(e['name'], e['sha'], raw + '/' + e['name']) for e in json.loads(fetch(lst))]
+    # The app's own folder, listed as the API lists a remote one: the git blob sha
+    # stands in for the upstream sha, so an edit there shows as an update.
+    d = os.environ.get('wf_local_dir', '')
+    out = []
+    if d and os.path.isdir(d):
+        for n in sorted(os.listdir(d)):
+            p = os.path.abspath(os.path.join(d, n))
+            if os.path.isfile(p):
+                with open(p, 'rb') as f:
+                    data = f.read()
+                sha = hashlib.sha1(b'blob %d\0' % len(data) + data).hexdigest()
+                out.append((n, sha, pathlib.Path(p).as_uri()))
+    return out
+
 def listing(src):
-    entries = json.loads(fetch(os.environ['wf_src_%s_list' % src]))
-    raw = os.environ['wf_src_%s_raw' % src]
     out = {}
-    props = set()
-    for e in entries:
-        n = e['name']
+    props = {}
+    for n, sha, url in entries(src):
         if n.endswith('.properties.json'):
-            props.add(n)
+            props[n] = url
         elif n.endswith(('.yml', '.yaml')):
-            out[n] = {'sha': e['sha'], 'raw': raw + '/' + n, 'src': src, 'props': None}
+            out[n] = {'sha': sha, 'raw': url, 'src': src, 'props': None}
     for n, e in out.items():
-        p = re.sub(r'\.ya?ml$$', '', n) + '.properties.json'
-        if p in props:
-            e['props'] = raw + '/' + p
+        e['props'] = props.get(re.sub(r'\.ya?ml$$', '', n) + '.properties.json')
     return out
 
 def catalog():
@@ -285,10 +338,10 @@ wf_run = mkdir -p "$(cache_dir)" && printf '%s\n' "$$wf_tool" > "$(cache_dir)/nc
 # survive into the shell as literal text instead of being taken for command
 # substitution.
 define wf_install_body
-`make workflows-install` added these ncmake-managed workflows from their upstream templates (nextcloud/.github + ncmake). Review the diff and merge.
+`make workflows-install` added these ncmake-managed workflows from their sources (the app's ncmake-workflows/, ernolf/ncmake-workflows, nextcloud/.github). Review the diff and merge.
 endef
 define wf_update_body
-`make workflows-update` refreshed these ncmake-managed workflows from their upstream templates (nextcloud/.github + ncmake). Locally modified workflows are left untouched. Review the diff and merge.
+`make workflows-update` refreshed these ncmake-managed workflows from their sources (the app's ncmake-workflows/, ernolf/ncmake-workflows, nextcloud/.github). Locally modified workflows are left untouched. Review the diff and merge.
 endef
 export wf_install_body
 export wf_update_body
@@ -353,9 +406,9 @@ workflows-update:
 define help_workflows
 make workflows    (alias for workflows-list)
 
-The CI workflow manager: installs GitHub Actions workflows from their upstream
-sources (nextcloud/.github workflow templates plus ncmake's own) and keeps them
-updatable. See make help-workflows-list, -install, -update and
+The CI workflow manager: installs GitHub Actions workflows from their sources
+(the app's own folder ncmake-workflows/, the templates of ernolf/ncmake-workflows
+and those of nextcloud/.github, first listed wins) and keeps them updatable. See make help-workflows-list, -install, -update and
 https://github.com/ernolf/ncmake/wiki/Workflows for the full picture.
 endef
 
@@ -368,6 +421,14 @@ modified (local edits - never overwritten by workflows-update), missing (in the
 lock but deleted locally), unmanaged (present but not installed through ncmake),
 gone upstream (managed but no longer offered). Discovery is live via the GitHub
 API, so new upstream workflows appear without any ncmake update.
+
+Sources, first listed wins a name collision: local (the folder ncmake-workflows/
+of the app, wf_local_dir), the ones ncmake.mk adds with wf_sources += <source>,
+ncmake (ernolf/ncmake-workflows at main, NCMAKE_WORKFLOWS_REF=<ref> for another
+branch or a tag) and nextcloud (nextcloud/.github). A source is owner/repo,
+optionally with @<ref> and :<dir> (default workflows), or a name with
+wf_src_<name>_list and wf_src_<name>_raw URLs. Each remote source costs one
+GitHub API call; GITHUB_TOKEN or GH_TOKEN raises the anonymous limit.
 endef
 
 define help_workflows-install
@@ -428,7 +489,7 @@ endef
 help::
 	@echo ""
 	@echo "$(ch)CI workflows (developer module):$(c0)"
-	@echo "  $(ct)workflows-list$(c0)       List available workflows (nextcloud templates + ncmake) with status"
+	@echo "  $(ct)workflows-list$(c0)       List available workflows (app folder, ncmake, nextcloud) with status"
 	@echo "  $(ct)workflows-install$(c0) $(cv)W=...$(c0)  Install workflows into .github/workflows/ (names from the list)"
 	@echo "  $(ct)workflows-update$(c0)     Update all managed workflows (locally modified ones are skipped)"
 	@echo "    $(cd)add $(cv)COMMIT=1$(cd) to commit on a branch, or $(cv)PR=1$(cd) to commit and open the PR$(c0)"

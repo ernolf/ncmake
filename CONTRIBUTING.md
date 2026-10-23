@@ -79,7 +79,7 @@ Every check below is required: a pull request cannot merge until all of them pas
 - **DCO** — every commit must carry a valid `Signed-off-by` line.
 - **Lint** (`lint.yml`), three independent checks:
   - `yamllint` — all YAML.
-  - `actionlint` — the self-CI workflows *and* the templates in `workflows/` that ncmake deploys into apps.
+  - `actionlint` — the self-CI workflows. The templates ncmake deploys into apps live and are linted in [ncmake-workflows](https://github.com/ernolf/ncmake-workflows).
   - `markdownlint` — all Markdown.
 - **REUSE** (`reuse-compliance-check`) — licensing, see below.
 - **Smoke** (`build twofactor_oath with this revision`) — builds a real consuming app end to end against this exact revision, each heavy target from a pristine tree: introspection (`help`, `help-build`, `help-dist`), `build`, `dist`, a repeat `dist` to prove repeatability, `composer install` plus `psalm`, and `reuse`. A red run here is always an ncmake regression, never a flaky fixture.
