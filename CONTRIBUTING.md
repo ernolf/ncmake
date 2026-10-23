@@ -82,7 +82,7 @@ Every check below is required: a pull request cannot merge until all of them pas
   - `actionlint` (`lint-actions.yml`) — the self-CI workflows.
   - `markdownlint` (`lint-markdown.yml`) — all Markdown.
 - **REUSE** (`reuse-compliance-check`) — licensing, see below.
-- **Smoke** (`build twofactor_oath with this revision`, `ncmake-workflows/ncmake-smoke.yml`) — builds a real consuming app end to end against this exact revision, each heavy target from a pristine tree: introspection (`help`, `help-build`, `help-dist`), `build`, `dist`, a repeat `dist` to prove repeatability, `composer install` plus `psalm`, and `reuse`. A red run here is always an ncmake regression, never a flaky fixture.
+- **Smoke** (`build twofactor_oath with this revision`, `.ncmake/workflows/ncmake-smoke.yml`) — builds a real consuming app end to end against this exact revision, each heavy target from a pristine tree: introspection (`help`, `help-build`, `help-dist`), `build`, `dist`, a repeat `dist` to prove repeatability, `composer install` plus `psalm`, and `reuse`. A red run here is always an ncmake regression, never a flaky fixture.
 
 Beyond the checks, the branch protection also requires signed commits and a linear history, and blocks force-pushes and deletion of `main`.
 

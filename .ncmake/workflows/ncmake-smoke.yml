@@ -3,7 +3,7 @@
 #
 # ncmake self-CI - functional smoke test. https://github.com/ernolf/ncmake
 #
-# The repository's own workflow: it lives in ncmake-workflows/, where Dependabot
+# The repository's own workflow: it lives in .ncmake/workflows/, where Dependabot
 # keeps it current, and `make workflows-install W=ncmake-smoke` installs it into
 # .github/workflows/.
 #
@@ -61,7 +61,7 @@ jobs:
           reaches() {
             case "$1" in
               .github/workflows/ncmake-smoke.yml) return 0 ;;
-              .github/workflows/* | ncmake-workflows/*) return 1 ;;
+              .github/workflows/* | .ncmake/workflows/*) return 1 ;;
               .ncmake-workflows.json | .ncmake-workflows.json.license) return 1 ;;
               skills/*) return 1 ;;
               LICENSES/* | *.license | REUSE.toml) return 1 ;;
