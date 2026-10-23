@@ -1,0 +1,80 @@
+# SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
+# SPDX-License-Identifier: MIT
+#
+# Generic workflow linter: actionlint over every tracked GitHub Actions workflow.
+# https://github.com/ernolf/ncmake
+#
+# A workflow is a YAML file in .github/workflows/, in the ncmake-workflows/
+# folder an app keeps its own workflows in, or next to a <name>.properties.json:
+# the layout of a workflow source, such as ernolf/ncmake-workflows or
+# nextcloud/.github, whose templates run in other repositories and are checked
+# where they are written. actionlint lints the run: scripts with shellcheck,
+# which the runner image ships, and reads .github/actionlint.yaml when the
+# repository has one.
+#
+# A repository without workflows passes instead of failing, so the workflow
+# can be installed anywhere without becoming a permanent red cross.
+
+name: Lint actions
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lint-actions-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  ACTIONLINT_VERSION: 1.7.12
+
+jobs:
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Collect workflows
+        id: collect
+        run: |
+          list="$RUNNER_TEMP/workflow-files"
+          : > "$list"
+          # Tracked files only: a checkout carries nothing else worth linting,
+          # and git handles names with spaces through the NUL separator.
+          while IFS= read -r -d '' f; do
+            test -f "$f" || continue
+            case "$f" in
+              .github/workflows/* | ncmake-workflows/*)
+                printf '%s\n' "$f" >> "$list"
+                continue
+                ;;
+            esac
+            if test -f "${f%.*}.properties.json"; then
+              printf '%s\n' "$f" >> "$list"
+            fi
+          done < <(git ls-files -z -- '*.yml' '*.yaml')
+          count="$(wc -l < "$list")"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "Workflows found: $count"
+          cat "$list"
+
+      - name: Install actionlint
+        if: steps.collect.outputs.count != '0'
+        run: go install "github.com/rhysd/actionlint/cmd/actionlint@v$ACTIONLINT_VERSION"
+
+      - name: Run actionlint
+        if: steps.collect.outputs.count != '0'
+        run: |
+          xargs -r -d '\n' -a "$RUNNER_TEMP/workflow-files" "$(go env GOPATH)/bin/actionlint" -color
+
+      - name: Nothing to check
+        if: steps.collect.outputs.count == '0'
+        run: echo "No workflows in this repository; nothing to check."

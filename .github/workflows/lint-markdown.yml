@@ -1,0 +1,105 @@
+# SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
+# SPDX-License-Identifier: MIT
+#
+# Generic Markdown linter: markdownlint-cli2 over every tracked Markdown file.
+# https://github.com/ernolf/ncmake
+#
+# A configuration of the repository root wins: a .markdownlint-cli2.* or a
+# .markdownlint.* file. Without one, markdownlint's default rules apply minus
+# those that GitHub Markdown routinely breaks on purpose: unwrapped prose
+# (MD013), embedded HTML such as badges and sized images (MD033), a license
+# comment before the first heading (MD041), consecutive alerts such as
+# [!NOTE] (MD028), heading anchors with emoji, which GitHub slugs differently
+# (MD051), and tables without padded pipes (MD060).
+#
+# A repository without Markdown files passes instead of failing, so the
+# workflow can be installed anywhere without becoming a permanent red cross.
+
+name: Lint Markdown
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lint-markdown-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  MARKDOWNLINT_CLI2_VERSION: 0.24.0
+
+jobs:
+  markdownlint:
+    name: markdownlint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Collect Markdown files
+        id: collect
+        run: |
+          list="$RUNNER_TEMP/markdown-files"
+          # Tracked files only: a checkout carries nothing else worth linting,
+          # and git handles names with spaces through the NUL separator. A
+          # tracked dependency tree is not this repository's text.
+          git ls-files -z -- '*.md' ':!:node_modules/**' ':!:**/node_modules/**' ':!:vendor/**' ':!:**/vendor/**' \
+            | tr '\0' '\n' > "$list"
+          count="$(wc -l < "$list")"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "Markdown files found: $count"
+          cat "$list"
+
+      - name: Set up Node
+        if: steps.collect.outputs.count != '0'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: lts/*
+
+      - name: Install markdownlint-cli2
+        if: steps.collect.outputs.count != '0'
+        run: |
+          tools="$RUNNER_TEMP/lint-markdown"
+          npm install --prefix "$tools" --no-audit --no-fund --no-package-lock \
+            "markdownlint-cli2@$MARKDOWNLINT_CLI2_VERSION"
+          cat > "$tools/.markdownlint-cli2.jsonc" <<'EOF'
+          {
+            "config": {
+              "default": true,
+              "MD013": false,
+              "MD028": false,
+              "MD033": false,
+              "MD041": false,
+              "MD051": false,
+              "MD060": false
+            }
+          }
+          EOF
+
+      - name: Run markdownlint
+        if: steps.collect.outputs.count != '0'
+        run: |
+          tools="$RUNNER_TEMP/lint-markdown"
+          config=(--config "$tools/.markdownlint-cli2.jsonc")
+          for f in .markdownlint-cli2.jsonc .markdownlint-cli2.yaml .markdownlint-cli2.cjs .markdownlint-cli2.mjs \
+                   .markdownlint.jsonc .markdownlint.json .markdownlint.yaml .markdownlint.yml \
+                   .markdownlint.cjs .markdownlint.mjs; do
+            if test -f "$f"; then
+              echo "Using the repository configuration $f"
+              config=()
+              break
+            fi
+          done
+          # Everything after -- is a literal path, not a glob.
+          mapfile -t files < "$RUNNER_TEMP/markdown-files"
+          "$tools/node_modules/.bin/markdownlint-cli2" "${config[@]}" -- "${files[@]}"
+
+      - name: Nothing to check
+        if: steps.collect.outputs.count == '0'
+        run: echo "No Markdown files in this repository; nothing to check."

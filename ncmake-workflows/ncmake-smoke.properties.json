@@ -1,0 +1,4 @@
+{
+    "name": "ncmake smoke test",
+    "description": "Build the latest stable twofactor_oath release end to end with this revision of ncmake, each heavy target from a pristine tree; skipped when no changed file reaches the run"
+}

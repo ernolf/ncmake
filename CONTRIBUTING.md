@@ -77,12 +77,12 @@ Every check below is required: a pull request cannot merge until all of them pas
 
 - **Conventional commits** (`Block unconventional commits`) — every commit subject must parse as a Conventional Commit.
 - **DCO** — every commit must carry a valid `Signed-off-by` line.
-- **Lint** (`lint.yml`), three independent checks:
-  - `yamllint` — all YAML.
-  - `actionlint` — the self-CI workflows. The templates ncmake deploys into apps live and are linted in [ncmake-workflows](https://github.com/ernolf/ncmake-workflows).
-  - `markdownlint` — all Markdown.
+- **Lint**, three generic templates from [ncmake-workflows](https://github.com/ernolf/ncmake-workflows), installed via the workflow manager:
+  - `yamllint` (`lint-yaml.yml`) — all YAML.
+  - `actionlint` (`lint-actions.yml`) — the self-CI workflows.
+  - `markdownlint` (`lint-markdown.yml`) — all Markdown.
 - **REUSE** (`reuse-compliance-check`) — licensing, see below.
-- **Smoke** (`build twofactor_oath with this revision`) — builds a real consuming app end to end against this exact revision, each heavy target from a pristine tree: introspection (`help`, `help-build`, `help-dist`), `build`, `dist`, a repeat `dist` to prove repeatability, `composer install` plus `psalm`, and `reuse`. A red run here is always an ncmake regression, never a flaky fixture.
+- **Smoke** (`build twofactor_oath with this revision`, `ncmake-workflows/ncmake-smoke.yml`) — builds a real consuming app end to end against this exact revision, each heavy target from a pristine tree: introspection (`help`, `help-build`, `help-dist`), `build`, `dist`, a repeat `dist` to prove repeatability, `composer install` plus `psalm`, and `reuse`. A red run here is always an ncmake regression, never a flaky fixture.
 
 Beyond the checks, the branch protection also requires signed commits and a linear history, and blocks force-pushes and deletion of `main`.
 
