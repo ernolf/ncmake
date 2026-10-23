@@ -1,0 +1,85 @@
+# SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
+# SPDX-License-Identifier: MIT
+#
+# Generic YAML linter: yamllint over every tracked YAML file.
+# https://github.com/ernolf/ncmake
+#
+# A configuration of the repository (.yamllint, .yamllint.yaml or .yamllint.yml)
+# wins. Without one, yamllint's default set applies with three changes that
+# every repository with GitHub workflows needs: the `on:` key is not a truthy
+# value, long lines are allowed, and the `---` document marker is optional.
+# yamllint reads that set from YAMLLINT_CONFIG_FILE, which it consults only
+# when the repository has no configuration of its own.
+#
+# A repository without YAML files passes instead of failing, so the workflow
+# can be installed anywhere without becoming a permanent red cross.
+
+name: Lint YAML
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lint-yaml-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  YAMLLINT_VERSION: 1.38.0
+
+jobs:
+  yamllint:
+    name: yamllint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Collect YAML files
+        id: collect
+        run: |
+          list="$RUNNER_TEMP/yaml-files"
+          # Tracked files only: a checkout carries nothing else worth linting,
+          # and git handles names with spaces through the NUL separator.
+          git ls-files -z -- '*.yml' '*.yaml' | tr '\0' '\n' > "$list"
+          count="$(wc -l < "$list")"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "YAML files found: $count"
+          cat "$list"
+
+      - name: Install yamllint
+        if: steps.collect.outputs.count != '0'
+        run: pipx install "yamllint==$YAMLLINT_VERSION"
+
+      - name: Run yamllint
+        if: steps.collect.outputs.count != '0'
+        run: |
+          for f in .yamllint .yamllint.yaml .yamllint.yml; do
+            if test -f "$f"; then
+              echo "Using the repository configuration $f"
+              break
+            fi
+          done
+          cat > "$RUNNER_TEMP/yamllint.yml" <<'EOF'
+          extends: default
+          rules:
+            truthy:
+              allowed-values: ['true', 'false']
+              check-keys: false
+            line-length: disable
+            document-start: disable
+          EOF
+          # Files passed by name still honour the ignore list of a configuration,
+          # and yamllint annotates its findings on its own when run in Actions.
+          YAMLLINT_CONFIG_FILE="$RUNNER_TEMP/yamllint.yml" \
+            xargs -r -d '\n' -a "$RUNNER_TEMP/yaml-files" yamllint
+
+      - name: Nothing to check
+        if: steps.collect.outputs.count == '0'
+        run: echo "No YAML files in this repository; nothing to check."

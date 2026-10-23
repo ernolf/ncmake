@@ -9,6 +9,26 @@
     "sha": "0a5957bffde5b7b2e4d33f6dae5f75c982ee93e6",
     "source": "ncmake"
   },
+  "lint-actions.yml": {
+    "hash": "1e4cab0e05299172b5d45c16a66c90e1e06708029061818463e29991590dae3c",
+    "sha": "25b8f8290308d6deccf9ef4960185bb547268065",
+    "source": "ncmake"
+  },
+  "lint-markdown.yml": {
+    "hash": "7af20f55d6dccc7c31c2f766a9c677e078785b803db21c31993cb8ced0c3c4fc",
+    "sha": "84e0d45368c14a90a7dd93c6921c611a53a34568",
+    "source": "ncmake"
+  },
+  "lint-yaml.yml": {
+    "hash": "3b962c85b87e6cb8bb4a3fcac1a55cdeb843861327ebd00b8172891e64e0007d",
+    "sha": "8c0e719d3e84f9eb591c7651ce72645fd85f8988",
+    "source": "ncmake"
+  },
+  "ncmake-smoke.yml": {
+    "hash": "026111a10ec17565cc92ea066605c04261dba73174d6e1490e310f194bd9453e",
+    "sha": "e369b63fa0bd4fdf755ba082eaf3355f626c0689",
+    "source": "local"
+  },
   "reuse.yml": {
     "hash": "7507fa539b8cdec70a5de786fbac4e38f1e53f9df404dbfc75bb2fe7950bc010",
     "sha": "67fdafc440e24937ece9f2f16d7f2c2df2c7efa5",

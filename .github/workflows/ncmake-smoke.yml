@@ -1,0 +1,159 @@
+# SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
+# SPDX-License-Identifier: MIT
+#
+# ncmake self-CI - functional smoke test. https://github.com/ernolf/ncmake
+#
+# The repository's own workflow: it lives in ncmake-workflows/, where Dependabot
+# keeps it current, and `make workflows-install W=ncmake-smoke` installs it into
+# .github/workflows/.
+#
+# Exercises the core Makefile from this very revision against a real consuming
+# app, fetched over the network the way every app consumes ncmake (NCMAKE_REF
+# pointing at the pull request's own commit). The app is resolved to its latest
+# stable release: that release was itself produced by ncmake, so every target
+# must succeed - a red run here always means an ncmake regression, never a flaky
+# fixture. Tracking the latest release keeps this workflow maintenance-free.
+#
+# Each heavy target runs from a pristine tree (dist-clean in between), so a
+# target that only works on leftovers from a previous run is caught.
+#
+# The run reads from this revision only core/Makefile, core/image-sources, lib/,
+# mk/ and this workflow; the images it pulls are the published ones. A change that
+# touches none of them is skipped: the changes job lists the changed files through
+# the compare API, and end-to-end runs unless every one of them is on the exclude
+# list in reaches. A path filter in on: would not do, since a workflow it skips
+# reports no status and end-to-end is a required check; a job its if: skips
+# reports success. Whenever the list cannot be had, end-to-end runs, and so it does
+# when the changes job itself fails: only its explicit false skips it.
+
+name: Smoke
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: Decide whether the change reaches the smoke run
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - name: Compare the changed files with what the smoke run reads
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -u
+          # A path the run does not read returns 1; anything else, a new path
+          # included, returns 0.
+          reaches() {
+            case "$1" in
+              .github/workflows/ncmake-smoke.yml) return 0 ;;
+              .github/workflows/* | ncmake-workflows/*) return 1 ;;
+              .ncmake-workflows.json | .ncmake-workflows.json.license) return 1 ;;
+              skills/*) return 1 ;;
+              LICENSES/* | *.license | REUSE.toml) return 1 ;;
+              core/* | lib/* | mk/*) return 0 ;;
+              *.md) return 1 ;;
+            esac
+            return 0
+          }
+          run=true
+          list=$RUNNER_TEMP/changed-files
+          # The compare API lists at most 300 files, so a list of that length may
+          # be cut short.
+          if [ -z "$BASE" ] || [ "$BASE" = 0000000000000000000000000000000000000000 ]; then
+            echo "No revision to compare with: the smoke run runs."
+          elif ! gh api "repos/$REPO/compare/$BASE...$HEAD" --jq '.files[] | .filename, (.previous_filename // empty)' > "$list"; then
+            echo "The compare API gave no file list: the smoke run runs."
+          elif [ ! -s "$list" ] || [ "$(wc -l < "$list")" -ge 300 ]; then
+            echo "The compare API listed no file or may have cut the list short: the smoke run runs."
+          else
+            run=false
+            while IFS= read -r f; do
+              if reaches "$f"; then
+                echo "reaches the smoke run:  $f"
+                run=true
+              else
+                echo "cannot reach it:        $f"
+              fi
+            done < "$list"
+            if [ "$run" = true ]; then
+              echo "The smoke run runs."
+            else
+              echo "No changed file reaches the smoke run: it is skipped."
+            fi
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
+  end-to-end:
+    name: build twofactor_oath with this revision
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
+    runs-on: ubuntu-latest
+    env:
+      RUNTIME: docker
+      NCMAKE_REF: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Resolve the latest stable release of the consuming app
+        id: app
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          tag="$(gh api repos/ernolf/twofactor_oath/releases/latest --jq .tag_name)"
+          echo "Latest stable release: $tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the consuming app
+        uses: actions/checkout@v7
+        with:
+          repository: ernolf/twofactor_oath
+          ref: ${{ steps.app.outputs.tag }}
+          persist-credentials: false
+
+      - name: Introspection - the help and target system
+        run: |
+          set -eu
+          make NCMAKE_REF="$NCMAKE_REF" help
+          make NCMAKE_REF="$NCMAKE_REF" help-build
+          make NCMAKE_REF="$NCMAKE_REF" help-dist
+
+      - name: Release pipeline from a pristine tree
+        run: |
+          set -eu
+          make NCMAKE_REF="$NCMAKE_REF" dist-clean
+          make NCMAKE_REF="$NCMAKE_REF" build
+          make NCMAKE_REF="$NCMAKE_REF" dist
+          ls -1 build/artifacts/dist/*.tar.gz
+
+      - name: dist is repeatable (rebuild without cleaning)
+        run: |
+          set -eu
+          make NCMAKE_REF="$NCMAKE_REF" dist
+          ls -1 build/artifacts/dist/*.tar.gz
+
+      - name: Static analysis from a pristine tree
+        run: |
+          set -eu
+          make NCMAKE_REF="$NCMAKE_REF" dist-clean
+          make NCMAKE_REF="$NCMAKE_REF" composer ARGS=install
+          make NCMAKE_REF="$NCMAKE_REF" psalm
+
+      - name: REUSE lint from a pristine tree
+        run: |
+          set -eu
+          make NCMAKE_REF="$NCMAKE_REF" dist-clean
+          make NCMAKE_REF="$NCMAKE_REF" reuse
