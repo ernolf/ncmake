@@ -4,7 +4,7 @@
 # Generic workflow linter: actionlint over every tracked GitHub Actions workflow.
 # https://github.com/ernolf/ncmake
 #
-# A workflow is a YAML file in .github/workflows/, in the ncmake-workflows/
+# A workflow is a YAML file in .github/workflows/, in the .ncmake/workflows/
 # folder an app keeps its own workflows in, or next to a <name>.properties.json:
 # the layout of a workflow source, such as ernolf/ncmake-workflows or
 # nextcloud/.github, whose templates run in other repositories and are checked
@@ -52,7 +52,7 @@ jobs:
           while IFS= read -r -d '' f; do
             test -f "$f" || continue
             case "$f" in
-              .github/workflows/* | ncmake-workflows/*)
+              .github/workflows/* | .ncmake/workflows/*)
                 printf '%s\n' "$f" >> "$list"
                 continue
                 ;;
