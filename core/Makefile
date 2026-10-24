@@ -1199,8 +1199,12 @@ tag: check-app
 # the line, never at main. Before it is created, the Nextcloud and PHP ranges at that tag are
 # shown next to those of main, with a note when the line still reaches into the Nextcloud
 # versions main covers. After confirmation it creates and pushes the branch and prints what
-# comes next, for an app with .tx/config including the Transifex sync, which reaches app
-# release lines only through .tx/backport on main. Stale remote branches are pruned in a fetch
+# comes next. For an app with .tx/config that includes the Transifex sync, which reaches app
+# release lines only through .tx/backport on main: after a prompt of its own the new branch
+# goes into that file, and .tx/backport into the REUSE.toml annotation of .tx/config, through
+# the branch flow and a pull request against main; the new branch is checked out again
+# afterwards. Its name is kept in stable because the flow functions overwrite branch and
+# base. Stale remote branches are pruned in a fetch
 # of their own: --prune together with --tags would also delete local tags that origin does not
 # have.
 stable-branch: check-app
@@ -1258,6 +1262,39 @@ stable-branch: check-app
 	fi; \
 	git switch -c "$$branch" "$$base" || exit 1; \
 	git push -u origin "$$branch" || exit 1; \
+	tx=; reuse_note=; \
+	if git cat-file -e main:.tx/config 2>/dev/null; then \
+		if git show main:.tx/backport 2>/dev/null | tr -s ' \t' '\n' | grep -qxF "$$branch"; then \
+			tx=listed; \
+		else \
+			printf 'Add %s to .tx/backport on main through a pull request? [y/N] ' "$$branch"; read yn; \
+			tx=declined; \
+			if [ "$$yn" = y ] || [ "$$yn" = Y ]; then \
+				stable=$$branch; tx=failed; \
+				git switch --quiet main || exit 1; \
+				eval "$$branch_flow"; \
+				if flow_branch_start "ncmake/l10n/tx-backport-$$stable"; then \
+					mkdir -p .tx "$(cache_dir)"; \
+					if [ -s .tx/backport ] && [ -n "$$(tail -c 1 .tx/backport)" ]; then echo >> .tx/backport; fi; \
+					echo "$$stable" >> .tx/backport; \
+					git add .tx/backport; \
+					bullets="- Add $$stable to .tx/backport"; \
+					if [ -f REUSE.toml ] && ! grep -qF '.tx/backport' REUSE.toml; then \
+						if grep -qF '".tx/config"' REUSE.toml; then \
+							awk 'done || /^[ \t]*#/ || !/"\.tx\/config"/ { print; next } /^[ \t]*path[ \t]*=[ \t]*"\.tx\/config"/ { sub(/"\.tx\/config"/, "[\".tx/backport\", \".tx/config\"]"); print; done = 1; next } { sub(/"\.tx\/config"/, "\".tx/backport\", \".tx/config\""); print; done = 1 }' \
+								REUSE.toml > "$(cache_dir)/REUSE.toml" && mv "$(cache_dir)/REUSE.toml" REUSE.toml && git add REUSE.toml; \
+							bullets=$$(printf '%s\n%s' "$$bullets" "- Cover .tx/backport in REUSE.toml together with .tx/config"); \
+						else \
+							reuse_note=1; \
+						fi; \
+					fi; \
+					flow_branch_finish "$$branch" "chore(l10n): add $$stable to .tx/backport" "$$bullets" "The Nextcloud Transifex bot syncs only the branches .tx/backport lists. make stable-branch opened $$stable and adds it here." 1 && tx=opened; \
+				fi; \
+				branch=$$stable; \
+				git switch --quiet "$$branch" || exit 1; \
+			fi; \
+		fi; \
+	fi; \
 	echo "==> $$branch is on origin and checked out. Next:"; \
 	echo "    - Protect it like main: $(if $(gh_slug),https://github.com/$(gh_slug)/settings/rules,in the repository settings)"; \
 	echo "    - Changes reach $$branch through PRs against it. A backport:"; \
@@ -1272,15 +1309,17 @@ stable-branch: check-app
 	if git cat-file -e main:.tx/config 2>/dev/null; then \
 		echo "    - Transifex: the Nextcloud sync bot only reaches $$branch when .tx/backport on"; \
 		echo "      main lists it, and that list replaces the server's stable* names."; \
-		if git show main:.tx/backport 2>/dev/null | tr -s ' \t' '\n' | grep -qxF "$$branch"; then \
-			echo "      .tx/backport on main already lists $$branch."; \
-		else \
-			echo "      Add it through a PR against main, one branch per line:"; \
+		case "$$tx" in \
+		listed) echo "      .tx/backport on main already lists $$branch.";; \
+		opened) echo "      The pull request above adds it; merge it."; \
+			[ -z "$$reuse_note" ] || echo "      REUSE.toml has no annotation for .tx/config: cover .tx/backport in that PR.";; \
+		failed) echo "      The pull request that adds it was not opened, see the messages above.";; \
+		*) echo "      Add it through a PR against main, one branch per line:"; \
 			echo "        git switch -c <branch> main && echo $$branch >> .tx/backport"; \
 			if git cat-file -e main:REUSE.toml 2>/dev/null && ! git show main:REUSE.toml 2>/dev/null | grep -qF '.tx/backport'; then \
 				echo "      and add .tx/backport next to .tx/config in REUSE.toml."; \
-			fi; \
-		fi; \
+			fi;; \
+		esac; \
 		echo "    - The bot pushes its commits directly: add nextcloud-bot to the bypass list of"; \
 		echo "      the rule that protects $$branch, as on main. It needs write access as a"; \
 		echo "      collaborator first: $(if $(gh_slug),https://github.com/$(gh_slug)/settings/access,the repository settings)"; \
@@ -1915,10 +1954,14 @@ and pushes the branch and prints the next steps: protection, backports through
 PRs against the branch, releases with make version, make changelog, make tag,
 and workflows main gained later (make workflows-install on the branch).
 
-For an app with .tx/config the next steps add the Transifex sync: the Nextcloud
+For an app with .tx/config it then offers the Transifex sync: the Nextcloud
 bot syncs only the branches .tx/backport on main lists (one per line, replacing
-the server's stable* names), and it needs write access plus a bypass on the
-rule that protects the branch, because it pushes its commits directly.
+the server's stable* names). On yes it adds the branch to that file, and
+.tx/backport to the REUSE.toml annotation of .tx/config, on the branch
+ncmake/l10n/tx-backport-stableX.Y off main, opens the pull request against
+main through gh and checks the new branch out again. The bot also needs write
+access plus a bypass on the rule that protects the branch, because it pushes
+its commits directly; the next steps name both.
 endef
 
 define help_dev-init
