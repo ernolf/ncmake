@@ -148,7 +148,7 @@ An older release line, for example 0.7 while `main` is at 0.8, gets its own `sta
 
 1. On `main`: `make stable-branch`. It lists the release lines from the tags, prompts for one (`X.Y`) and refuses a line without a tag, the current line of `main`, a newer one, and a `stableX.Y` that already exists locally or on origin. The branch starts at the newest tag of the line, never at `main`. Before it is created, it shows the Nextcloud and PHP ranges at that tag next to those of `main` and notes when the line still reaches into the Nextcloud versions `main` covers; capping `max-version` is then the first PR against the branch. After a confirmation it creates and pushes the branch.
 2. Protect the branch on GitHub like `main`.
-3. Changes reach the branch only through PRs against it. A backport: `git switch -c <branch> stableX.Y && git cherry-pick -x <commit>`.
+3. Changes reach the branch only through PRs against it. With the `backport` workflow installed, a comment of `/backport to stableX.Y` on the PR against `main` opens that PR (see below). By hand: `git switch -c <branch> stableX.Y && git cherry-pick -x <commit>`.
 4. A workflow that `main` gained after the line's tag, for example one whose check the repository rules require, comes over on `stableX.Y` with `make workflows-install W=<name> PR=1`. The workflow updater never reaches a `stable*` branch, so `make workflows-update PR=1` runs there by hand.
 5. For an app with `.tx/config`: the Nextcloud Transifex bot syncs only the branches that `.tx/backport` on `main` lists (one per line, replacing the server's `stable*` names), so `stableX.Y` goes into that file through a PR against `main`, together with a `REUSE.toml` entry for it. The bot pushes its commits directly, so it needs write access as a collaborator and a bypass on the rule that protects the branch, as on `main`. `make stable-branch` prints both steps.
 6. Release from it exactly as from `main`, with `stableX.Y` in place of `main`: `make version` keeps the major.minor of the line and compares against the tags reachable from the branch, `make changelog` keeps the tags of the other lines out, and `make tag` runs on `stableX.Y` after the merge. When publishing the GitHub release, untick "Set as the latest release".
@@ -265,6 +265,7 @@ The templates of ernolf/ncmake-workflows, all of them generic:
 | `lint-shell.yml` | shellcheck over every tracked shell script, found by extension or by shebang, so extensionless commands are covered; a repository without shell scripts passes |
 | `lint-vue-imports.yml` | fails when a tracked source file imports the `@nextcloud/vue` root instead of a per-component entry point, which pulls the whole library into the module graph before tree shaking; a repository without a hit passes |
 | `lint-web.yml` | ESLint, Stylelint and html-validate over the tracked JavaScript, CSS and HTML of a repository without a Node project, each at a pinned version; a configuration in the repository root wins over the tool's recommended set; a repository with a `package.json`, which lints through its own scripts, or without such files passes |
+| `backport.yml` | answers a `/backport to <branch>` comment on a pull request with a verified, signed-off pull request that carries its change to that branch; on an open pull request it runs at the merge (see below) |
 | `branch-cleanup.yml` | deletes a merged pull request's head branch if it still exists, a workflow-shipped equivalent of the repository setting |
 | `release.yml` | builds the release tarball with ncmake and attaches it to the published GitHub release |
 | `workflow-updater.yml` | refreshes the managed workflows on a schedule and opens a pull request when anything changed (see below) |
@@ -284,7 +285,7 @@ On install, GitHub's template placeholders are substituted (`$default-branch` fr
 
 Both targets take `COMMIT=1` and `PR=1`. They must run on `main` or a `stable*` branch. `COMMIT=1` opens the branch (`ncmake/ci/workflows-install` or `ncmake/ci/workflow-update`; on `stableX.Y` with the line appended, for example `ncmake/ci/workflows-install-stable0.7`), commits with `Signed-off-by` and one bullet per changed file, and prints the push command without pushing. `PR=1` implies `COMMIT=1` and additionally pushes and opens the pull request through `gh`, against the branch the target started from. Both refuse when the branch already exists locally or on origin, and discard the branch again when there was nothing to commit.
 
-## Workflow updater and the rebase comment command
+## Workflow updater and the comment commands
 
 The shipped `workflow-updater.yml` keeps the managed workflows current on its own: a daily cron at 05:30 UTC plus `workflow_dispatch`. It runs `make dev-init` and `make workflows-update` and hands the result to `peter-evans/create-pull-request`, which commits through the API with `sign-commits` and `signoff`, so the commits are verified. Authentication is a GitHub App, through the repository secrets `NCMAKE_UPDATER_CLIENT_ID` and `NCMAKE_UPDATER_PRIVATE_KEY` (setup: <https://github.com/ernolf/ncmake/wiki/GitHub-App>). When the pull request is closed, a cleanup job deletes the branch `ncmake/ci/workflow-update`.
 
@@ -300,6 +301,17 @@ Two things about it are worth knowing:
 
 * The trigger is gated. Only a comment on a **pull request**, whose author association is `OWNER`, `MEMBER` or `COLLABORATOR`, starts the job. A comment on an issue, or from anyone else, does nothing.
 * Use it instead of GitHub's "Update with rebase" button. That button, like a `git rebase` in the runner, pushes commits that carry no signature, so the pull request loses its verified status. Going through the API keeps every commit verified.
+
+**The backport comment command.** The template `backport.yml` (`make workflows-install W=backport`, same GitHub App and secrets) carries a merged change to a maintenance line. Comment on the pull request, one line per target branch:
+
+```text
+/backport to stable0.7
+```
+
+* On a merged pull request it runs at once; on an open one it waits for the merge, which reads all comments again, the newest per branch counting. The author association gate is the same as for the rebase command.
+* It cherry-picks the pull request's own non-merge commits from `refs/pull/<n>/head` with `--no-commit` onto the target branch and commits the result through `create-pull-request` as one verified, signed-off commit on `ncmake/backport/<n>/<branch>`, with the original messages and their `(cherry picked from commit …)` lines. The title is the original one with `[<branch>]` appended.
+* Reactions on the command: 👀 picked up, 🚀 pull request open, 👎 failed (a comment names the conflicting files or the missing branch and gives the manual commands), 😕 not understood.
+* The merge trigger is `pull_request_target`, which runs the workflow copy of the base branch with secrets, also for a fork. A command that waits on a pull request against `stableX.Y` therefore needs the workflow on that branch too; otherwise write it after the merge.
 
 ## gh module
 
@@ -348,4 +360,4 @@ Conventional commit subjects (the changelog is generated from them), `main` as t
 * [Getting started](https://github.com/ernolf/ncmake/wiki/Getting-started) and the [step-by-step walkthrough](https://github.com/ernolf/ncmake/wiki/Step-by-step)
 * [How ncmake understands your app](https://github.com/ernolf/ncmake/wiki/How-ncmake-understands-your-app), [Building and packaging](https://github.com/ernolf/ncmake/wiki/Building-and-packaging), [Bundle analysis](https://github.com/ernolf/ncmake/wiki/Bundle-analysis), [Checkout audit](https://github.com/ernolf/ncmake/wiki/Checkout-audit), [Per-app tuning](https://github.com/ernolf/ncmake/wiki/Per-app-tuning), [Target reference](https://github.com/ernolf/ncmake/wiki/Target-reference)
 * [Releasing](https://github.com/ernolf/ncmake/wiki/Releasing), [App Store](https://github.com/ernolf/ncmake/wiki/App-Store), [Integrity signature](https://github.com/ernolf/ncmake/wiki/Integrity-signature)
-* [Workflows](https://github.com/ernolf/ncmake/wiki/Workflows), [Workflow updater](https://github.com/ernolf/ncmake/wiki/Workflow-updater), [GitHub App](https://github.com/ernolf/ncmake/wiki/GitHub-App), [GitHub PAT](https://github.com/ernolf/ncmake/wiki/GitHub-PAT), [Deleting merged branches](https://github.com/ernolf/ncmake/wiki/Deleting-merged-branches)
+* [Workflows](https://github.com/ernolf/ncmake/wiki/Workflows), [Workflow updater](https://github.com/ernolf/ncmake/wiki/Workflow-updater), [Backport](https://github.com/ernolf/ncmake/wiki/Backport), [GitHub App](https://github.com/ernolf/ncmake/wiki/GitHub-App), [GitHub PAT](https://github.com/ernolf/ncmake/wiki/GitHub-PAT), [Deleting merged branches](https://github.com/ernolf/ncmake/wiki/Deleting-merged-branches)
