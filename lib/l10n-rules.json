@@ -1,0 +1,127 @@
+{
+  "about": "The rules make l10n-lint holds the English source strings of a Nextcloud app against. Each rule is one entry: lib/l10n-lint.mjs carries no rule of its own. The format is described on the wiki page Translations, section The rule file.",
+  "sources": {
+    "guidelines": "https://docs.nextcloud.com/server/latest/developer_manual/basics/translations.html#dos-and-don-ts",
+    "plurals": "https://docs.nextcloud.com/server/latest/developer_manual/basics/translations.html#correct-plurals"
+  },
+  "rules": [
+    {
+      "id": "R1",
+      "weight": "must",
+      "source": "guidelines",
+      "note": "an apostrophe is the ASCII single quote, not ’ or ´",
+      "match": "(?<=\\p{L})[’´](?=\\p{L})",
+      "replace": "'",
+      "examples": [
+        { "bad": "It’s done", "good": "It's done" },
+        { "bad": "Don´t", "good": "Don't" }
+      ],
+      "ok": ["‘Show’"]
+    },
+    {
+      "id": "R2",
+      "weight": "must",
+      "source": "guidelines",
+      "note": "three dots are the Unicode ellipsis, with a non-breaking space (U+00A0) before it",
+      "match": "[ \\u00a0]?\\.\\.\\.(?!\\.)",
+      "replace": "\u00a0…",
+      "examples": [
+        { "bad": "Loading...", "good": "Loading\u00a0…" },
+        { "bad": "Loading ...", "good": "Loading\u00a0…" }
+      ],
+      "ok": ["Loading\u00a0…"]
+    },
+    {
+      "id": "R3",
+      "weight": "must",
+      "source": "guidelines",
+      "note": "the space before the ellipsis is a non-breaking space (U+00A0)",
+      "match": " …",
+      "replace": "\u00a0…",
+      "examples": [
+        { "bad": "Loading …", "good": "Loading\u00a0…" }
+      ],
+      "ok": ["Loading\u00a0…"]
+    },
+    {
+      "id": "R4",
+      "weight": "must",
+      "source": "guidelines",
+      "note": "the spelled out form is easier to understand and to translate",
+      "patterns": [
+        { "match": "\\bDon't\\b", "replace": "Do not" },
+        { "match": "\\bdon't\\b", "replace": "do not" },
+        { "match": "\\bWon't\\b", "replace": "Will not" },
+        { "match": "\\bwon't\\b", "replace": "will not" }
+      ],
+      "examples": [
+        { "bad": "Don't save", "good": "Do not save" },
+        { "bad": "This won't work", "good": "This will not work" }
+      ],
+      "ok": ["Do not save"]
+    },
+    {
+      "id": "R5",
+      "weight": "must",
+      "source": "guidelines",
+      "note": "Cannot is one word",
+      "match": "\\b([Cc])an not\\b",
+      "replace": "$1annot",
+      "examples": [
+        { "bad": "Can not save", "good": "Cannot save" },
+        { "bad": "It can not be saved", "good": "It cannot be saved" }
+      ],
+      "ok": ["Cannot save"]
+    },
+    {
+      "id": "R6",
+      "weight": "must",
+      "source": "guidelines",
+      "note": "ID, the short form of identifier, is written in uppercase; a placeholder like {id} stays",
+      "match": "(?<!\\{)\\b[Ii]d(s?)\\b(?!\\})",
+      "replace": "ID$1",
+      "examples": [
+        { "bad": "Token id", "good": "Token ID" },
+        { "bad": "Copy the ids", "good": "Copy the IDs" }
+      ],
+      "ok": ["Token ID", "Token {id}", "Invalid code", "Hidden"]
+    },
+    {
+      "id": "R7",
+      "weight": "must",
+      "source": "guidelines",
+      "note": "a leading or trailing space mostly means a concatenated string; put the whole sentence into one string, with placeholders",
+      "match": "^\\s|\\s$",
+      "examples": [
+        { "bad": " Leading space" },
+        { "bad": "Trailing space " }
+      ],
+      "ok": ["No leading space"]
+    },
+    {
+      "id": "R8",
+      "weight": "must",
+      "source": "plurals",
+      "note": "a number that varies needs the plural form: n() with %n",
+      "calls": ["t"],
+      "match": "%(?:\\d+\\$)?d|%n|\\{(?:n|count|number|num|total|amount|seconds|minutes|hours|days)\\}",
+      "examples": [
+        { "bad": "Vault will be locked in %1$d seconds" },
+        { "bad": "Hides in {seconds}s" }
+      ],
+      "ok": ["Hide {name}", "Import calendars"]
+    },
+    {
+      "id": "R9",
+      "weight": "must",
+      "source": "plurals",
+      "note": "a plural carries %n; without a number, use t() with an undefined plural",
+      "calls": ["n"],
+      "require": "%n",
+      "examples": [
+        { "bad": "Import calendars" }
+      ],
+      "ok": ["Import %n calendars"]
+    }
+  ]
+}

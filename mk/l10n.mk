@@ -24,6 +24,13 @@
 # are not the app id the translation tool writes, and a .tx/backport that names a
 # branch which is not a stable* branch on origin.
 #
+# l10n-lint holds the English source strings against the rules of the translation
+# team, which reviews them before the first sync and locks the resource until the
+# ones it rejects are fixed. The strings are the template the translation tool of
+# the bot's image writes; lib/l10n-lint.mjs locates them in the sources and judges
+# them by lib/l10n-rules.json, a data file of its own, so a rule is added without
+# touching the analyser.
+#
 # Transifex itself is not touched: no API call and no token, the sync stays with
 # the Nextcloud bot.
 
@@ -39,6 +46,12 @@ l10n_branches_fallback = main master stable35 stable34 stable33
 l10n_request_url       = https://github.com/nextcloud/docker-ci/issues/new?template=---request-translations.md
 l10n_docs_url          = https://docs.nextcloud.com/server/latest/developer_manual/basics/front-end/l10n.html\#setup-of-the-transifex-sync
 l10n_check_dir         = $(cache_dir)/l10n-check
+l10n_lint_dir          = $(cache_dir)/l10n-lint
+
+# What l10n-lint needs next to it, handed to the core's analyser library section:
+# appended, never set, because every analyser module adds its own.
+l10n_lint_libs = l10n-lint.mjs l10n-rules.json report-text.mjs
+ncmake_libs += $(if $(filter l10n-lint,$(MAKECMDGOALS)),$(l10n_lint_libs))
 
 # The build outputs .gitignore classifies as such. Handed to the tool on its
 # command line instead of exported: an exported variable is expanded for every
@@ -320,10 +333,23 @@ l10n_run = mkdir -p "$(cache_dir)" && printf '%s\n' "$$l10n_tool" > "$(cache_dir
 # The source validation, as validateSyncSetup.sh runs it, from inside the app
 # copy: the translation tool finds the app by the l10n/ directory below the
 # working directory. The image's entrypoint is the sync itself, hence sh.
-l10n_no_runtime = echo "ERROR: l10n-check runs the Nextcloud translation image, which needs podman or docker - RUNTIME=$(RUNTIME) runs none." >&2; exit 1;
+l10n_no_runtime = echo "ERROR: $(1) runs the Nextcloud translation image, which needs podman or docker - RUNTIME=$(RUNTIME) runs none." >&2; exit 1;
 ifeq ($(filter $(RUNTIME),bare none),)
   l10n_validate = $(call container_run,$(l10n_image),--entrypoint sh) -c 'cd "$$1" && php /translationtool.phar prepare-source-validation && /validateTranslationFiles.sh .' l10n-check
+  l10n_template = $(call container_run,$(l10n_image),--entrypoint sh) -c 'cd "$$1" && php /translationtool.phar create-pot-files' l10n-lint
 endif
+
+# l10n-lint runs the analyser through the core's library section, which a core
+# older than this module may lack; say which side is behind rather than run an
+# empty command.
+l10n_lint_core    = $(if $(value ncmake_lib_in),,echo "ERROR: l10n-lint needs a newer ncmake core - run 'make self-update'" >&2; exit 1;)
+# The container sees the app at /app, so the copy and its template are named
+# relative to it. A rule file of one's own is mounted next to the shipped one.
+l10n_lint_rel     = $(l10n_lint_dir:$(CURDIR)/%=%)
+l10n_lint_pot     = $(l10n_lint_rel)/$(app_id)/translationfiles/templates/$(app_id).pot
+l10n_lint_mount   = $(if $(L10N_RULES),-v "$(abspath $(L10N_RULES))":/ncmake-rules/$(notdir $(L10N_RULES)):ro)
+l10n_lint_args    = --pot="$(l10n_lint_pot)" --files="$(l10n_lint_rel)/files" $(if $(filter 1,$(FIX)),--fix) $(if $(L10N_RULES),--rules="/ncmake-rules/$(notdir $(L10N_RULES))")
+l10n_lint_cmdline = make l10n-lint ARGS=\"%s\"
 
 # Inside the nextcloud organisation the sysadmins give the bot its access; any
 # other app invites it itself. The commas of the text would split the arguments
@@ -342,7 +368,7 @@ define l10n_init_body
 endef
 export l10n_init_body
 
-.PHONY: l10n-init l10n-check
+.PHONY: l10n-init l10n-check l10n-lint
 
 # COMMIT / PR as for the workflow targets: without them the files are only
 # written. COMMIT, PR, BODY and the branch flow are defined in the core.
@@ -364,6 +390,7 @@ l10n-init: check-app
 	echo "==> Next, outside the repository:"; \
 	$(l10n_bot_steps) \
 	echo "    - With the files on origin, 'make l10n-check' validates the setup as the request does."; \
+	echo "    - 'make l10n-lint' finds the source strings the translation team rejects in its review."; \
 	echo "    - Then open the translation request and work through it:"; \
 	echo "        $(l10n_request_url)"
 
@@ -373,7 +400,7 @@ l10n-init: check-app
 # path - .tx/ and .l10nignore among the usual ones. Every branch is checked
 # before the exit status reports any of them.
 l10n-check: check-app
-	@$(if $(filter bare none,$(RUNTIME)),$(l10n_no_runtime)) \
+	@$(if $(filter bare none,$(RUNTIME)),$(call l10n_no_runtime,l10n-check)) \
 	git fetch --quiet --prune origin || { echo "ERROR: git fetch origin failed." >&2; exit 1; }; \
 	rc=0; rm -rf "$(l10n_check_dir)"; \
 	$(l10n_run) branches "$(cache_dir)/l10n_branches" || rc=1; \
@@ -387,6 +414,23 @@ l10n-check: check-app
 		$(l10n_validate) "/app$${dir#$(CURDIR)}" || rc=1; \
 	done; \
 	exit $$rc
+
+# The template comes from a copy of the working tree, tracked and untracked files
+# as git lists them, because the translation tool writes its fake source files and
+# translationfiles/ into the app it reads. The analyser locates the strings, and
+# with FIX=1 rewrites them, in the checkout itself.
+l10n-lint: check-app
+	@$(if $(filter bare none,$(RUNTIME)),$(call l10n_no_runtime,l10n-lint)) \
+	$(l10n_lint_core) \
+	$(if $(L10N_RULES),test -r "$(L10N_RULES)" || { echo "L10N_RULES=$(L10N_RULES) is not a readable file" >&2; exit 1; };) \
+	$(call ncmake_lib_need,$(l10n_lint_libs)); \
+	dir="$(l10n_lint_dir)/$(app_id)"; rm -rf "$(l10n_lint_dir)"; mkdir -p "$$dir/l10n"; \
+	git ls-files -co --exclude-standard > "$(l10n_lint_dir)/files" || exit 1; \
+	tar -cf - --ignore-failed-read -T "$(l10n_lint_dir)/files" | tar -xf - -C "$$dir" || exit 1; \
+	echo "==> l10n-lint$(if $(strip $(ARGS)), $(ARGS)) (RUNTIME=$(RUNTIME))" >&2; \
+	$(l10n_template) "/app/$(l10n_lint_rel)/$(app_id)" || exit 1; \
+	test -s "$(l10n_lint_pot)" || { echo "ERROR: the translation tool wrote no $(l10n_lint_pot)" >&2; exit 1; }; \
+	$(call ncmake_lib_in,$(lib_node_image),$(l10n_lint_mount)) '$(call ncmake_lib_guard,l10n-lint) L10N_LINT_CMDLINE="$(l10n_lint_cmdline)" node $(ncmake_lib_path)/l10n-lint.mjs $(l10n_lint_args) $(ARGS) $(ncmake_json_arg)'
 
 define help_l10n-init
 make l10n-init [COMMIT=1|PR=1 [BODY=<path>]]    (maintainer)
@@ -447,9 +491,40 @@ checked. It writes nothing into the checkout; the copies stay under
 build/cache/l10n-check. It needs podman or docker.
 endef
 
+define help_l10n-lint
+make l10n-lint [FIX=1] [L10N_RULES=<file>] [JSON=<file>] [ARGS="..."]
+
+Holds the English source strings against the rules of the Nextcloud translation
+team, which reviews them before the first sync and locks the resource until the
+ones it rejects are fixed. The strings are the template the translation tool of
+the bot's image ($(l10n_image)) writes for a copy of the working tree, tracked
+and untracked files alike; each is located in the sources, as the literal of a
+t() or n() call or as an element of appinfo/info.xml.
+
+Per string it names the rules it breaks, the fix where a rule has one, and the
+file and line. A must rule is what the review rejects, a should rule a style
+call. The rules are lib/l10n-rules.json of ncmake, a data file: every rule
+carries its source, its check, its fix and examples, and a rule whose examples
+do not hold stops the run.
+
+  FIX=1                rewrite every string with a fix in the sources; the
+                       l10n/*.json files are left alone, they come from Transifex
+  L10N_RULES=<file>    a rule file of one's own instead of the shipped one
+  JSON=<file>          write the result as JSON to <file> as well
+  ARGS="--self-test"   only test the rule file against its examples
+
+The exit code is 1 while a string breaks a must rule. It writes nothing into the
+checkout without FIX=1; the copy stays under build/cache/l10n-lint. It needs
+podman or docker.
+
+  make l10n-lint FIX=1
+endef
+
 help::
 	@echo ""
 	@echo "$(ch)Translations (developer module):$(c0)"
 	@echo "  $(ct)l10n-init$(c0)            Write l10n/.gitkeep, .l10nignore and .tx/config for the Transifex sync  $(cm)[m]$(c0)"
 	@echo "    $(cd)add $(cv)COMMIT=1$(cd) to commit on a branch, or $(cv)PR=1$(cd) to commit and open the PR$(c0)"
 	@echo "  $(ct)l10n-check$(c0)           Validate the sync setup on every branch the bot syncs, as Nextcloud does"
+	@echo "  $(ct)l10n-lint$(c0)            Check the source strings against the rules of the translation team"
+	@echo "    $(cd)add $(cv)FIX=1$(cd) to rewrite what has a fix in the sources$(c0)"
