@@ -184,6 +184,46 @@ def save_lock(lock):
         f.write('SPDX-License-Identifier: %s\n' % lic)
     # REUSE-IgnoreEnd
 
+# A file the manager writes can carry a license the repository has no text for,
+# and make reuse then fails. The text comes from the SPDX license list, where
+# reuse download gets it too. A repository that does not follow REUSE (neither
+# LICENSES/ nor REUSE.toml) gets no LICENSES/ folder of its own.
+SPDX_TEXT = 'https://raw.githubusercontent.com/spdx/license-list-data/main/text/%s.txt'
+
+def add_licenses(paths):
+    if not (os.path.isdir('LICENSES') or os.path.isfile('REUSE.toml')):
+        return []
+    # REUSE-IgnoreStart
+    tag = re.compile(r'SPDX-License-Identifier:\s*(.+)')
+    # REUSE-IgnoreEnd
+    need = {}
+    for path in paths:
+        with open(path, encoding='utf-8') as f:
+            for line in f:
+                m = tag.search(line)
+                if not m:
+                    continue
+                for lic in re.findall(r'[A-Za-z0-9][A-Za-z0-9.+-]*', m.group(1)):
+                    if lic not in ('AND', 'OR', 'WITH'):
+                        need.setdefault(lic, path)
+    added = []
+    for lic, path in sorted(need.items()):
+        target = os.path.join('LICENSES', lic + '.txt')
+        if os.path.exists(target):
+            continue
+        if lic.startswith('LicenseRef-'):
+            sys.exit('ERROR: %s is under %s, which is not on the SPDX license list - add %s yourself.' % (path, lic, target))
+        try:
+            text = fetch(SPDX_TEXT % lic)
+        except Exception as e:
+            sys.exit('ERROR: could not fetch the license text of %s for %s: %s' % (lic, path, e))
+        os.makedirs('LICENSES', exist_ok=True)
+        with open(target, 'wb') as f:
+            f.write(text)
+        print('added: %s (license of %s)' % (target, path))
+        added.append(target)
+    return added
+
 def file_hash(path):
     with open(path, 'rb') as f:
         return hashlib.sha256(f.read()).hexdigest()
@@ -263,6 +303,7 @@ def cmd_list():
 
 def install(names, lock, cat):
     failed = False
+    written = []
     for name in names:
         if not re.search(r'\.ya?ml$$', name):
             name += '.yml'
@@ -280,6 +321,7 @@ def install(names, lock, cat):
         with open(path, 'w', encoding='utf-8', newline='\n') as f:
             f.write(text)
         lock[name] = {'source': entry['src'], 'sha': entry['sha'], 'hash': file_hash(path)}
+        written.append(path)
         print('%s: %s' % (verb, path))
         # COMMIT=1 / PR=1 describe each workflow in the pull request body.
         desc_file = os.environ.get('wf_desc_file')
@@ -287,6 +329,12 @@ def install(names, lock, cat):
             with open(desc_file, 'a', encoding='utf-8', newline='\n') as f:
                 f.write('%s\t%s\n' % (name, description(entry)))
     save_lock(lock)
+    added = add_licenses(written + [LOCK + '.license'])
+    # The make recipes stage and name the added license texts.
+    lic_file = os.environ.get('wf_license_file')
+    if lic_file:
+        with open(lic_file, 'a', encoding='utf-8', newline='\n') as f:
+            f.writelines(p + '\n' for p in added)
     if failed:
         sys.exit(1)
 
@@ -347,16 +395,18 @@ export wf_install_body
 export wf_update_body
 
 # Finishes the core branch flow for the workflow targets: stages the workflow
-# directory and derives one bullet per actually changed file straight from the
-# staged diff, so install and update share the same shape and a no-op discards
-# cleanly. The pull request text is one paragraph per workflow with its
+# directory and the license texts the run added, and derives one bullet per
+# actually changed workflow and per added license text, so install and update
+# share the same shape and a no-op discards cleanly. The pull request text is one paragraph per workflow with its
 # description, followed by the target's sentence.
 define wf_flow
 wf_branch_finish() {
     branch="$$1"; title="$$2"; body="$$3"; pr="$$4"
     git add "$(wf_dir)"
+    lics=$$(cat "$(cache_dir)/wf_licenses" 2>/dev/null)
+    test -z "$$lics" || git add -- $$lics
     names=$$(git diff --cached --name-only -- "$(wf_dir)" | grep -E '\.ya?ml$$' | sed 's#.*/##')
-    bullets=$$(printf '%s\n' "$$names" | sed 's#^#- #')
+    bullets=$$(printf '%s\n' $$names $$lics | sed 's#^#- #')
     text=$$(for n in $$names; do
         d=$$(awk -F '\t' -v n="$$n" '$$1 == n { print $$2; exit }' "$(cache_dir)/wf_descriptions" 2>/dev/null)
         printf '**%s**%s\n\n' "$$n" "$${d:+: $$d}"
@@ -379,9 +429,10 @@ workflows-install:
 	@test -n "$(W)" || { echo "Usage: make workflows-install W=\"<name>[,<name>...]\"   (names from 'make workflows-list')" >&2; exit 1; }
 	@$(if $(BODY),test -r "$(BODY)" || { echo "BODY=$(BODY) is not a readable file" >&2; exit 1; };) names="$$(echo '$(W)' | tr ',' ' ')"; \
 	commit="$(COMMIT)"; pr="$(PR)"; if [ "$$pr" = "1" ]; then commit=1; fi; \
+	rm -f "$(cache_dir)/wf_licenses"; export wf_license_file="$(cache_dir)/wf_licenses"; \
 	if [ "$$commit" != "1" ]; then \
 		$(wf_run) install $$names || exit 1; \
-		echo "Review and commit: git add $(wf_dir)/"; \
+		echo "Review and commit: git add $(wf_dir)/ $$(cat "$$wf_license_file" 2>/dev/null | tr '\n' ' ')"; \
 	else \
 		eval "$$branch_flow"; eval "$$wf_flow"; \
 		flow_branch_start ncmake/ci/workflows-install || exit 1; \
@@ -392,9 +443,10 @@ workflows-install:
 
 workflows-update:
 	@$(if $(BODY),test -r "$(BODY)" || { echo "BODY=$(BODY) is not a readable file" >&2; exit 1; };) commit="$(COMMIT)"; pr="$(PR)"; if [ "$$pr" = "1" ]; then commit=1; fi; \
+	rm -f "$(cache_dir)/wf_licenses"; export wf_license_file="$(cache_dir)/wf_licenses"; \
 	if [ "$$commit" != "1" ]; then \
 		$(wf_run) update; \
-		echo "Review and commit: git add $(wf_dir)/"; \
+		echo "Review and commit: git add $(wf_dir)/ $$(cat "$$wf_license_file" 2>/dev/null | tr '\n' ' ')"; \
 	else \
 		eval "$$branch_flow"; eval "$$wf_flow"; \
 		flow_branch_start ncmake/ci/workflow-update || exit 1; \
@@ -440,10 +492,14 @@ from the origin HEAD; unknown ones are warned about and left as-is), rewrites th
 org-scoped runner labels so the templates run outside that org (unless your
 origin owner is wf_runner_org, in which case the labels are kept), writes them
 into .github/workflows/ and records source, upstream sha and content hash in
-.ncmake-workflows.json. A .license sidecar next to the lock keeps make reuse
-green without a REUSE.toml edit. Commit the lock and its .license together with
-the workflows. Reinstalling an existing file overwrites it, which also adopts an
-unmanaged file or discards local modifications.
+.ncmake-workflows.json, with a .license sidecar next to it. A license that a
+written file or the sidecar names (wf_lock_license, default CC0-1.0) and that
+LICENSES/ lacks is added from the SPDX license list, so make reuse stays green;
+a LicenseRef-* cannot be fetched and stops the run. A repository without
+LICENSES/ and REUSE.toml gets no license texts. Commit the lock, its .license
+and the added texts together with the workflows. Reinstalling an existing file
+overwrites it, which also adopts an unmanaged file or discards local
+modifications.
 
 Without flags it only writes the files and reminds you to commit. COMMIT=1 runs
 from main or a stable* branch, commits the result on branch
@@ -468,7 +524,8 @@ make workflows-update [COMMIT=1|PR=1 [BODY=<path>]]
 
 Brings every managed workflow to the current upstream state: 'update available'
 and 'missing' files are reinstalled, locally modified files are skipped with a
-note, up-to-date files are left alone. Run it from time to time (or after a
+note, up-to-date files are left alone. A license text an updated file needs is
+added as for workflows-install. Run it from time to time (or after a
 workflows-list showed updates) and commit the result.
 
 Without flags it only writes the files and reminds you to commit - that is what
