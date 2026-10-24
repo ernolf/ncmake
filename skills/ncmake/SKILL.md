@@ -33,7 +33,7 @@ Follow these before proposing any command. They are the mistakes that cost the m
 3. **Do not add build configuration.** No wrapper scripts, no extra make targets, no CI build steps that duplicate `make build`. A genuine deviation belongs in `ncmake.mk` (plain make syntax, one variable per line).
 4. **Never edit the version by hand** in `info.xml`, `composer.json` or `package.json`. `make version` does the bump, the validation and the lockfile sync.
 5. **Never write a CHANGELOG section by hand.** `make changelog` generates it from the conventional commits. A translated `CHANGELOG.<code>.md` is the exception: nothing generates it.
-6. **Maintainer targets change the world.** `version`, `changelog`, `tag`, `stable-branch`, `csr`, `register`, `sign`, `release`, `publish`, `delete-release`, `integrity-enable`, `integrity-sign`, `dist-signed`, `dev-init` and every `COMMIT=1` / `PR=1` / `AMEND=1` variant write commits, tags, branches, pull requests, App Store entries or signatures. Run them only when the user explicitly asks for that step, one step at a time. Read-only targets (`build`, `dist`, `psalm`, `reuse`, `composer`, `npm`, `integrity-check`, `bundle-report`, `build-audit`, `consistency-audit`, `build-verify`, `changelog-lint`, `php-compat`, `list-releases`, `workflows-list`, `help`) are free to run.
+6. **Maintainer targets change the world.** `version`, `changelog`, `tag`, `stable-branch`, `csr`, `register`, `sign`, `release`, `publish`, `delete-release`, `integrity-enable`, `integrity-sign`, `dist-signed`, `l10n-init`, `dev-init` and every `COMMIT=1` / `PR=1` / `AMEND=1` variant write commits, tags, branches, pull requests, App Store entries or signatures. Run them only when the user explicitly asks for that step, one step at a time. Read-only targets (`build`, `dist`, `psalm`, `reuse`, `composer`, `npm`, `integrity-check`, `bundle-report`, `build-audit`, `consistency-audit`, `build-verify`, `changelog-lint`, `php-compat`, `l10n-check`, `list-releases`, `workflows-list`, `help`) are free to run.
 7. **`build/` is generated.** Never edit, never commit, never reference a file in it as source. `make clean` removes it.
 8. **The host needs no toolchain.** Do not tell anyone to install composer, PHP or Node. podman (preferred) or docker is enough. `RUNTIME=bare` exists for hosts that deliberately run the tools directly.
 9. **The checkout directory name is not the app id.** The id comes from `appinfo/info.xml` and the two often differ.
@@ -76,6 +76,8 @@ Follow these before proposing any command. They are the mistakes that cost the m
 | Refresh `composer.lock` | `make composer ARGS=update` |
 | Resolve against the PHP support floor | add `PHP=min` to the composer call |
 | License compliance | `make reuse` |
+| Prepare the Transifex sync | `make l10n-init PR=1` |
+| Whether the Transifex sync setup passes the Nextcloud check | `make l10n-check` |
 | Release tarball | `make build && make dist` |
 | Mark the app as signed (once per app) | `make integrity-enable` |
 | Verify a tree or a tarball against its signature | `make integrity-check DIR=<path>`, `make integrity-check TARBALL=<file>` |
@@ -150,12 +152,12 @@ An older release line, for example 0.7 while `main` is at 0.8, gets its own `sta
 2. Protect the branch on GitHub like `main`.
 3. Changes reach the branch only through PRs against it. With the `backport` workflow installed, a comment of `/backport to stableX.Y` on the PR against `main` opens that PR (see below). By hand: `git switch -c <branch> stableX.Y && git cherry-pick -x <commit>`.
 4. A workflow that `main` gained after the line's tag, for example one whose check the repository rules require, comes over on `stableX.Y` with `make workflows-install W=<name> PR=1`. The workflow updater never reaches a `stable*` branch, so `make workflows-update PR=1` runs there by hand.
-5. For an app with `.tx/config`: the Nextcloud Transifex bot syncs only the branches that `.tx/backport` on `main` lists (one per line, replacing the server's `stable*` names), so `stableX.Y` goes into that file through a PR against `main`, together with a `REUSE.toml` entry for it. `make stable-branch` offers that PR after the branch is pushed: on yes it commits both on `ncmake/l10n/tx-backport-stableX.Y` off `main`, opens the PR through gh and checks `stableX.Y` out again. The bot pushes its commits directly, so it needs write access as a collaborator and a bypass on the rule that protects the branch, as on `main`; `make stable-branch` prints that step.
+5. For an app with `.tx/config`: the Nextcloud Transifex bot syncs only the branches that `.tx/backport` on `main` lists (one per line, replacing the server's `stable*` names), so `stableX.Y` goes into that file through a PR against `main`, together with a `REUSE.toml` entry for it. `make stable-branch` offers that PR after the branch is pushed: on yes it commits both on `ncmake/l10n/tx-backport-stableX.Y` off `main`, opens the PR through gh and checks `stableX.Y` out again. The bot pushes its commits directly, so it needs write access as a collaborator and a bypass on the rule that protects the branch, as on `main`; `make stable-branch` prints that step. Once the PR is merged, `make l10n-check` validates the new branch together with the others the bot syncs.
 6. Release from it exactly as from `main`, with `stableX.Y` in place of `main`: `make version` keeps the major.minor of the line and compares against the tags reachable from the branch, `make changelog` keeps the tags of the other lines out, and `make tag` runs on `stableX.Y` after the merge. When publishing the GitHub release, untick "Set as the latest release".
 
 ## Developer modules
 
-The App Store, CI workflow, bundle analysis, checkout audit, integrity signature, gh and git targets are optional modules that live in the ncmake repository under `mk/`. `make dev-init` fetches them into the same per-machine cache as the core Makefile, from where every ncmake app on that machine sees them. The module list is discovered live through the GitHub contents API, so new modules arrive without an ncmake update. `make dev-clean` removes them again, which restores the plain user target set.
+The App Store, CI workflow, bundle analysis, checkout audit, integrity signature, translations, gh and git targets are optional modules that live in the ncmake repository under `mk/`. `make dev-init` fetches them into the same per-machine cache as the core Makefile, from where every ncmake app on that machine sees them. The module list is discovered live through the GitHub contents API, so new modules arrive without an ncmake update. `make dev-clean` removes them again, which restores the plain user target set.
 
 The anonymous GitHub API allows 60 requests an hour per IP. Exporting `GITHUB_TOKEN` or `GH_TOKEN` raises that to 5000 and is worth doing on a machine that runs `dev-init` or `workflows-list` regularly.
 
@@ -312,6 +314,19 @@ Two things about it are worth knowing:
 * It cherry-picks the pull request's own non-merge commits from `refs/pull/<n>/head` with `--no-commit` onto the target branch and commits the result through `create-pull-request` as one verified, signed-off commit on `ncmake/backport/<n>/<branch>`, with the original messages and their `(cherry picked from commit …)` lines. The title is the original one with `[<branch>]` appended.
 * Reactions on the command: 👀 picked up, 🚀 pull request open, 👎 failed (a comment names the conflicting files or the missing branch and gives the manual commands), 😕 not understood.
 * The merge trigger is `pull_request_target`, which runs the workflow copy of the base branch with secrets, also for a fork. A command that waits on a pull request against `stableX.Y` therefore needs the workflow on that branch too; otherwise write it after the merge.
+
+## Translations module
+
+The repository side of the Nextcloud Transifex sync, in `mk/l10n.mk`. Transifex itself is not touched: no API call and no token, the sync stays with the Nextcloud bot.
+
+| Target | What it does |
+| --- | --- |
+| `make l10n-init [COMMIT=1\|PR=1]` | writes `l10n/.gitkeep`, `.l10nignore` and `.tx/config` where they are missing and covers them in `REUSE.toml`, then prints the steps outside the repository |
+| `make l10n-check` | validates the setup on every branch the bot syncs, as the request check of nextcloud/docker-ci does |
+
+`l10n-init` derives everything from what ncmake reads anyway. `.tx/config` is the template of the translation request with the app id from `info.xml` as the resource and in the `.po` and `.pot` names, which is the name the translation tool writes. `.l10nignore` lists `js/` and `vendor/` where `.gitignore` marks them as build output or they exist, and `vendor-bin/` where it exists. An existing file is left as it is. In `REUSE.toml` the new files join the annotation that already covers one of the sync files, or get one of their own under the copyright and license the file states in its header. The printed steps are, for an app outside the nextcloud organisation, inviting `nextcloud-bot` with write access and exempting it from the ruleset that protects `main`, then opening the translation request at nextcloud/docker-ci.
+
+`l10n-check` fetches origin and checks the branches the bot syncs as origin has them: `main`, `master` and those in `.tx/backport` on `main`, or without that file the default list of `validateSyncSetup.sh`, read from that script at run time. Per branch it runs the translation tool's `prepare-source-validation` and `validateTranslationFiles.sh` over a copy of the branch, in the image the bot runs in (`ghcr.io/nextcloud/continuous-integration-translations`), so the validation is the Nextcloud one. On top of that it reports what makes a sync fail or extract the wrong strings without a message: an `.l10nignore` that misses a build output or third-party tree (a line with a carriage return, trailing blanks or a leading slash never matches, because the tool compares it unchanged), a `.tx/config` whose resource or file names are not the app id, and a `.tx/backport` entry that is not a `stable*` branch on origin. Findings are marked `[!]` and `[i]`; a `[!]` or a failed validation exits non-zero. It writes nothing into the checkout, the copies stay under `build/cache/l10n-check`, and it needs podman or docker.
 
 ## gh module
 
