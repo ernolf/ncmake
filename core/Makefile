@@ -947,13 +947,129 @@ for p in sorted(set(missing)):
 endef
 export screenshot_tool
 
+# The versions a branch may release, for make version and make tag. Every branch
+# owns a range that no other branch reaches into, whatever its stable* name and
+# however the app counts: stable0.4 from v0.4.3 next to main at 0.5, stable0.5 from
+# v0.4.3 next to main at 0.6, stable32 from v32.1.3 next to main at 33. main
+# releases above the newest tag of the repository. A stable* branch releases above
+# the newest tag it contains and below the lowest tag it does not contain that is
+# above that one and of another major.minor. The version of info.xml on main
+# counts as such a tag while it is not tagged yet, so the range ends there before
+# main is tagged. On either, a major.minor that a tag outside the branch already
+# has stays with the branch of that tag: stable0.5 from v0.4.3 releases no 0.4.x
+# while stable0.4 has v0.4.4. Versions are ordered as PHP version_compare orders
+# them. Arguments: version or tag (which target asks), the current branch, and the
+# new version; without it the range is printed as a note.
+define version_range
+import re
+import subprocess
+import sys
+import xml.etree.ElementTree as E
+
+mode, cur = sys.argv[1], sys.argv[2]
+new = sys.argv[3] if len(sys.argv) > 3 else ''
+form = re.compile(r'^([0-9]+)\.([0-9]+)\.([0-9]+)(?:-(alpha|beta|rc)\.([0-9]+))?$$')
+rank = {'alpha': 0, 'beta': 1, 'rc': 2, None: 3}
+stable = cur.startswith('stable')
+
+
+def git(*args):
+    r = subprocess.run(('git',) + args, capture_output=True, encoding='utf-8')
+    return r.stdout if r.returncode == 0 else ''
+
+
+def key(v):
+    x, y, z, pre, n = form.match(v).groups()
+    return int(x), int(y), int(z), rank[pre], int(n or 0)
+
+
+def line(v):
+    return tuple(int(p) for p in v.split('.')[:2])
+
+
+def dotted(l):
+    return '%d.%d' % l
+
+
+def tags(*args):
+    return {t[1:] for t in git('tag', '--list', 'v*', *args).split() if form.match(t[1:])}
+
+
+def places(t):
+    refs = git('for-each-ref', '--format=%(refname:short)', '--contains', 'v' + t, 'refs/heads/main', 'refs/heads/stable*',
+               'refs/remotes/origin/main', 'refs/remotes/origin/stable*').split()
+    return list(dict.fromkeys(r[len('origin/'):] if r.startswith('origin/') else r for r in refs))
+
+
+def owner(t):
+    if others[t] == 'main':
+        return 'main (%s in appinfo/info.xml, not tagged yet)' % t
+    where = places(t)
+    if cur in where:
+        sys.exit('v%s is on origin/%s but not in this checkout: git pull first.' % (t, cur))
+    return 'v%s on %s' % (t, ', '.join(where) or 'another branch')
+
+
+every = tags()
+reach = tags('--merged', 'HEAD')
+others = {t: 'tag' for t in every - reach}
+if stable:
+    for ref in ('main', 'origin/main'):
+        try:
+            v = E.fromstring(git('show', ref + ':appinfo/info.xml')).findtext('version', '').strip()
+        except E.ParseError:
+            continue
+        if form.match(v) and v not in every:
+            others[v] = 'main'
+newest = {}
+for t in others:
+    if line(t) not in newest or key(t) > key(newest[line(t)]):
+        newest[line(t)] = t
+if stable:
+    low = max(reach, key=key, default=None)
+    above = [t for t in others if low is None or (key(t) > key(low) and line(t) != line(low))]
+    high = min(above, key=key, default=None)
+else:
+    low = max(every, key=key, default=None)
+    high = None
+
+if not new:
+    if stable:
+        lines = sorted(l for l in newest if low is None or (l >= line(low) and (high is None or l < line(high))))
+        note = '%s releases versions above %s' % (cur, low or '0.0.0')
+        note += ', below %s (%s)' % (high, owner(high)) if high else ''
+        note += ''.join(', not %s.x (%s)' % (dotted(l), owner(newest[l])) for l in lines)
+        print('==> ' + note + '.')
+        if not high:
+            print('    Nothing bounds it from above yet: the next version on main has to be above the one released here.')
+    elif low and low not in reach:
+        print('==> main releases versions above %s, the newest tag of the repository (%s).' % (low, owner(low)))
+    sys.exit(0)
+
+what = ('Version %s' if mode == 'version' else 'The info.xml version %s') % new
+if not form.match(new):
+    sys.exit('%s is not a X.Y.Z or X.Y.Z-alpha.N/-beta.N/-rc.N version.' % what)
+if low and key(new) <= key(low):
+    if low in reach:
+        msg = '%s must be greater than the latest tag %s on %s' % (what, low, cur)
+    else:
+        msg = '%s must be greater than %s, the newest tag of the repository: %s' % (what, low, owner(low))
+    sys.exit(msg + (" - run 'make version' first" if mode == 'tag' else '.'))
+if line(new) in newest:
+    sys.exit('%s.x belongs to %s, not to %s: pick a version of another major.minor.' % (dotted(line(new)), owner(newest[line(new)]), cur))
+if high and key(new) >= key(high):
+    sys.exit('%s must stay below %s on %s: %s belongs to a newer line.' % (what, high, cur, owner(high)))
+endef
+export version_range
+
 # Open the next release (maintainer only - needs repo write access). Runs from main or from a
 # stable* maintenance branch, explains itself, and warns when a manifest description drifts
 # from the info.xml summary (the single source of truth - absent description fields are fine
 # and never warned about).
-# Prompts + validates the version (empty = abort): X.Y.Z or a pre-release of it, greater than
-# the newest tag reachable from HEAD, so each release line counts only its own tags; on
-# stable* also the same major.minor; and no existing tag anywhere. Then branches off into
+# Prompts + validates the version (empty = abort): X.Y.Z or a pre-release of it, no existing
+# tag anywhere, and inside the range the branch owns (version_range, printed before the
+# prompt): on main above every tag, on stable* above the newest tag reachable from HEAD and
+# below the next tag of a newer line. Then branches off into
 # ncmake/release/X.Y.Z (branches created by ncmake carry the ncmake/ prefix), records the
 # branch it started from as ncmake-base in the git config of the release branch, and commits
 # the bump there: info.xml/composer.json/package.json plus the re-synced lockfiles (via
@@ -983,13 +1099,12 @@ version: check-app
 	fi; \
 	latest=$$($(git_tags) --list 'v*' --merged HEAD --sort=-v:refname | head -1 | sed 's/^v//'); \
 	latest=$${latest:-0.0.0}; \
+	python3 -c "$$version_range" version "$$cur" || exit 1; \
 	printf 'New version (latest tag on %s: %s, empty = abort): ' "$$cur" "$$latest"; read new; \
 	[ -z "$$new" ] && { echo "Aborted."; exit 0; }; \
 	echo "$$new" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-$(prerelease_re))?$$' || { echo "Not a X.Y.Z or X.Y.Z-alpha.N/-beta.N/-rc.N version: $$new" >&2; exit 1; }; \
 	git rev-parse --verify --quiet "refs/tags/v$$new" >/dev/null && { echo "Tag v$$new already exists - pick another version." >&2; exit 1; }; \
-	high=$$(printf '%s\n%s\n' "$$latest" "$$new" | $(version_sort) | tail -1); \
-	if [ "$$new" = "$$latest" ] || [ "$$high" != "$$new" ]; then echo "Version $$new must be greater than the latest tag $$latest on $$cur" >&2; exit 1; fi; \
-	case "$$cur" in stable*) line=$$(echo "$$latest" | cut -d. -f1,2); [ "$$(echo "$$new" | cut -d. -f1,2)" = "$$line" ] || { echo "On $$cur the version must stay at $$line.x - a new minor or major belongs on main." >&2; exit 1; };; esac; \
+	python3 -c "$$version_range" version "$$cur" "$$new" || exit 1; \
 	branch="ncmake/release/$$new"; \
 	git rev-parse --verify --quiet "refs/heads/$$branch" >/dev/null && { echo "Branch $$branch already exists - delete it or pick another version." >&2; exit 1; }; \
 	git checkout -b "$$branch" || exit 1; \
@@ -1132,7 +1247,9 @@ changelog: check-app
 	fi
 
 # Freeze the current HEAD as a signed release tag. Everything that belongs in the
-# release must already be committed (CHANGELOG and all content). Refuses to re-tag.
+# release must already be committed (CHANGELOG and all content). Refuses to re-tag,
+# and refuses a version outside the range of the branch (version_range): another branch
+# may have tagged into it since make version.
 # The tag message: the release subject, plus whatever tag_hook appends below it.
 # It is written to the build cache because the hook runs between the confirmation
 # and the tag, and has to be able to add to it.
@@ -1155,10 +1272,7 @@ tag_check ?= re=$$(printf '%s' '$(version)' | sed 's/[.]/\\./g'); \
 tag: check-app
 	@ver="$(version)"; \
 	git rev-parse --verify --quiet "refs/tags/v$$ver" >/dev/null && { echo "Tag v$$ver already exists - run 'make version' first" >&2; exit 1; }; \
-	latest=$$($(git_tags) --list 'v*' --merged HEAD --sort=-v:refname | head -1 | sed 's/^v//'); \
-	latest=$${latest:-0.0.0}; \
-	high=$$(printf '%s\n%s\n' "$$latest" "$$ver" | $(version_sort) | tail -1); \
-	if [ "$$ver" = "$$latest" ] || [ "$$high" != "$$ver" ]; then echo "info.xml version $$ver is not greater than the latest tag $$latest on this branch - run 'make version' first" >&2; exit 1; fi; \
+	python3 -c "$$version_range" tag "$$(git rev-parse --abbrev-ref HEAD)" "$$ver" || exit 1; \
 	if [ -n "$$(git status --porcelain)" ]; then \
 		echo "ERROR: the working tree is not clean, untracked files included - the release is packed from the checkout, so anything only this machine has would reach the tarball and nothing else." >&2; \
 		git status --short >&2; exit 1; \
@@ -1192,21 +1306,25 @@ tag: check-app
 		echo "  git tag -s v$$ver -m \"Release $$ver\" && git push origin v$$ver"; \
 	fi
 
-# Open a stable* maintenance branch for an older release line (maintainer only). Runs on main
-# with no uncommitted changes. Lists the release lines that exist as tags, prompts for one
-# (empty = abort) and validates it: it has a tag, it is older than the current line of main,
-# and stableX.Y exists neither locally nor on origin. The branch starts at the newest tag of
-# the line, never at main. Before it is created, the Nextcloud and PHP ranges at that tag are
-# shown next to those of main, with a note when the line still reaches into the Nextcloud
-# versions main covers. After confirmation it creates and pushes the branch and prints what
-# comes next. For an app with .tx/config that includes the Transifex sync, which reaches app
-# release lines only through .tx/backport on main: after a prompt of its own the new branch
-# goes into that file, and .tx/backport into the REUSE.toml annotation of .tx/config, through
-# the branch flow and a pull request against main; the new branch is checked out again
-# afterwards. Its name is kept in stable because the flow functions overwrite branch and
-# base. Stale remote branches are pruned in a fetch
-# of their own: --prune together with --tags would also delete local tags that origin does not
-# have.
+# Open a stable* maintenance branch from an older release line (maintainer only). Runs on main
+# with no uncommitted changes. Lists the release lines that exist as tags, each with the
+# stable* branches on origin whose newest tag is in it, prompts for one (empty = abort) and
+# validates it: it has a tag and it is older than the current line of main, which is the line
+# of the info.xml version on main once that is above the newest tag. Then it prompts for the
+# branch name, stableX.Y of the line by default; any name with the stable prefix that exists
+# neither locally nor on origin is accepted, since the other targets recognise a maintenance
+# branch by that prefix alone and version_range keeps the versions of the branches apart:
+# stable0.5 from v0.4.3 for a new minor next to main, stable32 for one Nextcloud major. The
+# branch starts at the newest tag of the line, never at main. Before it is created, the
+# Nextcloud and PHP ranges at that tag are shown next to those of main, with a note when the
+# line still reaches into the Nextcloud versions main covers. After confirmation it creates and
+# pushes the branch and prints what comes next. For an app with .tx/config that includes the
+# Transifex sync, which reaches app release lines only through .tx/backport on main: after a
+# prompt of its own the new branch goes into that file, and .tx/backport into the REUSE.toml
+# annotation of .tx/config, through the branch flow and a pull request against main; the new
+# branch is checked out again afterwards. Its name is kept in stable because the flow functions
+# overwrite branch and base. Stale remote branches are pruned in a fetch of their own: --prune
+# together with --tags would also delete local tags that origin does not have.
 stable-branch: check-app
 	@cur=$$(git rev-parse --abbrev-ref HEAD 2>/dev/null); \
 	[ "$$cur" = main ] || { echo "make stable-branch must run on 'main' (you are on '$$cur')." >&2; exit 1; }; \
@@ -1219,17 +1337,24 @@ stable-branch: check-app
 	{ git fetch --quiet --prune origin && git fetch --quiet --tags origin; } || { echo "ERROR: git fetch from origin failed (network?)" >&2; exit 1; }; \
 	current=$$($(git_tags) --list 'v*' --merged HEAD --sort=-v:refname | head -1 | sed 's/^v//'); \
 	[ -n "$$current" ] || { echo "No release tag on main yet - there is no older line to maintain." >&2; exit 1; }; \
-	cline=$$(echo "$$current" | cut -d. -f1,2); \
+	top=$$(printf '%s\n%s\n' "$$current" "$(version)" | $(version_sort) | tail -1); \
+	cline=$$(echo "$$top" | cut -d. -f1,2); \
+	[ "$$top" = "$$current" ] || echo "main is at $$top in appinfo/info.xml, not tagged yet: its line is $$cline."; \
+	held=$$(for b in $$(git for-each-ref --format='%(refname:lstrip=3)' 'refs/remotes/origin/stable*'); do \
+		t=$$($(git_tags) --list 'v*' --merged "origin/$$b" --sort=-v:refname | head -1 | sed 's/^v//'); \
+		[ -z "$$t" ] || echo "$$(echo "$$t" | cut -d. -f1,2) $$b"; \
+	done); \
 	newest=$$(git tag --list 'v[0-9]*' --sort=-v:refname | sed 's/^v//' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$$' | awk -F. '!seen[$$1 "." $$2]++'); \
 	echo "Release lines (newest tag):"; \
 	for t in $$newest; do \
 		l=$${t%.*}; note=""; \
 		[ "$$l" = "$$cline" ] && note="current line on main"; \
-		git rev-parse --verify --quiet "refs/remotes/origin/stable$$l" >/dev/null && note="stable$$l exists"; \
+		on=$$(echo "$$held" | awk -v l="$$l" '$$1 == l { printf "%s%s", sep, $$2; sep = ", " }'); \
+		[ -z "$$on" ] || note="$${note:+$$note, }newest tag of $$on"; \
 		printf '  %-8s v%-10s %s\n' "$$l" "$$t" "$$note"; \
 	done; \
 	suggest=$$(for t in $$newest; do echo "$${t%.*}"; done | grep -vxF "$$cline" | head -1); \
-	printf 'Release line to maintain (X.Y%s, empty = abort): ' "$${suggest:+, e.g. $$suggest}"; read line; \
+	printf 'Release line to branch from (X.Y%s, empty = abort): ' "$${suggest:+, e.g. $$suggest}"; read line; \
 	[ -z "$$line" ] && { echo "Aborted."; exit 0; }; \
 	echo "$$line" | grep -qE '^[0-9]+\.[0-9]+$$' || { echo "Not a X.Y release line: $$line" >&2; exit 1; }; \
 	base=$$(git tag --list "v$$line.*" --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | head -1); \
@@ -1237,7 +1362,10 @@ stable-branch: check-app
 	[ "$$line" = "$$cline" ] && { echo "$$line is the current line on main and is released from there." >&2; exit 1; }; \
 	older=$$(printf '%s\n%s\n' "$$line" "$$cline" | sort -V | head -1); \
 	[ "$$older" = "$$line" ] || { echo "$$line is newer than the current line $$cline on main." >&2; exit 1; }; \
-	branch="stable$$line"; \
+	printf 'Branch name (stable*, empty = stable%s): ' "$$line"; read branch; \
+	branch=$${branch:-stable$$line}; \
+	case "$$branch" in stable?*) ;; *) echo "$$branch does not start with stable: every target recognises a maintenance branch by that prefix." >&2; exit 1;; esac; \
+	git check-ref-format --branch "$$branch" >/dev/null 2>&1 || { echo "Not a valid branch name: $$branch" >&2; exit 1; }; \
 	git rev-parse --verify --quiet "refs/heads/$$branch" >/dev/null && { echo "Branch $$branch already exists locally: git switch $$branch" >&2; exit 1; }; \
 	git ls-remote --exit-code --heads origin "$$branch" >/dev/null 2>&1; rc=$$?; \
 	[ "$$rc" = 0 ] && { echo "Branch $$branch already exists on origin: git switch $$branch" >&2; exit 1; }; \
@@ -1251,7 +1379,7 @@ stable-branch: check-app
 		cap=$$(( $${mnmin%%.*} - 1 )); \
 		case "$$lnmax" in [0-9]*) over=$$([ "$${lnmax%%.*}" -gt "$$cap" ] && echo 1);; *) over=1;; esac; \
 		if [ -n "$$over" ]; then \
-			echo "Note: main requires Nextcloud $${mnmin%%.*}, so $$line usually ends at $$cap. Set max-version=\"$$cap\""; \
+			echo "Note: main requires Nextcloud $${mnmin%%.*}, so $$branch usually ends at $$cap. Set max-version=\"$$cap\""; \
 			echo "      on <nextcloud> in appinfo/info.xml with the first PR against $$branch."; \
 		fi;; \
 	esac; \
@@ -1300,8 +1428,10 @@ stable-branch: check-app
 	echo "    - Changes reach $$branch through PRs against it. A backport:"; \
 	echo "        git switch -c <branch> $$branch && git cherry-pick -x <commit>"; \
 	echo "      -x records the original commit in the message."; \
-	echo "    - Release from it: on $$branch, make version, make changelog, make tag. When you"; \
-	echo "      publish the GitHub release, untick 'Set as the latest release'."; \
+	echo "    - Release from it: on $$branch, make version, make changelog, make tag. Its"; \
+	echo "      versions lie above $$base and below the next tag of a newer line, and make"; \
+	echo "      version shows that range. When you publish the GitHub release, untick"; \
+	echo "      'Set as the latest release'."; \
 	echo "    - The workflows on $$branch stay as they were at $$base; comment and scheduled"; \
 	echo "      events run the workflows of the default branch. A workflow main gained later,"; \
 	echo "      for example one whose check your rules require, comes over on $$branch with:"; \
@@ -1867,10 +1997,17 @@ define help_version
 make version    (maintainer, on main or a stable* branch)
 
 Prompts for the new version and validates it: X.Y.Z or a pre-release
-X.Y.Z-alpha.N, -beta.N or -rc.N, greater than the newest tag reachable from the
-current branch (ordered as PHP version_compare orders them, so 1.2.0-rc.1 comes
-before 1.2.0), on a stable* branch also the same major.minor, and no tag of that
-name anywhere. Branches off into ncmake/release/X.Y.Z and commits the bump there (info.xml,
+X.Y.Z-alpha.N, -beta.N or -rc.N, no tag of that name anywhere, and inside the
+range the branch owns, which it prints before the prompt. Versions are ordered
+as PHP version_compare orders them, so 1.2.0-rc.1 comes before 1.2.0. On main
+the version is greater than every tag of the repository. On a stable* branch it
+is greater than the newest tag reachable from the branch and lower than the
+lowest tag above that one which the branch does not contain and which has
+another major.minor, or than the info.xml version on main while that is not
+tagged yet. So stable0.4 from v0.4.3 releases 0.4.x below main's 0.5.0, and
+stable0.5 from v0.4.3 releases 0.5.x below main's 0.6.0. A major.minor that a
+tag outside the branch has stays with that branch, on main as on stable*.
+Branches off into ncmake/release/X.Y.Z and commits the bump there (info.xml,
 composer.json/package.json and the re-synced lockfiles). Screenshot URLs in
 info.xml that point into the app's own repository at a release tag, on
 raw.githubusercontent.com or cdn.jsdelivr.net, move to the new tag in the same
@@ -1921,7 +2058,8 @@ endef
 define help_tag
 make tag    (maintainer, on main or the stable* branch after the merge)
 
-Refuses to re-tag, refuses a working tree that is not clean (untracked files
+Refuses to re-tag, refuses a version outside the range the branch owns (see
+make help-version), refuses a working tree that is not clean (untracked files
 included - the release is packed from the checkout), checks the changelog, then
 creates and pushes the signed vX.Y.Z tag after confirmation. Publishing the release triggers the release workflow, which
 attaches the tarball asset. A release from a stable* branch must not be marked
@@ -1943,22 +2081,27 @@ endef
 define help_stable-branch
 make stable-branch    (maintainer, on main)
 
-Opens a stable* maintenance branch for an older release line, e.g. stable0.7
-while main is at 0.8. Lists the release lines from the tags and prompts for one
-(X.Y). Refuses a line without a tag, the current line of main, a newer one, and
-a stableX.Y that exists locally or on origin. The branch starts at the newest
-tag of the line, not at main. Before it is created, the Nextcloud and PHP ranges
-at that tag are shown next to those of main, with a note when the line still
-reaches into the Nextcloud versions main covers. After confirmation it creates
-and pushes the branch and prints the next steps: protection, backports through
-PRs against the branch, releases with make version, make changelog, make tag,
-and workflows main gained later (make workflows-install on the branch).
+Opens a stable* maintenance branch from an older release line, e.g. stable0.7
+while main is at 0.8. Lists the release lines from the tags, with the stable*
+branches whose newest tag is in each, and prompts for one (X.Y). Refuses a line
+without a tag, the current line of main, and a newer one. Then it prompts for
+the branch name, stableX.Y by default. Any name with the stable prefix fits:
+stable0.8 from v0.7.3 for a new minor next to main at 0.9, or stable32 for the
+servers of Nextcloud 32. make version keeps the versions of the branches apart
+(see make help-version). A name that exists locally or on origin is refused. The
+branch starts at the newest tag of the line, not at main. Before it is created,
+the Nextcloud and PHP ranges at that tag are shown next to those of main, with a
+note when the line still reaches into the Nextcloud versions main covers. After
+confirmation it creates and pushes the branch and prints the next steps:
+protection, backports through PRs against the branch, releases with make
+version, make changelog, make tag, and workflows main gained later (make
+workflows-install on the branch).
 
 For an app with .tx/config it then offers the Transifex sync: the Nextcloud
 bot syncs only the branches .tx/backport on main lists (one per line, replacing
 the server's stable* names). On yes it adds the branch to that file, and
 .tx/backport to the REUSE.toml annotation of .tx/config, on the branch
-ncmake/l10n/tx-backport-stableX.Y off main, opens the pull request against
+ncmake/l10n/tx-backport-<branch> off main, opens the pull request against
 main through gh and checks the new branch out again. The bot also needs write
 access plus a bypass on the rule that protects the branch, because it pushes
 its commits directly; the next steps name both.
