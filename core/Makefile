@@ -899,6 +899,49 @@ prerelease_re = (alpha|beta|rc)\.[0-9]+
 git_tags     = git -c versionsort.suffix=-alpha -c versionsort.suffix=-beta -c versionsort.suffix=-rc tag
 version_sort = sed 's/-/~/' | sort -V | sed 's/~/-/'
 
+# Move the tag of the screenshot URLs in appinfo/info.xml to the new version, for
+# make version. The App Store caches each screenshot for good under its source URL,
+# so only a URL pinned to a release tag shows the image of that release. A URL is
+# moved when it points into the origin repository at a release tag, on
+# raw.githubusercontent.com or cdn.jsdelivr.net; one into another repository or on
+# a branch stays as it is. Only the <screenshot> elements are touched, their
+# small-thumbnail attribute included, and the rest of the file is kept byte for
+# byte. The new tag is cut from the working tree, so a path that is not there is
+# reported. Arguments: owner/repo of origin, new version.
+define screenshot_tool
+import os
+import re
+import sys
+
+slug, new = sys.argv[1], sys.argv[2]
+path = 'appinfo/info.xml'
+tag = r'v[0-9]+\.[0-9]+\.[0-9]+(?:-(?:alpha|beta|rc)\.[0-9]+)?'
+own = re.escape(slug)
+url = re.compile(r'(https://raw\.githubusercontent\.com/' + own + r'/|https://cdn\.jsdelivr\.net/gh/' + own + r'@)'
+                 + tag + r'/([^"<>\s?#]+)', re.IGNORECASE)
+moved, missing = 0, []
+
+
+def move(m):
+    global moved
+    moved += 1
+    if not os.path.isfile(m.group(2)):
+        missing.append(m.group(2))
+    return m.group(1) + 'v' + new + '/' + m.group(2)
+
+
+with open(path, encoding='utf-8', newline='') as f:
+    text = f.read()
+text = re.sub(r'<screenshot\b.*?</screenshot>', lambda b: url.sub(move, b.group(0)), text, flags=re.DOTALL)
+if moved:
+    with open(path, 'w', encoding='utf-8', newline='') as f:
+        f.write(text)
+    print('==> Moved %d screenshot URL%s to the tag v%s.' % (moved, '' if moved == 1 else 's', new))
+for p in sorted(set(missing)):
+    print('WARNING: screenshot %s is not in the working tree, so the tag v%s will not have it.' % (p, new))
+endef
+export screenshot_tool
+
 # Open the next release (maintainer only - needs repo write access). Runs from main or from a
 # stable* maintenance branch, explains itself, and warns when a manifest description drifts
 # from the info.xml summary (the single source of truth - absent description fields are fine
@@ -909,7 +952,8 @@ version_sort = sed 's/-/~/' | sort -V | sed 's/~/-/'
 # ncmake/release/X.Y.Z (branches created by ncmake carry the ncmake/ prefix), records the
 # branch it started from as ncmake-base in the git config of the release branch, and commits
 # the bump there: info.xml/composer.json/package.json plus the re-synced lockfiles (via
-# RUNTIME). The bump reaches the base branch through that branch and a PR. Fill the CHANGELOG
+# RUNTIME), and the screenshot URLs in info.xml that are pinned to a release tag of the
+# app's own repository move to the new tag (screenshot_tool). The bump reaches the base branch through that branch and a PR. Fill the CHANGELOG
 # on the branch; after the PR is merged, run 'make tag' on the base branch.
 # What the base branch requires is stated only as far as GitHub confirms it: a branch that is
 # not on origin yet, or a ruleset with a pull_request rule. The rules endpoint lists rulesets
@@ -946,6 +990,7 @@ version: check-app
 	git checkout -b "$$branch" || exit 1; \
 	git config "branch.$$branch.ncmake-base" "$$cur"; \
 	sed -i -E "s|<version>[0-9A-Za-z.+-]+</version>|<version>$$new</version>|" appinfo/info.xml; \
+	if [ -n "$(gh_slug)" ]; then python3 -c "$$screenshot_tool" "$(gh_slug)" "$$new" || exit 1; fi; \
 	[ -f composer.json ] && sed -i -E "s|(\"version\"[[:space:]]*:[[:space:]]*)\"[0-9A-Za-z.+-]+\"|\1\"$$new\"|" composer.json || true; \
 	[ -f package.json ] && sed -i -E "s|(\"version\"[[:space:]]*:[[:space:]]*)\"[0-9A-Za-z.+-]+\"|\1\"$$new\"|" package.json || true; \
 	if [ -f composer.json ] && [ -f composer.lock ]; then echo "==> Syncing composer.lock ($(RUNTIME))..."; $(php_run) 'composer update --lock' || { echo "composer.lock sync failed" >&2; exit 1; }; fi; \
@@ -1782,9 +1827,13 @@ X.Y.Z-alpha.N, -beta.N or -rc.N, greater than the newest tag reachable from the
 current branch (ordered as PHP version_compare orders them, so 1.2.0-rc.1 comes
 before 1.2.0), on a stable* branch also the same major.minor, and no tag of that
 name anywhere. Branches off into ncmake/release/X.Y.Z and commits the bump there (info.xml,
-composer.json/package.json and the re-synced lockfiles). Then run make changelog,
-push the branch and open a PR against the branch you started from. RUNTIME=
-selects the container for the lockfile sync.
+composer.json/package.json and the re-synced lockfiles). Screenshot URLs in
+info.xml that point into the app's own repository at a release tag, on
+raw.githubusercontent.com or cdn.jsdelivr.net, move to the new tag in the same
+commit, since the App Store caches a screenshot for good under its URL; a path
+that is not in the working tree is reported. Then run make changelog, push the
+branch and open a PR against the branch you started from. RUNTIME= selects the
+container for the lockfile sync.
 endef
 
 define help_changelog
