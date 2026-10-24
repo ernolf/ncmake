@@ -22,9 +22,14 @@ ncmake_ref      = $(or $(NCMAKE_REF),main)
 ncmake_raw      = https://raw.githubusercontent.com/ernolf/ncmake/$(ncmake_ref)
 ncmake_url      = $(ncmake_raw)/core/Makefile
 NCMAKE_TTL_MIN ?= 1440
+# For a fetch whose failure costs something: after a timeout or an HTTP 408, 429,
+# 500, 502, 503 or 504 answer, curl tries three more times with a growing pause.
+# A 404 for a missing ref, a failed name lookup or a refused connection fails at
+# once, so an offline host does not wait.
+curl_retry      = --retry 3
 ifneq ($(NCMAKE),)
   ifneq ($(shell find "$(NCMAKE)" -mmin +$(NCMAKE_TTL_MIN) 2>/dev/null),)
-    $(shell curl -fsSL --etag-compare "$(NCMAKE).etag" --etag-save "$(NCMAKE).etag" "$(ncmake_url)" -o "$(NCMAKE).new" 2>/dev/null; \
+    $(shell curl -fsSL $(curl_retry) --etag-compare "$(NCMAKE).etag" --etag-save "$(NCMAKE).etag" "$(ncmake_url)" -o "$(NCMAKE).new" 2>/dev/null; \
       if [ -s "$(NCMAKE).new" ]; then mv "$(NCMAKE).new" "$(NCMAKE)"; else rm -f "$(NCMAKE).new"; fi; touch "$(NCMAKE)")
   endif
 endif
@@ -41,7 +46,7 @@ ifneq ($(ncmake_modules),)
   ifneq ($(shell find $(ncmake_modules) -mmin +$(NCMAKE_TTL_MIN) 2>/dev/null),)
     $(shell for f in $(ncmake_modules); do \
         m=$$(basename "$$f"); m=$${m%-$(ncmake_ref)}; \
-        curl -fsSL --etag-compare "$$f.etag" --etag-save "$$f.etag" "$(ncmake_raw)/mk/$$m" -o "$$f.new" 2>/dev/null; \
+        curl -fsSL $(curl_retry) --etag-compare "$$f.etag" --etag-save "$$f.etag" "$(ncmake_raw)/mk/$$m" -o "$$f.new" 2>/dev/null; \
         if [ -s "$$f.new" ]; then mv "$$f.new" "$$f"; else rm -f "$$f.new"; fi; touch "$$f"; done)
   endif
 endif
@@ -367,9 +372,9 @@ image_prep = sh -c ' \
 	case "$$checked" in ""|*[!0-9]*) checked=0 ;; esac; \
 	sources() { \
 		if [ -n "$$url" ]; then mkdir -p "$${list%/*}"; \
-			if [ ! -s "$$list" ]; then curl -fsSL "$$url" -o "$$list" 2>/dev/null; [ -s "$$list" ] || rm -f "$$list"; \
+			if [ ! -s "$$list" ]; then curl -fsSL $(curl_retry) "$$url" -o "$$list" 2>/dev/null; [ -s "$$list" ] || rm -f "$$list"; \
 			elif [ -n "$$(find "$$list" -mmin +$(NCMAKE_TTL_MIN) 2>/dev/null)" ]; then \
-				curl -fsSL --etag-compare "$$list.etag" --etag-save "$$list.etag" "$$url" -o "$$list.new" 2>/dev/null; \
+				curl -fsSL $(curl_retry) --etag-compare "$$list.etag" --etag-save "$$list.etag" "$$url" -o "$$list.new" 2>/dev/null; \
 				if [ -s "$$list.new" ]; then mv "$$list.new" "$$list"; else rm -f "$$list.new"; fi; touch "$$list"; \
 			fi; \
 		fi; \
@@ -488,7 +493,7 @@ container_run  = $(call container_prep,$(1)) && $(container) $(2) $(1)
 # the published image, is the default of its ARG extensions.
 php_containerfile_url    = https://raw.githubusercontent.com/ernolf/ncmake-images/main/php/Containerfile
 php_containerfile        = $(ncmake_cache)/php-Containerfile
-php_containerfile_fetch  = mkdir -p "$(ncmake_cache)" && if [ ! -s "$(php_containerfile)" ]; then curl -fsSL "$(php_containerfile_url)" -o "$(php_containerfile)" 2>/dev/null; [ -s "$(php_containerfile)" ] || rm -f "$(php_containerfile)"; elif [ -n "$$(find "$(php_containerfile)" -mmin +$(NCMAKE_TTL_MIN) 2>/dev/null)" ]; then curl -fsSL --etag-compare "$(php_containerfile).etag" --etag-save "$(php_containerfile).etag" "$(php_containerfile_url)" -o "$(php_containerfile).new" 2>/dev/null; if [ -s "$(php_containerfile).new" ]; then mv "$(php_containerfile).new" "$(php_containerfile)"; else rm -f "$(php_containerfile).new"; fi; touch "$(php_containerfile)"; fi
+php_containerfile_fetch  = mkdir -p "$(ncmake_cache)" && if [ ! -s "$(php_containerfile)" ]; then curl -fsSL $(curl_retry) "$(php_containerfile_url)" -o "$(php_containerfile)" 2>/dev/null; [ -s "$(php_containerfile)" ] || rm -f "$(php_containerfile)"; elif [ -n "$$(find "$(php_containerfile)" -mmin +$(NCMAKE_TTL_MIN) 2>/dev/null)" ]; then curl -fsSL $(curl_retry) --etag-compare "$(php_containerfile).etag" --etag-save "$(php_containerfile).etag" "$(php_containerfile_url)" -o "$(php_containerfile).new" 2>/dev/null; if [ -s "$(php_containerfile).new" ]; then mv "$(php_containerfile).new" "$(php_containerfile)"; else rm -f "$(php_containerfile).new"; fi; touch "$(php_containerfile)"; fi
 php_containerfile_need   = { $(php_containerfile_fetch); test -s "$(php_containerfile)" || { echo "ERROR: could not fetch $(php_containerfile_url) - network?" >&2; exit 1; }; }
 php_extensions_published = $(shell $(php_containerfile_fetch); sed -n 's/^ARG extensions="\(.*\)"$$/\1/p' "$(php_containerfile)" 2>/dev/null)
 php_extensions ?= $(php_extensions_published)
@@ -537,7 +542,7 @@ node_fetch = sh -c ' \
 		*) echo "ERROR: nodejs.org has no Linux build of Node.js for $$(uname -m)" >&2; exit 1 ;; esac; \
 	mkdir -p "$$dir" || exit 1; idx=$$dir/index.json; \
 	if [ ! -s "$$idx" ] || [ -n "$$(find "$$idx" -mmin +$(IMAGE_CHECK_MIN) 2>/dev/null)" ]; then \
-		t=$$(mktemp "$$idx.XXXXXX") && { curl -fsSL "$$url/index.json" -o "$$t" 2>/dev/null && [ -s "$$t" ] && mv -f "$$t" "$$idx" || rm -f "$$t"; }; \
+		t=$$(mktemp "$$idx.XXXXXX") && { curl -fsSL $(curl_retry) "$$url/index.json" -o "$$t" 2>/dev/null && [ -s "$$t" ] && mv -f "$$t" "$$idx" || rm -f "$$t"; }; \
 	fi; \
 	v=$$(grep "^{\"version\":\"v[0-9]" "$$idx" 2>/dev/null | grep "\"linux-$$arch\"" \
 		| if [ "$$line" = lts ]; then grep -v "\"lts\":false"; else grep "^{\"version\":\"v$$line\."; fi \
@@ -545,7 +550,7 @@ node_fetch = sh -c ' \
 	rel=$$dir/$$v-linux-$$arch; \
 	if [ -n "$$v" ] && [ ! -x "$$rel/bin/node" ] && t=$$(mktemp -d "$$dir/.fetch.XXXXXX"); then \
 		echo "==> Fetching Node.js $$v for linux-$$arch from nodejs.org" >&2; f=node-$$v-linux-$$arch.tar.gz; \
-		if curl -fsSL "$$url/$$v/$$f" -o "$$t/$$f" && curl -fsSL "$$url/$$v/SHASUMS256.txt" -o "$$t/SHASUMS256.txt" \
+		if curl -fsSL $(curl_retry) "$$url/$$v/$$f" -o "$$t/$$f" && curl -fsSL $(curl_retry) "$$url/$$v/SHASUMS256.txt" -o "$$t/SHASUMS256.txt" \
 			&& ( cd "$$t" && grep " $$f\$$" SHASUMS256.txt | sha256sum -c - >/dev/null ) \
 			&& mkdir "$$t/node" && tar -xzf "$$t/$$f" -C "$$t/node" --strip-components=1 --no-same-owner; then \
 			find "$$t/node/include/node/openssl/archs" -mindepth 1 -maxdepth 1 ! -name "$$ossl" -exec rm -rf {} + 2>/dev/null; \
@@ -1628,7 +1633,7 @@ image-setup:
 # Fetch the newest ncmake Makefile over this one (the per-machine cache in stub
 # mode, the committed copy otherwise).
 self-update:
-	@curl -fsSL "$(ncmake_url)" -o "$(this_ncmake)" && rm -f "$(this_ncmake).etag" && echo "ncmake updated: $(this_ncmake)"
+	@curl -fsSL $(curl_retry) "$(ncmake_url)" -o "$(this_ncmake)" && rm -f "$(this_ncmake).etag" && echo "ncmake updated: $(this_ncmake)"
 
 # Install the skill file that tells an AI coding assistant how ncmake works, or bring an
 # existing copy up to date. It comes from the same NCMAKE_REF as this Makefile, so a
@@ -1637,7 +1642,7 @@ self-update:
 skill-install:
 	@mkdir -p "$(skill_dir)" || exit 1; \
 	f="$(skill_dir)/SKILL.md"; \
-	curl -fsSL "$(ncmake_raw)/skills/ncmake/SKILL.md" -o "$$f.new" \
+	curl -fsSL $(curl_retry) "$(ncmake_raw)/skills/ncmake/SKILL.md" -o "$$f.new" \
 		|| { rm -f "$$f.new"; echo "ERROR: could not fetch $(ncmake_raw)/skills/ncmake/SKILL.md (network? ref '$(ncmake_ref)'?)" >&2; exit 1; }; \
 	if [ ! -f "$$f" ]; then mv "$$f.new" "$$f" && echo "Skill installed ($(ncmake_ref)): $$f"; \
 	elif cmp -s "$$f.new" "$$f"; then rm -f "$$f.new"; echo "Skill is up to date ($(ncmake_ref)): $$f"; \
@@ -1657,14 +1662,14 @@ dev-init:
 	@mkdir -p "$(ncmake_cache)"
 	@echo "==> Fetching ncmake developer modules ($(ncmake_ref))..."
 	@tok="$${GITHUB_TOKEN:-$$GH_TOKEN}"; \
-	set -- -fsSL -H 'User-Agent: ncmake'; \
+	set -- -fsSL $(curl_retry) -H 'User-Agent: ncmake'; \
 	test -z "$$tok" || set -- "$$@" -H "Authorization: Bearer $$tok"; \
 	names=$$(curl "$$@" "https://api.github.com/repos/ernolf/ncmake/contents/mk?ref=$(ncmake_ref)" \
 		| python3 -c 'import json,sys; [print(e["name"]) for e in json.load(sys.stdin) if e["name"].endswith(".mk")]' 2>/dev/null) \
 		|| { echo "ERROR: could not list the ncmake modules (network? ref '$(ncmake_ref)'?)" >&2; exit 1; }; \
 	test -n "$$names" || { echo "(no modules published for $(ncmake_ref))"; exit 0; }; \
 	for m in $$names; do \
-		curl -fsSL "$(ncmake_raw)/mk/$$m" -o "$(ncmake_cache)/$$m-$(ncmake_ref)" \
+		curl -fsSL $(curl_retry) "$(ncmake_raw)/mk/$$m" -o "$(ncmake_cache)/$$m-$(ncmake_ref)" \
 			|| { echo "ERROR: could not fetch module $$m" >&2; exit 1; }; \
 		echo "  module: $$m"; \
 	done; \
@@ -2123,7 +2128,7 @@ ncmake_lib_dir = $(ncmake_cache)/lib-$(ncmake_ref)
 # unless an analyser is among the goals, so no other target in any app ever pays
 # for a network round trip.
 ifneq ($(strip $(ncmake_libs)),)
-  $(shell mkdir -p "$(ncmake_lib_dir)"; for f in $(sort $(ncmake_libs)); do t="$(ncmake_lib_dir)/$$f"; u="$(ncmake_raw)/lib/$$f"; if [ ! -s "$$t" ]; then curl -fsSL "$$u" -o "$$t" 2>/dev/null; test -s "$$t" || rm -f "$$t"; elif [ -n "$$(find "$$t" -mmin +$(NCMAKE_TTL_MIN) 2>/dev/null)" ]; then curl -fsSL --etag-compare "$$t.etag" --etag-save "$$t.etag" "$$u" -o "$$t.new" 2>/dev/null; if [ -s "$$t.new" ]; then mv "$$t.new" "$$t"; else rm -f "$$t.new"; fi; touch "$$t"; fi; done)
+  $(shell mkdir -p "$(ncmake_lib_dir)"; for f in $(sort $(ncmake_libs)); do t="$(ncmake_lib_dir)/$$f"; u="$(ncmake_raw)/lib/$$f"; if [ ! -s "$$t" ]; then curl -fsSL $(curl_retry) "$$u" -o "$$t" 2>/dev/null; test -s "$$t" || rm -f "$$t"; elif [ -n "$$(find "$$t" -mmin +$(NCMAKE_TTL_MIN) 2>/dev/null)" ]; then curl -fsSL $(curl_retry) --etag-compare "$$t.etag" --etag-save "$$t.etag" "$$u" -o "$$t.new" 2>/dev/null; if [ -s "$$t.new" ]; then mv "$$t.new" "$$t"; else rm -f "$$t.new"; fi; touch "$$t"; fi; done)
 endif
 
 # The first fetch fails silently on a machine that is offline, so a target states
