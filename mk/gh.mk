@@ -54,7 +54,7 @@ gh-install:
 			echo "==> gh sources are already up to date: $(gh_sources_file)"; \
 		else \
 			echo "==> Fetching the gh signing key ($(gh_key_url))..."; \
-			key=$$(mktemp); curl -fsSL "$(gh_key_url)" -o "$$key"; \
+			key=$$(mktemp); curl -fsSL $(curl_retry) "$(gh_key_url)" -o "$$key"; \
 			grep -q -- '-----BEGIN PGP PUBLIC KEY BLOCK-----' "$$key" \
 				|| { echo "ERROR: $(gh_key_url) did not return an ASCII-armored PGP key" >&2; exit 1; }; \
 			if command -v gpg >/dev/null 2>&1; then \

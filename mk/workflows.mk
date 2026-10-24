@@ -78,14 +78,19 @@ import json
 import os
 import pathlib
 import re
+import socket
 import subprocess
 import sys
+import time
+import urllib.error
 import urllib.request
 
 WF_DIR = '.github/workflows'
 LOCK = os.path.join(WF_DIR, '.ncmake-workflows.json')
 SOURCES = os.environ.get('wf_sources', '').split()
 SHORTHAND = re.compile(r'^([\w.-]+)/([\w.-]+)(?:@([^:]+))?(?::(.+))?$$')
+
+RETRY_HTTP = (408, 429, 500, 502, 503, 504)
 
 def fetch(url):
     headers = {'User-Agent': 'ncmake'}
@@ -96,8 +101,18 @@ def fetch(url):
     if tok and url.startswith('https://api.github.com/'):
         headers['Authorization'] = 'Bearer ' + tok
     req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return r.read()
+    # The same transient errors curl_retry retries, with the same growing pause.
+    for attempt in range(4):
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return r.read()
+        except urllib.error.HTTPError as e:
+            if e.code not in RETRY_HTTP or attempt == 3:
+                raise
+        except (urllib.error.URLError, socket.timeout) as e:
+            if not isinstance(getattr(e, 'reason', e), socket.timeout) or attempt == 3:
+                raise
+        time.sleep(2 ** attempt)
 
 def urls(src):
     m = SHORTHAND.match(src)

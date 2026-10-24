@@ -187,7 +187,7 @@ publish: check-app
 	if [ -n "$$gh_ok" ]; then \
 		gh release download "$$tag" -R "$$slug" -p "$$file" -D "$$tmpd" || { echo "gh release download failed" >&2; exit 1; }; \
 	else \
-		curl -fL "$$url" -o "$$asset" || { echo "download failed: $$url" >&2; exit 1; }; \
+		curl -fL $(curl_retry) "$$url" -o "$$asset" || { echo "download failed: $$url" >&2; exit 1; }; \
 	fi; \
 	test -s "$$asset" || { echo "ERROR: downloaded asset is empty or missing: $$asset" >&2; exit 1; }; \
 	echo "Computing signature over the downloaded asset..."; \
