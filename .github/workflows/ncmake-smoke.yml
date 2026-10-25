@@ -25,6 +25,9 @@
 # reports no status and end-to-end is a required check; a job its if: skips
 # reports success. Whenever the list cannot be had, end-to-end runs, and so it does
 # when the changes job itself fails: only its explicit false skips it.
+#
+# The rule file of l10n-lint is data that a pull request may change on its own,
+# so its examples are tested on every run, in a job of seconds that needs no app.
 
 name: Smoke
 
@@ -97,6 +100,18 @@ jobs:
             fi
           fi
           echo "run=$run" >> "$GITHUB_OUTPUT"
+
+  l10n-rules:
+    name: test the l10n-lint rules against their examples
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out this revision
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Self-test of lib/l10n-rules.json
+        run: node lib/l10n-lint.mjs --self-test
 
   end-to-end:
     name: build twofactor_oath with this revision
