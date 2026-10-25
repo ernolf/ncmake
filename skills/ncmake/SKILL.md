@@ -201,7 +201,7 @@ It uses the App Store certificate and key from `cert_dir`, so an app is onboarde
 | --- | --- |
 | `make integrity-enable` | copies the public certificate to `.ncmake/certificate.crt` and prints the commit command; that committed file is the whole switch |
 | `make integrity-sign [DIR=<path>]` | writes `appinfo/signature.json` into the staged tree, or into a tree that already exists; refuses the checkout itself |
-| `make integrity-check [DIR=<path>] [TARBALL=<file>]` | holds a tree or a packed release against its own `signature.json`; needs no key, which is why the runner can run it |
+| `make integrity-check [DIR=<path>] [TARBALL=<file>]` | holds a tree or a packed release against its own `signature.json`; needs no key and is a core target, not part of the module, so the release runner has it without `make dev-init` |
 | `make dist-signed` | stage, sign, check, pack - the tarball the runner would have produced, for a release attached by hand |
 | `make integrity-tag` | the step `make tag` runs; not called by hand |
 | `make integrity-gist-drop` | the step `make publish` runs; not called by hand |
