@@ -101,7 +101,7 @@ def fetch(url):
     if tok and url.startswith('https://api.github.com/'):
         headers['Authorization'] = 'Bearer ' + tok
     req = urllib.request.Request(url, headers=headers)
-    # The same transient errors curl_retry retries, with the same growing pause.
+    # The same transient errors curl_retry retries, with the same pause.
     for attempt in range(4):
         try:
             with urllib.request.urlopen(req, timeout=30) as r:
@@ -112,7 +112,7 @@ def fetch(url):
         except (urllib.error.URLError, socket.timeout) as e:
             if not isinstance(getattr(e, 'reason', e), socket.timeout) or attempt == 3:
                 raise
-        time.sleep(2 ** attempt)
+        time.sleep(10)
 
 def urls(src):
     m = SHORTHAND.match(src)
