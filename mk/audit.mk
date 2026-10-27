@@ -82,13 +82,13 @@ consistency_cmdline = make consistency-audit ARGS=\"%s\"
 # against it. A table in the analyser would have to be kept current by hand; this
 # follows the server. It is read only when the recipe runs, and where it cannot be
 # read it stays empty and the analyser falls back on its own table of majors.
-consistency_nc_master = $(shell curl -fsSL "$(nc_server_raw)/master/version.php" 2>/dev/null | sed -n 's/^\$$OC_Version[^0-9]*\([0-9]*\).*/\1/p' | head -1)
+consistency_nc_master = $(shell curl -fsSL $(curl_retry) "$(nc_server_raw)/master/version.php" 2>/dev/null | sed -n 's/^\$$OC_Version[^0-9]*\([0-9]*\).*/\1/p' | head -1)
 
 # The newest major nextcloud/server has released, the highest major among its
 # release tags vX.Y.Z; a tag with a beta or rc suffix is no release. The App Store
 # rules let a <nextcloud max-version> reach one major beyond it. Read and, where it
 # cannot be read, left to the analyser like the master major.
-consistency_nc_newest = $(shell git ls-remote --tags --refs https://github.com/nextcloud/server.git 'v*' 2>/dev/null | sed -n 's|.*refs/tags/v\([0-9]*\)\.[0-9]*\.[0-9]*$$|\1|p' | sort -n | tail -1)
+consistency_nc_newest = $(shell $(net_retry); t=$$(net_retry git ls-remote --tags --refs https://github.com/nextcloud/server.git 'v*') && printf '%s\n' "$$t" | sed -n 's|.*refs/tags/v\([0-9]*\)\.[0-9]*\.[0-9]*$$|\1|p' | sort -n | tail -1)
 
 # The Node.js release schedule the core picks the build Node from, so the audit
 # can tell when engines.node admits only end-of-life lines. It is handed in as one

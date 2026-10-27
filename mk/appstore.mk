@@ -153,7 +153,7 @@ register: check-app
 # process warns, installations could not update from it, so that asks first.
 publish: check-app
 	$(require_cert_dir)
-	@set -e; \
+	@set -e; $(net_retry); \
 	url="$(URL)"; \
 	if [ -z "$$url" ]; then \
 		if [ -n "$(GH)" ]; then read -p "Download URL [$(release_url)]: " url; url="$${url:-$(release_url)}"; \
@@ -170,7 +170,7 @@ publish: check-app
 		[ "$$s3" = releases ] && [ "$$s4" = download ] && [ -n "$$tag" ] && [ -n "$$file" ] && gh_ok=1; \
 	fi; \
 	if [ -n "$$gh_ok" ]; then \
-		pre=$$(gh release view "$$tag" -R "$$slug" --json isPrerelease -q .isPrerelease 2>/dev/null); \
+		pre=$$(net_retry gh release view "$$tag" -R "$$slug" --json isPrerelease -q .isPrerelease); \
 		case "$$tag" in *-*) prever=1;; *) prever=;; esac; \
 		if [ -n "$$prever" ] && [ -n "$(NIGHTLY)" ]; then \
 			read -p "$$tag is a pre-release version, which belongs in the store as a regular release - as a nightly, installations cannot update from it. Publish as NIGHTLY anyway? [y/N] " yn; \
@@ -185,7 +185,7 @@ publish: check-app
 	fi; \
 	echo "Downloading $$url ..."; \
 	if [ -n "$$gh_ok" ]; then \
-		gh release download "$$tag" -R "$$slug" -p "$$file" -D "$$tmpd" || { echo "gh release download failed" >&2; exit 1; }; \
+		net_retry gh release download "$$tag" -R "$$slug" -p "$$file" -D "$$tmpd" --clobber || { echo "gh release download failed" >&2; exit 1; }; \
 	else \
 		curl -fL $(curl_retry) "$$url" -o "$$asset" || { echo "download failed: $$url" >&2; exit 1; }; \
 	fi; \

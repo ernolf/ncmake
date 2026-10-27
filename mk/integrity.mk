@@ -95,7 +95,8 @@ integrity-tag: check-app
 	$(MAKE) --no-print-directory stage || exit 1; \
 	$(integrity_run) sign "$(stage_dir)/$(app_id)" "$(app_id)" "$(key_file)" "$(cert_file)" || exit 1; \
 	$(integrity_run) check "$(stage_dir)/$(app_id)" "$(app_id)" "$(integrity_certificate)" || exit 1; \
-	id=$$(gh gist create -d "$(app_id) v$(version) appinfo/signature.json" "$(stage_dir)/$(app_id)/appinfo/signature.json" | tail -1 | sed 's#.*/##'); \
+	sig_gist() { l=$$(gh gist list --secret --limit 20) || return 1; printf '%s\n' "$$l" | awk -F '\t' -v d="$(app_id) v$(version) appinfo/signature.json" '$$2 == d { print $$1; exit }'; }; \
+	$(net_create); id=$$(net_create sig_gist gh gist create -d "$(app_id) v$(version) appinfo/signature.json" "$(stage_dir)/$(app_id)/appinfo/signature.json" | tail -1 | sed 's#.*/##'); \
 	test -n "$$id" || { echo "ERROR: gh gist create returned no gist id." >&2; exit 1; }; \
 	printf '\n%s: %s\n' "$(integrity_trailer)" "$$id" >> "$(tag_message)"; \
 	echo "Signature uploaded as the secret gist $$id and named in the tag message."
@@ -107,7 +108,7 @@ integrity-gist-drop: check-app
 	@id=$$(git tag -l --format='%(contents)' "v$(version)" 2>/dev/null | sed -n 's/^$(integrity_trailer): *//p' | head -1); \
 	test -n "$$id" || exit 0; \
 	command -v gh >/dev/null 2>&1 || { echo "WARNING: gh not found - drop the signature gist with 'gh gist delete $$id --yes'." >&2; exit 0; }; \
-	gh gist delete "$$id" --yes && echo "Signature gist $$id deleted." || echo "WARNING: could not delete the signature gist $$id - drop it with 'gh gist delete $$id --yes'." >&2
+	$(net_retry); net_retry gh gist delete "$$id" --yes && echo "Signature gist $$id deleted." || echo "WARNING: could not delete the signature gist $$id - drop it with 'gh gist delete $$id --yes'." >&2
 
 # Left to right, and stage exactly once: stage wipes its directory, so it has to
 # be the first of the three to reach it - signing a tree that dist then rebuilds

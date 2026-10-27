@@ -28,6 +28,17 @@ NCMAKE_TTL_MIN ?= 1440
 # missing ref, a failed name lookup or a refused connection fails at once, so an
 # offline host does not wait.
 curl_retry      = --retry 3 --retry-delay 10
+# gh and git have no retry of their own. net_retry runs a call that reaches GitHub
+# and, when it fails, tries three more times, 10 seconds apart, like curl_retry.
+# Each failed try is named on stderr, so a target never stops without saying why.
+# It is for calls that are safe to repeat; a recipe defines it with $(net_retry);
+# before the first use.
+net_retry       = net_retry() { _nr_n=1; while :; do "$$@" && return 0; _nr_rc=$$?; if [ $$_nr_n -ge 4 ]; then echo "ERROR: $$1 $$2 $$3 failed $$_nr_n times (exit $$_nr_rc)." >&2; return $$_nr_rc; fi; echo "WARNING: $$1 $$2 $$3 failed (exit $$_nr_rc); try $$((_nr_n + 1)) of 4 in 10 seconds." >&2; _nr_n=$$((_nr_n + 1)); sleep 10; done; }
+# net_create <check> <command...> is for a call that creates something on GitHub.
+# A lost answer can hide a call that went through, so before each further try the
+# shell command <check> runs; when it prints the object, that is the result and
+# nothing is created twice. $(net_create); defines net_retry as well.
+net_create      = $(net_retry); net_create() { _nc_check=$$1; shift; _nc_n=1; while :; do "$$@" && return 0; _nc_rc=$$?; if [ $$_nc_n -ge 4 ]; then echo "ERROR: $$1 $$2 $$3 failed $$_nc_n times (exit $$_nc_rc)." >&2; return $$_nc_rc; fi; echo "WARNING: $$1 $$2 $$3 failed (exit $$_nc_rc); checking in 10 seconds whether it went through." >&2; sleep 10; _nc_found=$$(net_retry eval "$$_nc_check") || return $$_nc_rc; if [ -n "$$_nc_found" ]; then printf '%s\n' "$$_nc_found"; return 0; fi; _nc_n=$$((_nc_n + 1)); done; }
 ifneq ($(NCMAKE),)
   ifneq ($(shell find "$(NCMAKE)" -mmin +$(NCMAKE_TTL_MIN) 2>/dev/null),)
     $(shell curl -fsSL $(curl_retry) --etag-compare "$(NCMAKE).etag" --etag-save "$(NCMAKE).etag" "$(ncmake_url)" -o "$(NCMAKE).new" 2>/dev/null; \
@@ -809,9 +820,14 @@ BODY   ?=
 # The blank line above the rule in the pull request body is load bearing: '---'
 # right after a line of text makes that line a heading instead of drawing a rule.
 define branch_flow
+$(net_create)
 flow_require_no_remote_branch() {
     branch="$$1"
-    if git ls-remote --exit-code --heads origin "$$branch" >/dev/null 2>&1; then
+    remote=$$(net_retry git ls-remote --heads origin "$$branch") || {
+        echo "Could not ask origin whether '$$branch' exists - not committing or pushing." >&2
+        return 1
+    }
+    if [ -n "$$remote" ]; then
         echo "Remote branch '$$branch' already exists on origin - not committing or pushing." >&2
         echo "It may have an open pull request, or be an already merged branch that was never deleted." >&2
         echo "Inspect it, then merge or close its pull request, or delete the branch:" >&2
@@ -863,8 +879,9 @@ flow_pr() {
     else
         body=$$(printf '%s\n\n---\n\n%s\n' "$$bullets" "$$text")
     fi
-    git push -u origin "$$branch" || return 1
-    gh pr create --base "$$base" --head "$$branch" --title "$$title" --body "$$body"
+    net_retry git push -u origin "$$branch" || return 1
+    net_create 'gh pr list --head "$$branch" --base "$$base" --state open --json url -q ".[].url"' \
+        gh pr create --base "$$base" --head "$$branch" --title "$$title" --body "$$body"
 }
 flow_branch_finish() {
     branch="$$1"; title="$$2"; bullets="$$3"; text="$$4"; pr="$$5"
@@ -1088,7 +1105,7 @@ version: check-app
 	echo "$$cur; after the merge you tag it with 'make tag'."; \
 	if echo "$(gh_slug)" | grep -qE '^[^/:]+/[^/]+$$'; then \
 		tok="$${GITHUB_TOKEN:-$$GH_TOKEN}"; \
-		set -- -sS --max-time 10 -H 'User-Agent: ncmake'; \
+		set -- -sS --max-time 10 $(curl_retry) -H 'User-Agent: ncmake'; \
 		test -z "$$tok" || set -- "$$@" -H "Authorization: Bearer $$tok"; \
 		api="https://api.github.com/repos/$(gh_slug)"; \
 		state=$$(curl "$$@" "$$api/branches/$$cur" 2>/dev/null | python3 -c 'import json,sys; d = json.load(sys.stdin); print("missing" if d.get("message") == "Branch not found" else "found" if "name" in d else "")' 2>/dev/null); \
@@ -1292,7 +1309,8 @@ tag: check-app
 	if [ "$$yn" = y ] || [ "$$yn" = Y ]; then \
 		mkdir -p "$(cache_dir)"; printf 'Release %s\n' "$$ver" > "$(tag_message)"; \
 		$(tag_hook) || exit 1; \
-		git tag -s "v$$ver" -F "$(tag_message)" && git push origin "v$$ver" || exit 1; \
+		git tag -s "v$$ver" -F "$(tag_message)" || exit 1; \
+		$(net_retry); net_retry git push origin "v$$ver" || { echo "The tag v$$ver exists here but not on origin: git push origin v$$ver" >&2; exit 1; }; \
 		case "$$(git rev-parse --abbrev-ref HEAD)" in stable*) \
 			echo "==> v$$ver belongs to a maintenance line: when you publish its GitHub release,"; \
 			echo "    untick 'Set as the latest release', or GitHub shows it above the newer line on main.";; \
@@ -1335,7 +1353,7 @@ stable-branch: check-app
 	fi; \
 	echo "Maintainer target: opens a stable* branch for an older release line, which then"; \
 	echo "gets its own releases through make version, make changelog and make tag."; \
-	{ git fetch --quiet --prune origin && git fetch --quiet --tags origin; } || { echo "ERROR: git fetch from origin failed (network?)" >&2; exit 1; }; \
+	$(net_retry); { net_retry git fetch --quiet --prune origin && net_retry git fetch --quiet --tags origin; } || { echo "ERROR: git fetch from origin failed (network?)" >&2; exit 1; }; \
 	current=$$($(git_tags) --list 'v*' --merged HEAD --sort=-v:refname | head -1 | sed 's/^v//'); \
 	[ -n "$$current" ] || { echo "No release tag on main yet - there is no older line to maintain." >&2; exit 1; }; \
 	top=$$(printf '%s\n%s\n' "$$current" "$(version)" | $(version_sort) | tail -1); \
@@ -1368,9 +1386,8 @@ stable-branch: check-app
 	case "$$branch" in stable?*) ;; *) echo "$$branch does not start with stable: every target recognises a maintenance branch by that prefix." >&2; exit 1;; esac; \
 	git check-ref-format --branch "$$branch" >/dev/null 2>&1 || { echo "Not a valid branch name: $$branch" >&2; exit 1; }; \
 	git rev-parse --verify --quiet "refs/heads/$$branch" >/dev/null && { echo "Branch $$branch already exists locally: git switch $$branch" >&2; exit 1; }; \
-	git ls-remote --exit-code --heads origin "$$branch" >/dev/null 2>&1; rc=$$?; \
-	[ "$$rc" = 0 ] && { echo "Branch $$branch already exists on origin: git switch $$branch" >&2; exit 1; }; \
-	[ "$$rc" = 2 ] || { echo "ERROR: could not query origin for $$branch (network?)" >&2; exit 1; }; \
+	remote=$$(net_retry git ls-remote --heads origin "$$branch") || { echo "ERROR: could not query origin for $$branch (network?)" >&2; exit 1; }; \
+	[ -z "$$remote" ] || { echo "Branch $$branch already exists on origin: git switch $$branch" >&2; exit 1; }; \
 	deps='import sys, xml.etree.ElementTree as E; d = E.parse(sys.stdin).getroot().find("dependencies"); g = lambda t, a: (d.find(t).get(a) if d is not None and d.find(t) is not None else None) or "-"; print(g("nextcloud", "min-version"), g("nextcloud", "max-version"), g("php", "min-version"), g("php", "max-version"))'; \
 	set -- $$(git show "$$base:appinfo/info.xml" | python3 -c "$$deps" 2>/dev/null); lnmin=$${1:--}; lnmax=$${2:--}; lpmin=$${3:--}; lpmax=$${4:--}; \
 	set -- $$(git show "HEAD:appinfo/info.xml" | python3 -c "$$deps" 2>/dev/null); mnmin=$${1:--}; mnmax=$${2:--}; mpmin=$${3:--}; mpmax=$${4:--}; \
@@ -1390,7 +1407,7 @@ stable-branch: check-app
 		echo "  git switch -c $$branch $$base && git push -u origin $$branch"; exit 0; \
 	fi; \
 	git switch -c "$$branch" "$$base" || exit 1; \
-	git push -u origin "$$branch" || exit 1; \
+	net_retry git push -u origin "$$branch" || exit 1; \
 	tx=; reuse_note=; \
 	if git cat-file -e main:.tx/config 2>/dev/null; then \
 		if git show main:.tx/backport 2>/dev/null | tr -s ' \t' '\n' | grep -qxF "$$branch"; then \
