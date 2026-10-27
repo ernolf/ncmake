@@ -61,8 +61,11 @@ l10n_ignored = $(if $(js_ignored),js/) $(if $(vendor_ignored),vendor/)
 define l10n_tool
 import os
 import re
+import socket
 import subprocess
 import sys
+import time
+import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 
@@ -208,14 +211,25 @@ def check(root):
 def default_branches():
     fallback = os.environ.get('l10n_branches_fallback', '').split()
     url = os.environ.get('l10n_sync_script', '')
-    try:
-        with urllib.request.urlopen(url, timeout=15) as response:
-            script = response.read().decode('utf-8')
-        found = re.search(r"^versions='([^']*)'", script, re.M)
-        if found:
-            return found.group(1).split()
-    except Exception:
-        pass
+    script = ''
+    # The same transient errors and pause as fetch() of the workflow manager.
+    for attempt in range(4):
+        try:
+            with urllib.request.urlopen(url, timeout=15) as response:
+                script = response.read().decode('utf-8')
+            break
+        except urllib.error.HTTPError as e:
+            if e.code not in (408, 429, 500, 502, 503, 504) or attempt == 3:
+                break
+        except (urllib.error.URLError, socket.timeout) as e:
+            if not isinstance(getattr(e, 'reason', e), socket.timeout) or attempt == 3:
+                break
+        except Exception:
+            break
+        time.sleep(10)
+    found = re.search(r"^versions='([^']*)'", script, re.M)
+    if found:
+        return found.group(1).split()
     info('could not read the branch list from %s, using %s' % (url, ' '.join(fallback)))
     return fallback
 
@@ -401,7 +415,7 @@ l10n-init: check-app
 # before the exit status reports any of them.
 l10n-check: check-app
 	@$(if $(filter bare none,$(RUNTIME)),$(call l10n_no_runtime,l10n-check)) \
-	git fetch --quiet --prune origin || { echo "ERROR: git fetch origin failed." >&2; exit 1; }; \
+	$(net_retry); net_retry git fetch --quiet --prune origin || { echo "ERROR: git fetch origin failed." >&2; exit 1; }; \
 	rc=0; rm -rf "$(l10n_check_dir)"; \
 	$(l10n_run) branches "$(cache_dir)/l10n_branches" || rc=1; \
 	for b in $$(cat "$(cache_dir)/l10n_branches"); do \
