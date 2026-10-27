@@ -23,10 +23,11 @@ ncmake_raw      = https://raw.githubusercontent.com/ernolf/ncmake/$(ncmake_ref)
 ncmake_url      = $(ncmake_raw)/core/Makefile
 NCMAKE_TTL_MIN ?= 1440
 # For a fetch whose failure costs something: after a timeout or an HTTP 408, 429,
-# 500, 502, 503 or 504 answer, curl tries three more times with a growing pause.
-# A 404 for a missing ref, a failed name lookup or a refused connection fails at
-# once, so an offline host does not wait.
-curl_retry      = --retry 3
+# 500, 502, 503 or 504 answer, curl tries three more times, 10 seconds apart, so a
+# connect timeout that lasts a minute does not use up every attempt. A 404 for a
+# missing ref, a failed name lookup or a refused connection fails at once, so an
+# offline host does not wait.
+curl_retry      = --retry 3 --retry-delay 10
 ifneq ($(NCMAKE),)
   ifneq ($(shell find "$(NCMAKE)" -mmin +$(NCMAKE_TTL_MIN) 2>/dev/null),)
     $(shell curl -fsSL $(curl_retry) --etag-compare "$(NCMAKE).etag" --etag-save "$(NCMAKE).etag" "$(ncmake_url)" -o "$(NCMAKE).new" 2>/dev/null; \
