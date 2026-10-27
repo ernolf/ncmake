@@ -1963,7 +1963,7 @@ cache-clean:
 		*.mjs) add leftover "$$f" "an analyser library where an older ncmake kept it" "$$f" $$(etag "$$f") ;; \
 		npm|corepack) add ncmake "$$f/" "the download cache of $$f" "$$f" ;; \
 		last-run) if [ -n "$$ids" ]; then st="in use"; else st=ncmake; fi; add "$$st" "$$f" "the last container run, read by the idle removal of the images" "$$f" ;; \
-		node) [ -d node ] || add foreign "$$f" "" "$$f" ;; \
+		node|tools) [ -d "$$f" ] || add foreign "$$f" "" "$$f" ;; \
 		*) add foreign "$$f" "" "$$f" ;; \
 	esac; done; \
 	for r in $$mrefs; do set --; for m in *.mk-"$$r" *.mk-"$$r".etag; do [ ! -e "$$m" ] || set -- "$$@" "$$m"; done; \
@@ -1972,6 +1972,11 @@ cache-clean:
 		v*-linux-*) add ncmake "$$f/" "Node.js $${f#node/}" "$$f" ;; \
 		index.json) add ncmake "$$f" "the release index of nodejs.org" "$$f" ;; \
 		.fetch.*|index.json.*) add leftover "$$f" "left by an interrupted download" "$$f" ;; \
+		*) add foreign "$$f" "" "$$f" ;; \
+	esac; done; fi; \
+	if [ -d tools ]; then for f in tools/* tools/.[!.]* tools/..?*; do [ -e "$$f" ] || continue; case "$${f#tools/}" in \
+		zizmor-*) add ncmake "$$f/" "zizmor $${f#tools/zizmor-}, fetched by the lint module" "$$f" ;; \
+		.fetch.*) add leftover "$$f" "left by an interrupted download" "$$f" ;; \
 		*) add foreign "$$f" "" "$$f" ;; \
 	esac; done; fi; \
 	n=$$(wc -l <"$$list"); [ "$$n" -gt 0 ] || { echo "The ncmake cache at $$dir is empty."; exit 0; }; \
@@ -2402,7 +2407,8 @@ Lists what the per-machine ncmake cache holds ($(ncmake_cache)),
 numbered, with the size, the last change and the status of each entry:
   ncmake    the core, the developer modules, the analyser libraries and the
             registry list of a ref, a Node.js line, the release index of
-            nodejs.org, the download caches npm/ and corepack/, last-run
+            nodejs.org, the download caches npm/ and corepack/, a tool the
+            lint module fetched into tools/, last-run
   leftover  what an interrupted download left, or a file where an older
             ncmake kept it
   in use    mounted by a running ncmake container; last-run while one runs
