@@ -123,7 +123,7 @@ audit_core = $(if $(ncmake_lib_read_run),$(if $(and $(JSON),$(if $(value ncmake_
 # make tag checks the changelog the way the App Store reads it rather than by the
 # core's heading grep. A second make, so that the goal changelog-lint fetches the
 # analyser it needs.
-tag_check = $(MAKE) --no-print-directory changelog-lint || { echo "ERROR: make tag stops on the [!] findings above - fix the changelog, or tag regardless with NO_CHANGELOG_LINT=1." >&2; exit 1; }
+tag_check = $(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory changelog-lint || { echo "ERROR: make tag stops on the [!] findings above - fix the changelog, or tag regardless with NO_CHANGELOG_LINT=1." >&2; exit 1; }
 
 # php-compat needs the PHP ceiling and a build image per PHP minor from the core.
 compat_core = $(if $(value php_server_max),:,echo "ERROR: php-compat needs a newer ncmake core - run 'make self-update'" >&2; exit 1)
@@ -201,7 +201,7 @@ php-compat: check-app
 	printf 'floor=%s\nceiling=%s\nserver=%s\ndeclared=%s\nmaster=%s\nnextcloud=%s\n' "$$floor" "$$ceiling" "$$server" "$$declared" "$$master" '$(nc_max)' >$(compat_dir)/range; \
 	for m in $$minors; do \
 		echo "==> PHP $$m" >&2; mkdir -p $(compat_dir)/$$m; \
-		$(MAKE) --no-print-directory php-compat-run php_version=$$m php_image=$(compat_image):$$m PHP=min || echo "$$?" >$(compat_dir)/$$m/failed; \
+		$(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory php-compat-run php_version=$$m php_image=$(compat_image):$$m PHP=min || echo "$$?" >$(compat_dir)/$$m/failed; \
 	done; \
 	next=; \
 	if [ -n "$$declared" ] && [ -n "$$master" ] && [ "$$(printf '%s\n' "$$declared" "$$master" | sort -V | tail -1)" != "$$master" ]; then next=$$declared-next; \
@@ -209,7 +209,7 @@ php-compat: check-app
 	if [ -n "$$next" ]; then \
 		$(if $(filter bare none,$(RUNTIME)),echo "==> PHP ahead of master: RUNTIME=$(RUNTIME) runs no image; $(compat_next):$$next is left out" >&2;, \
 		echo "==> PHP ahead of master ($(compat_next):$$next)" >&2; mkdir -p $(compat_dir)/next; echo "next=$$next" >>$(compat_dir)/range; \
-		$(MAKE) --no-print-directory php-compat-run php_version=next php_image=$(compat_next):$$next php_floor_mode= PHP=min || echo "$$?" >$(compat_dir)/next/failed;) \
+		$(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory php-compat-run php_version=next php_image=$(compat_next):$$next php_floor_mode= PHP=min || echo "$$?" >$(compat_dir)/next/failed;) \
 	fi; \
 	$(ncmake_lib_read_run) '$(call ncmake_lib_guard,php-compat) PHP_COMPAT_CMDLINE="$(compat_cmdline)" node $(ncmake_lib_path)/php-compat.mjs $(ARGS) $(ncmake_json_arg)'
 

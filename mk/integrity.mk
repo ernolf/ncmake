@@ -52,8 +52,8 @@ integrity_trailer = ncmake-signature
 # The two hooks core and appstore.mk offer: the signature is produced between the
 # confirmation and the tag, the gist is dropped once the App Store has the release.
 # Plain '=' - both are declared ':' with '?=' and are meant to be taken over.
-tag_hook     = $(MAKE) --no-print-directory integrity-tag
-publish_hook = $(MAKE) --no-print-directory integrity-gist-drop
+tag_hook     = $(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory integrity-tag
+publish_hook = $(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory integrity-gist-drop
 
 # Signing is the maintainer's step and fails loudly when the material is missing:
 # a tarball that silently lost its signature is the state this module exists to end.
@@ -92,7 +92,7 @@ integrity-tag: check-app
 	esac; \
 	$(integrity_check_material); \
 	command -v gh >/dev/null 2>&1 || { echo "ERROR: gh not found - it uploads the signature gist." >&2; exit 1; }; \
-	$(MAKE) --no-print-directory stage || exit 1; \
+	$(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory stage || exit 1; \
 	$(integrity_run) sign "$(stage_dir)/$(app_id)" "$(app_id)" "$(key_file)" "$(cert_file)" || exit 1; \
 	$(integrity_run) check "$(stage_dir)/$(app_id)" "$(app_id)" "$(integrity_certificate)" || exit 1; \
 	sig_gist() { l=$$(gh gist list --secret --limit 20) || return 1; printf '%s\n' "$$l" | awk -F '\t' -v d="$(app_id) v$(version) appinfo/signature.json" '$$2 == d { print $$1; exit }'; }; \
