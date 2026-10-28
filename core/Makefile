@@ -1975,7 +1975,8 @@ cache-clean:
 		*) add foreign "$$f" "" "$$f" ;; \
 	esac; done; fi; \
 	if [ -d tools ]; then for f in tools/* tools/.[!.]* tools/..?*; do [ -e "$$f" ] || continue; case "$${f#tools/}" in \
-		zizmor-*) add ncmake "$$f/" "zizmor $${f#tools/zizmor-}, fetched by the lint module" "$$f" ;; \
+		zizmor-*|actionlint-*|shellcheck-*|hadolint-*|yamllint-*) t=$${f#tools/}; add ncmake "$$f/" "$${t%%-*} $${t#*-}, fetched by the lint module" "$$f" ;; \
+		markdown-*|web-*) t=$${f#tools/}; add ncmake "$$f/" "the npm packages of lint-$${t%%-*}, fetched by the lint module" "$$f" ;; \
 		.fetch.*) add leftover "$$f" "left by an interrupted download" "$$f" ;; \
 		*) add foreign "$$f" "" "$$f" ;; \
 	esac; done; fi; \
