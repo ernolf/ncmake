@@ -195,6 +195,9 @@ compat_run   = out=$(compat_dir)/$(php_version); php -n -r "echo PHP_VERSION;" >
 # copied into build/deps-audit beside the output it leaves there. The npm half
 # runs in the analyser, which carries the app's Node line as build-verify does.
 deps_dir = build/deps-audit
+# NO_ADVISORIES=1, or --no-advisories in ARGS, reaches both halves, so the
+# composer half drops the advisories before they are written to build/deps-audit.
+deps_no_advisories = $(if $(or $(filter 1,$(NO_ADVISORIES)),$(filter --no-advisories,$(ARGS))),1)
 
 # == secrets-audit ==
 # gitleaks runs as the Linux binary of its GitHub release, checked against the
@@ -421,17 +424,17 @@ php-compat-run:
 deps-audit: check-app
 	@$(audit_core)
 	@$(call ncmake_lib_need,$(deps_libs))
-	@echo "==> deps-audit$(if $(strip $(ARGS)), $(ARGS)) (RUNTIME=$(RUNTIME))" >&2
+	@echo "==> deps-audit$(if $(strip $(ARGS)), $(ARGS))$(if $(filter 1,$(NO_ADVISORIES)), NO_ADVISORIES=1) (RUNTIME=$(RUNTIME))" >&2
 	@rm -rf $(deps_dir) && mkdir -p $(deps_dir) || exit 1; \
 	if [ -f composer.lock ]; then \
 		echo "==> composer audit on PHP $(php_min)" >&2; \
 		cp "$(ncmake_lib_dir)/deps-audit.php" $(deps_dir)/ && \
 		$(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory deps-audit-composer PHP=min || echo "$$?" >$(deps_dir)/composer.failed; \
 	fi; \
-	$(ncmake_lib_run) '$(call ncmake_lib_guard,deps-audit) DEPS_AUDIT_CMDLINE="$(deps_cmdline)" node $(ncmake_lib_path)/deps-audit.mjs $(ARGS) $(ncmake_json_arg)'
+	$(ncmake_lib_run) '$(call ncmake_lib_guard,deps-audit) DEPS_AUDIT_CMDLINE="$(deps_cmdline)" DEPS_AUDIT_NO_ADVISORIES="$(deps_no_advisories)" node $(ncmake_lib_path)/deps-audit.mjs $(ARGS) $(ncmake_json_arg)'
 
 deps-audit-composer:
-	@$(php_run) 'php $(deps_dir)/deps-audit.php >$(deps_dir)/composer.json 2>$(deps_dir)/composer.err'
+	@$(php_run) 'DEPS_AUDIT_NO_ADVISORIES="$(deps_no_advisories)" php $(deps_dir)/deps-audit.php >$(deps_dir)/composer.json 2>$(deps_dir)/composer.err'
 
 secrets-audit: check-app
 	@$(audit_core)
@@ -602,7 +605,7 @@ master, which only its image carries, is left out there.
 endef
 
 define help_deps-audit
-make deps-audit [ARGS="<audit arguments>"] [JSON=<file>]
+make deps-audit [ARGS="<audit arguments>"] [JSON=<file>] [NO_ADVISORIES=1]
 
 Checks whether a dependency that ships has a published vulnerability, or a
 licence the app cannot ship it under. A release
@@ -635,6 +638,12 @@ not answer, in which case nothing of that lock file was checked, and a
 dependency without a lock file to audit. Both vulnerability findings carry
 "security": true in the JSON.
 
+NO_ADVISORIES=1 (or ARGS=--no-advisories) leaves the vulnerabilities out, for
+a run whose output is public: no npm audit runs, composer audit keeps only the
+abandoned packages, and the report and the JSON say nothing about an advisory.
+In its place is the same [i] advisories-unchecked for every app, and the JSON
+has "advisories": false.
+
 The same packages are held against the licence appinfo/info.xml declares, by
 the licence table lib/licences.json of ncmake, a data file: a bundle is one
 work, so a copyleft package in it puts its terms on the whole app. composer.lock
@@ -664,6 +673,7 @@ ARGS is passed to the analyser:
   make deps-audit ARGS=--details        every advisory and package of a finding
   make deps-audit ARGS=--json > deps.json  machine-readable, nothing else
   make deps-audit JSON=deps.json        the report, and the JSON in deps.json
+  make deps-audit NO_ADVISORIES=1       abandoned packages and licences only
   make deps-audit ARGS=--self-test      the licence table against its examples
   make deps-audit ARGS=--help           the analyser's own option list
 
@@ -911,7 +921,7 @@ help::
 	@echo "  $(ct)php-compat$(c0)           Whether the app runs on the PHP floor and ceiling of its servers"
 	@echo "    $(cd)optional $(cv)PHP=all$(cd), see $(cv)make help-php-compat$(c0)"
 	@echo "  $(ct)deps-audit$(c0)           Whether a dependency that ships has a published vulnerability or a licence the app cannot ship"
-	@echo "    $(cd)optional $(cv)ARGS=\"--details\"$(cd), see $(cv)make help-deps-audit$(c0)"
+	@echo "    $(cd)optional $(cv)ARGS=\"--details\"$(cd), $(cv)NO_ADVISORIES=1$(cd), see $(cv)make help-deps-audit$(c0)"
 	@echo "  $(ct)secrets-audit$(c0)        Whether a key or a token is in what ships, or in the history"
 	@echo "    $(cd)optional $(cv)SCOPE=shipped|history$(cd), $(cv)ARGS=\"--reveal\"$(cd), see $(cv)make help-secrets-audit$(c0)"
 	@echo "  $(ct)secrets-ignore$(c0)       Add the findings of secrets-audit that are false positives to .gitleaksignore  $(cm)[m]$(c0)"
