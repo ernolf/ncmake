@@ -709,4 +709,4 @@ help::
 	@echo "  $(ct)deps-audit$(c0)           Whether a dependency that ships has a published vulnerability or a licence the app cannot ship"
 	@echo "    $(cd)optional $(cv)ARGS=\"--details\"$(cd), see $(cv)make help-deps-audit$(c0)"
 	@echo "  $(ct)secrets-audit$(c0)        Whether a key or a token is in what ships, or in the history"
-	@echo "    $(cd)optional $(cv)SCOPE=shipped|history$(cd), see $(cv)make help-secrets-audit$(c0)"
+	@echo "    $(cd)optional $(cv)SCOPE=shipped|history$(cd), $(cv)ARGS=\"--reveal\"$(cd), see $(cv)make help-secrets-audit$(c0)"
