@@ -1,0 +1,101 @@
+{
+  "about": "The licence table deps-audit holds the licences of the shipped dependencies against the licence of the app with. lib/deps-audit.mjs carries no licence of its own. Each SPDX id belongs to one group; compatible names, for the group of the app's licence, the groups of a dependency licence that can be combined with it in one distributed work, and notes says, per group of a dependency licence, why it does not go with the others. non-free lists the licences that forbid redistribution or commercial use. A licence the table does not name, such as EPL-2.0 or OFL-1.1 whose compatibility depends on how the package states it, gets no verdict. aliases maps an id that is deprecated or not SPDX to the id it stands for, where that is unambiguous. Every example is tested before an app is judged; deps-audit.mjs --self-test runs only that. The format is described on the wiki page Checkout audit, section The licence table.",
+  "sources": {
+    "spdx": "https://spdx.org/licenses/",
+    "fsf": "https://www.gnu.org/licenses/license-list.html",
+    "gpl-faq": "https://www.gnu.org/licenses/gpl-faq.html#AllCompatibility",
+    "apache": "https://www.apache.org/licenses/GPL-compatibility.html",
+    "mpl": "https://www.mozilla.org/en-US/MPL/2.0/FAQ/"
+  },
+  "groups": {
+    "permissive": [
+      "0BSD", "Artistic-2.0", "BlueOak-1.0.0", "BSD-1-Clause", "BSD-2-Clause", "BSD-2-Clause-Patent",
+      "BSD-3-Clause", "BSD-3-Clause-Clear", "BSL-1.0", "CC-BY-4.0", "CC0-1.0", "curl", "FSFAP",
+      "ISC", "MIT", "MIT-0", "MIT-CMU", "NCSA", "PDDL-1.0", "PostgreSQL", "PSF-2.0", "Python-2.0",
+      "Unicode-3.0", "Unicode-DFS-2016", "Unlicense", "UPL-1.0", "W3C", "WTFPL", "X11", "Zlib",
+      "ZPL-2.1"
+    ],
+    "apache": ["Apache-2.0"],
+    "weak-copyleft": ["LGPL-2.1-only", "LGPL-2.1-or-later", "MPL-2.0"],
+    "lgpl-3.0": ["LGPL-3.0-only", "LGPL-3.0-or-later"],
+    "gpl-2.0-only": ["GPL-2.0-only"],
+    "gpl-2.0-or-later": ["GPL-2.0-or-later"],
+    "gpl-3.0": ["GPL-3.0-only", "GPL-3.0-or-later"],
+    "agpl-3.0": ["AGPL-3.0-only", "AGPL-3.0-or-later"]
+  },
+  "compatible": {
+    "permissive": ["permissive", "apache", "weak-copyleft", "lgpl-3.0"],
+    "apache": ["permissive", "apache", "weak-copyleft", "lgpl-3.0"],
+    "weak-copyleft": ["permissive", "apache", "weak-copyleft", "lgpl-3.0"],
+    "lgpl-3.0": ["permissive", "apache", "weak-copyleft", "lgpl-3.0"],
+    "gpl-2.0-only": ["permissive", "weak-copyleft", "gpl-2.0-only", "gpl-2.0-or-later"],
+    "gpl-2.0-or-later": [
+      "permissive", "apache", "weak-copyleft", "lgpl-3.0", "gpl-2.0-only", "gpl-2.0-or-later",
+      "gpl-3.0", "agpl-3.0"
+    ],
+    "gpl-3.0": ["permissive", "apache", "weak-copyleft", "lgpl-3.0", "gpl-2.0-or-later", "gpl-3.0", "agpl-3.0"],
+    "agpl-3.0": ["permissive", "apache", "weak-copyleft", "lgpl-3.0", "gpl-2.0-or-later", "gpl-3.0", "agpl-3.0"]
+  },
+  "notes": {
+    "apache": "Apache-2.0 carries patent terms that GPL-2.0-only does not allow.",
+    "lgpl-3.0": "LGPL-3.0 is GPL-3.0 with additional permissions, so it cannot be combined with GPL-2.0-only.",
+    "gpl-2.0-only": "GPL-2.0-only puts its terms on the whole work and allows no later GPL version, so it goes neither with a permissive app nor with GPL-3.0, AGPL-3.0, LGPL-3.0 or Apache-2.0.",
+    "gpl-2.0-or-later": "GPL-2.0-or-later puts the GPL on the whole work, which an app under a permissive or a weak copyleft licence cannot carry; taken under GPL-3.0 it goes with GPL-3.0 and AGPL-3.0.",
+    "gpl-3.0": "GPL-3.0 puts its terms on the whole work, which an app under a permissive or a weak copyleft licence cannot carry, and GPL-2.0-only cannot take them.",
+    "agpl-3.0": "AGPL-3.0 puts its terms, the source offer to every user over a network among them, on the whole work; only GPL-3.0 allows that combination, by its section 13."
+  },
+
+  "non-free": [
+    "BUSL-1.1", "CC-BY-NC-1.0", "CC-BY-NC-2.0", "CC-BY-NC-2.5", "CC-BY-NC-3.0", "CC-BY-NC-4.0",
+    "CC-BY-NC-ND-1.0", "CC-BY-NC-ND-2.0", "CC-BY-NC-ND-2.5", "CC-BY-NC-ND-3.0", "CC-BY-NC-ND-4.0",
+    "CC-BY-NC-SA-1.0", "CC-BY-NC-SA-2.0", "CC-BY-NC-SA-2.5", "CC-BY-NC-SA-3.0", "CC-BY-NC-SA-4.0",
+    "CC-BY-ND-1.0", "CC-BY-ND-2.0", "CC-BY-ND-2.5", "CC-BY-ND-3.0", "CC-BY-ND-4.0", "Elastic-2.0",
+    "proprietary", "SSPL-1.0", "UNLICENSED"
+  ],
+  "aliases": {
+    "AGPL-3.0": "AGPL-3.0-only",
+    "AGPL-3.0+": "AGPL-3.0-or-later",
+    "BSD": null,
+    "GPL-2.0": "GPL-2.0-only",
+    "GPL-2.0+": "GPL-2.0-or-later",
+    "GPL-3.0": "GPL-3.0-only",
+    "GPL-3.0+": "GPL-3.0-or-later",
+    "LGPL-2.1": "LGPL-2.1-only",
+    "LGPL-2.1+": "LGPL-2.1-or-later",
+    "LGPL-3.0": "LGPL-3.0-only",
+    "LGPL-3.0+": "LGPL-3.0-or-later",
+    "agpl": "AGPL-3.0-or-later",
+    "apache": "Apache-2.0",
+    "gpl3": "GPL-3.0-only",
+    "mit": "MIT",
+    "mpl": "MPL-2.0"
+  },
+  "examples": [
+    { "app": "AGPL-3.0-or-later", "licence": "MIT", "verdict": "compatible" },
+    { "app": "AGPL-3.0-or-later", "licence": "Apache-2.0", "verdict": "compatible" },
+    { "app": "AGPL-3.0-or-later", "licence": "GPL-3.0-or-later", "verdict": "compatible" },
+    { "app": "AGPL-3.0-or-later", "licence": "GPL-2.0-or-later", "verdict": "compatible" },
+    { "app": "AGPL-3.0-or-later", "licence": "GPL-2.0-only", "verdict": "incompatible" },
+    { "app": "AGPL-3.0-or-later", "licence": "GPL-2.0", "verdict": "incompatible" },
+    { "app": "AGPL-3.0-or-later", "licence": "(MIT OR GPL-3.0-or-later)", "verdict": "compatible" },
+    { "app": "AGPL-3.0-or-later", "licence": "MIT AND GPL-2.0-only", "verdict": "incompatible" },
+    { "app": "AGPL-3.0-or-later", "licence": "CC-BY-NC-4.0", "verdict": "non-free" },
+    { "app": "AGPL-3.0-or-later", "licence": "UNLICENSED", "verdict": "non-free" },
+    { "app": "AGPL-3.0-or-later", "licence": "MIT OR UNLICENSED", "verdict": "compatible" },
+    { "app": "AGPL-3.0-or-later", "licence": "BSD", "verdict": "unknown" },
+    { "app": "AGPL-3.0-or-later", "licence": "SEE LICENSE IN LICENSE.md", "verdict": "unknown" },
+    { "app": "AGPL-3.0-or-later", "licence": "GPL-2.0-only WITH Classpath-exception-2.0", "verdict": "incompatible" },
+    { "app": "agpl", "licence": "LGPL-2.1-or-later", "verdict": "compatible" },
+    { "app": "MIT", "licence": "GPL-3.0-or-later", "verdict": "incompatible" },
+    { "app": "MIT", "licence": "AGPL-3.0-only", "verdict": "incompatible" },
+    { "app": "MIT", "licence": "MPL-2.0", "verdict": "compatible" },
+    { "app": "Apache-2.0", "licence": "GPL-2.0-or-later", "verdict": "incompatible" },
+    { "app": "GPL-2.0-only", "licence": "LGPL-3.0-or-later", "verdict": "incompatible" },
+    { "app": "GPL-2.0-only", "licence": "LGPL-2.1-only", "verdict": "compatible" },
+    { "app": "GPL-2.0-only", "licence": "Apache-2.0", "verdict": "incompatible" },
+    { "app": "GPL-2.0-only", "licence": "GPL-3.0-or-later", "verdict": "incompatible" },
+    { "app": "GPL-2.0-or-later", "licence": "Apache-2.0", "verdict": "compatible" },
+    { "app": "GPL-3.0-or-later", "licence": "AGPL-3.0-or-later", "verdict": "compatible" },
+    { "app": "AGPL-3.0-or-later", "licence": "EPL-2.0", "verdict": "unknown" }
+  ]
+}

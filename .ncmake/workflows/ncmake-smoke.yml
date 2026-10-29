@@ -26,8 +26,9 @@
 # reports success. Whenever the list cannot be had, end-to-end runs, and so it does
 # when the changes job itself fails: only its explicit false skips it.
 #
-# The rule file of l10n-lint is data that a pull request may change on its own,
-# so its examples are tested on every run, in a job of seconds that needs no app.
+# The rule file of l10n-lint and the licence table of deps-audit are data that a
+# pull request may change on its own, so their examples are tested on every run,
+# in a job of seconds that needs no app.
 
 name: Smoke
 
@@ -112,6 +113,18 @@ jobs:
 
       - name: Self-test of lib/l10n-rules.json
         run: node lib/l10n-lint.mjs --self-test
+
+  licence-table:
+    name: test the licence table of deps-audit against its examples
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out this revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Self-test of lib/licences.json
+        run: node lib/deps-audit.mjs --self-test
 
   end-to-end:
     name: build twofactor_oath with this revision
