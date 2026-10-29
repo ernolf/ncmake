@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
 # SPDX-License-Identifier: MIT
 #
-# ncmake developer module: five checks on a checkout.
+# ncmake developer module: six checks on a checkout.
 #
 # consistency-audit reads the metadata of a checkout and holds the statements it
 # finds against each other: the version in appinfo/info.xml against the one in
@@ -48,6 +48,14 @@
 # report to build/reports and exits 0 with findings: the gates are workflows of
 # ernolf/ncmake-workflows.
 #
+# secrets-audit asks gitleaks whether a key or a token is in what the release
+# ships, or anywhere in the history of the checkout, and names a key, a key store,
+# an .env file, the auth.json of composer and an .npmrc with a credential by their
+# names as well. make tag and make dist run it on what ships through the core's
+# ship_check and stop on a finding. gitleaks is the binary of its GitHub release,
+# checked against its digest and kept in tools/ of the ncmake cache, fetched with
+# the fetcher of the lint module.
+#
 # This is its own module rather than a third target in mk/bundle.mk because a
 # module file cannot be renamed: the core includes every *.mk-<ref> it finds in the
 # per-machine cache and dev-init only ever adds files, so a renamed bundle.mk would
@@ -55,7 +63,7 @@
 # separate file costs nothing beyond its own header: fetching the analysers is the
 # core's, under "Analyser libraries" there.
 #
-# The same discovery rule is why build-verify, changelog-lint, php-compat and deps-audit are
+# The same discovery rule is why build-verify, changelog-lint, php-compat, deps-audit and secrets-audit are
 # targets in this file and not modules of their own: a new module file reaches a machine only on the
 # next dev-init, while a target added to a file the cache already holds arrives with
 # the next refresh.
@@ -73,10 +81,11 @@ verify_libs      = build-verify.mjs bundler-config.mjs report-text.mjs
 changelog_libs   = changelog-lint.mjs report-text.mjs
 compat_libs      = php-compat.mjs report-text.mjs
 deps_libs        = deps-audit.mjs deps-audit.php licences.json report-text.mjs
+secrets_libs     = secrets-audit.mjs report-text.mjs
 
 # What the goals on this command line need, handed to the core's analyser library
 # section: appended, never set, because every analyser module adds its own.
-ncmake_libs += $(if $(filter consistency-audit,$(MAKECMDGOALS)),$(consistency_libs)) $(if $(filter build-verify,$(MAKECMDGOALS)),$(verify_libs)) $(if $(filter changelog-lint,$(MAKECMDGOALS)),$(changelog_libs)) $(if $(filter php-compat,$(MAKECMDGOALS)),$(compat_libs)) $(if $(filter deps-audit,$(MAKECMDGOALS)),$(deps_libs))
+ncmake_libs += $(if $(filter consistency-audit,$(MAKECMDGOALS)),$(consistency_libs)) $(if $(filter build-verify,$(MAKECMDGOALS)),$(verify_libs)) $(if $(filter changelog-lint,$(MAKECMDGOALS)),$(changelog_libs)) $(if $(filter php-compat,$(MAKECMDGOALS)),$(compat_libs)) $(if $(filter deps-audit,$(MAKECMDGOALS)),$(deps_libs)) $(if $(filter secrets-audit,$(MAKECMDGOALS)),$(secrets_libs))
 
 # The app is mounted at /app inside the container, so the mount point cannot tell
 # the analyser what the app directory is called - the one thing it needs the host
@@ -121,6 +130,7 @@ verify_cmdline = make build-verify ARGS=\"%s\"
 changelog_cmdline = make changelog-lint ARGS=\"%s\"
 compat_cmdline    = make php-compat ARGS=\"%s\"
 deps_cmdline      = make deps-audit ARGS=\"%s\"
+secrets_cmdline   = make secrets-audit ARGS=\"%s\"
 
 # In a container the scratch tree is in the container's own /tmp and goes with it,
 # so the verifier must neither offer to keep it nor name it as kept. The condition
@@ -183,7 +193,45 @@ compat_run   = out=$(compat_dir)/$(php_version); php -n -r "echo PHP_VERSION;" >
 # runs in the analyser, which carries the app's Node line as build-verify does.
 deps_dir = build/deps-audit
 
-.PHONY: consistency-audit build-verify changelog-lint php-compat php-compat-run deps-audit deps-audit-composer
+# == secrets-audit ==
+# gitleaks runs as the Linux binary of its GitHub release, checked against the
+# digest of its checksums file, in the analyser's Node container, which carries
+# the git it calls. It is fetched by lint_bin_fetch of the lint module, which
+# make dev-init brings along with this one.
+gitleaks_version        = 8.30.1
+gitleaks_sha256_x86_64  = 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+gitleaks_sha256_aarch64 = e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080
+secrets_gitleaks        = gitleaks $(gitleaks_version) https://github.com/gitleaks/gitleaks/releases/download/v$(gitleaks_version) \
+	gitleaks_$(gitleaks_version)_linux_x64.tar.gz $(gitleaks_sha256_x86_64) gitleaks_$(gitleaks_version)_linux_arm64.tar.gz $(gitleaks_sha256_aarch64) gitleaks
+secrets_core = $(if $(value lint_bin_fetch),:,echo "ERROR: secrets-audit fetches gitleaks through the lint module - run 'make dev-init'" >&2; exit 1)
+
+# What ships, as a tree inside the app, since the container sees only the app:
+# secrets_tree when ship_check names one (make dist, the staged tree), else the
+# unpacked TARBALL=<file>, else the files make stage takes from the checkout,
+# copied as make stage copies them. The copy goes when the run ends.
+secrets_dir   = build/secrets-audit
+SCOPE        ?= all
+secrets_scope = $(if $(filter shipped history all,$(SCOPE)),$(SCOPE),$(error SCOPE is shipped, history or all))
+secrets_ship  = $(if $(filter history,$(secrets_scope)),, \
+	$(if $(secrets_tree),tree='$(secrets_tree)' from=stage, \
+	$(if $(TARBALL),mkdir -p $(secrets_dir)/tarball && tar -xzf "$(TARBALL)" -C $(secrets_dir)/tarball --no-same-owner || exit 1; tree=$(secrets_dir)/tarball from=tarball, \
+	mkdir -p "$(secrets_dir)/stage/$(app_id)" && rsync -a --relative $(stage_excludes) $(addprefix ./,$(keep_existing)) "$(secrets_dir)/stage/$(app_id)/" || exit 1; tree=$(secrets_dir)/stage/$(app_id) from=checkout));)
+# The tree is named by the shell of the recipe, so the analyser's command, which
+# runs in another shell, gets it from outside its quotes.
+secrets_args  = --scope=$(secrets_scope) $(if $(filter history,$(secrets_scope)),,--shipped="'"$$tree"'" --from='"$$from"') $(if $(COMMITS),--commits="$(COMMITS)")
+ifeq ($(filter $(RUNTIME),bare none),)
+  secrets_run = $(call ncmake_lib_in,$(lib_node_image),-v "$$gdir":/ncmake-gitleaks:ro -e SECRETS_AUDIT_GITLEAKS=/ncmake-gitleaks/gitleaks)
+else
+  secrets_run = export SECRETS_AUDIT_GITLEAKS="$$gdir/gitleaks" && $(ncmake_lib_read_run)
+endif
+
+# make tag and make dist check what ships through the core's ship_check: $(1) is
+# the staged tree of make dist, empty for make tag. NO_SECRETS_AUDIT=1 skips it.
+ship_check = $(if $(filter 1,$(NO_SECRETS_AUDIT)),echo "==> NO_SECRETS_AUDIT=1: what ships is not checked for secrets.", \
+	$(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory secrets-audit SCOPE=shipped $(if $(1),secrets_tree=$(1)) \
+	|| { echo "ERROR: stopped on the secret above - take it out of what ships and revoke it, or go on regardless with NO_SECRETS_AUDIT=1." >&2; exit 1; })
+
+.PHONY: consistency-audit build-verify changelog-lint php-compat php-compat-run deps-audit deps-audit-composer secrets-audit
 
 consistency-audit:
 	@$(audit_core)
@@ -250,6 +298,17 @@ deps-audit: check-app
 
 deps-audit-composer:
 	@$(php_run) 'php $(deps_dir)/deps-audit.php >$(deps_dir)/composer.json 2>$(deps_dir)/composer.err'
+
+secrets-audit: check-app
+	@$(audit_core)
+	@$(secrets_core)
+	@$(if $(and $(CI)$(GITHUB_ACTIONS),$(filter --reveal,$(ARGS))),echo "ERROR: ARGS=--reveal shows the secrets and is refused where CI is set" >&2; exit 1,:)
+	@$(call ncmake_lib_need,$(secrets_libs))
+	@echo "==> secrets-audit$(if $(strip $(ARGS)), $(ARGS)) (gitleaks $(gitleaks_version), SCOPE=$(secrets_scope), RUNTIME=$(RUNTIME))" >&2
+	@gdir=$$($(lint_bin_fetch) $(secrets_gitleaks)) || exit 1; \
+	trap 'rm -rf $(secrets_dir)' EXIT; rm -rf $(secrets_dir) && mkdir -p $(secrets_dir) || exit 1; \
+	$(secrets_ship) \
+	$(secrets_run) '$(call ncmake_lib_guard,secrets-audit) SECRETS_AUDIT_CMDLINE="$(secrets_cmdline)" node $(ncmake_lib_path)/secrets-audit.mjs $(secrets_args) $(ARGS) $(ncmake_json_arg)'
 
 define help_consistency-audit
 make consistency-audit [ARGS="<audit arguments>"] [JSON=<file>]
@@ -448,6 +507,70 @@ licences the lock file does not record. With
 RUNTIME=bare composer, npm and corepack run on the host.
 endef
 
+define help_secrets-audit
+make secrets-audit [SCOPE=shipped|history|all] [TARBALL=<file>]
+                   [COMMITS=<range>] [ARGS="<audit arguments>"] [JSON=<file>]
+
+Checks whether a key or a token is in what the release ships, or in the history
+of the checkout. A secret committed to an app repository is public as soon as it
+is pushed, stays in the history after a later commit removes it, and inside the
+shipped file set it is in every tarball on the App Store.
+
+gitleaks looks for secrets by its own rules, in two scopes:
+  shipped   the files make stage takes from the checkout, copied aside as make
+            stage copies them, or the tarball TARBALL=<file> names
+  history   every commit of the checkout, or the commits of COMMITS=<range>,
+            a git log range such as main..HEAD
+SCOPE=all, the default, checks both. Next to the gitleaks rules a file is
+reported by its name: a private key (*.key, id_rsa, id_ed25519 and their
+siblings, a *.pem with a private key block), a key store (*.p12, *.pfx), an
+.env file (not .env.example, .env.dist and the like), the auth.json of composer
+with a credential and an .npmrc with a token. The public certificate of the
+integrity signature, .ncmake/certificate.crt, is committed on purpose and never
+reported.
+
+Findings are marked [!] worth changing, [i] worth knowing, [ok] nothing found:
+  [!] secret-shipped     a secret in what ships: take it out and revoke it
+  [!] secret-in-history  a secret in a commit, with the commit that added it: it
+                         has to be revoked, removing it does not make it secret
+                         again
+Each finding gives the rule, the file, the line and the commit, and never the
+secret: gitleaks runs with --redact. ARGS=--reveal shows the line of each
+finding on the terminal, for the maintainer who has to find it; it never
+reaches the JSON, and a run where CI is set refuses it. Both findings carry
+"security": true in the JSON, and a fingerprint, which .gitleaksignore of the
+repository takes to silence a finding that is revoked and meant to stay.
+.gitleaks.toml of the repository configures gitleaks for both scopes.
+
+make tag checks what ships before its confirmation, and make dist checks the
+staged tree before it packs it; both stop on secret-shipped, and
+NO_SECRETS_AUDIT=1 goes on regardless. The history has its own gate, the
+lint-secrets workflow of ernolf/ncmake-workflows.
+
+The exit code is 1 when a finding is marked [!]. ARGS is passed to the analyser:
+  make secrets-audit                    what ships and every commit
+  make secrets-audit SCOPE=shipped      what ships, as make tag checks it
+  make secrets-audit TARBALL=<file>     a tarball, e.g. the one make dist packs
+  make secrets-audit SCOPE=history COMMITS=main..HEAD  the commits of a branch
+  make secrets-audit ARGS=--details     every commit that changed a file found
+                                        by its name
+  make secrets-audit ARGS=--reveal      the line of each finding, on the
+                                        terminal only
+  make secrets-audit ARGS=--json > secrets.json  machine-readable, nothing else
+  make secrets-audit JSON=secrets.json  the report, and the JSON in secrets.json
+  make secrets-audit ARGS=--help        the analyser's own option list
+
+JSON=<file> writes the JSON of ARGS=--json to <file> as well, from the same run,
+and the report is printed as without it. The file can lie outside the app; it is
+replaced once the run is complete, and a run that stops on an error writes none.
+
+gitleaks is the Linux binary of its GitHub release, checked against its
+digest, kept in tools/ of the ncmake cache and run in the throwaway Node
+container, which carries git; the lint module, which make dev-init brings
+along, fetches it. It reads no network. With RUNTIME=bare it runs on the host,
+with the host's git.
+endef
+
 define help_build-verify
 make build-verify [ARGS="<verify arguments>"] [JSON=<file>]
 
@@ -585,3 +708,5 @@ help::
 	@echo "    $(cd)optional $(cv)PHP=all$(cd), see $(cv)make help-php-compat$(c0)"
 	@echo "  $(ct)deps-audit$(c0)           Whether a dependency that ships has a published vulnerability or a licence the app cannot ship"
 	@echo "    $(cd)optional $(cv)ARGS=\"--details\"$(cd), see $(cv)make help-deps-audit$(c0)"
+	@echo "  $(ct)secrets-audit$(c0)        Whether a key or a token is in what ships, or in the history"
+	@echo "    $(cd)optional $(cv)SCOPE=shipped|history$(cd), see $(cv)make help-secrets-audit$(c0)"
