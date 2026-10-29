@@ -249,7 +249,31 @@ secrets_ignore_list = $(cache_dir)/secrets-ignore.bullets
 define secrets_ignore_tool
 import json
 import os
+import re
 import sys
+
+
+# An app set up for REUSE, as make reuse tells one: LICENSES/, REUSE.toml or
+# .reuse/dep5. A new .gitleaksignore there carries a header of its own, as the
+# other ignore files of an app do, with the copyright and the licence REUSE.toml
+# states for itself, as make l10n-init takes them for its files.
+def reuse_app():
+    return os.path.isdir('LICENSES') or os.path.isfile('REUSE.toml') or os.path.isfile('.reuse/dep5')
+
+
+def reuse_header():
+    try:
+        with open('REUSE.toml', encoding='utf-8') as f:
+            text = f.read()
+    except OSError:
+        return []
+    # REUSE-IgnoreStart
+    copyright = re.search(r'^#\s*SPDX-FileCopyrightText:\s*(.+?)\s*$$', text, re.M)
+    licence = re.search(r'^#\s*SPDX-License-Identifier:\s*(.+?)\s*$$', text, re.M)
+    if not (copyright and licence):
+        return []
+    return ['# SPDX-FileCopyrightText: ' + copyright.group(1), '# SPDX-License-Identifier: ' + licence.group(1)]
+    # REUSE-IgnoreEnd
 
 
 def picked(answer, count):
@@ -307,6 +331,16 @@ def main():
     if not reason:
         reason = input('Why are they false positives? (Enter to leave the reason out): ').strip()
     block, bullets = [], []
+    if reuse_app() and not os.path.exists(ignore_file):
+        block = reuse_header()
+        if block:
+            bullets.append('- Give .gitleaksignore the copyright and licence REUSE.toml states')
+        else:
+            print('REUSE.toml states no copyright and licence of its own: give .gitleaksignore a header, or make reuse fails.')
+    elif reuse_app():
+        with open(ignore_file, encoding='utf-8') as f:
+            if 'SPDX-License-Identifier' not in f.read():
+                print('.gitleaksignore has no licence header: add one, or make reuse fails.')
     for i in chosen:
         f, where, when = rows[i]
         comment = f"# {f['rule']} in {where}, {when}" + (f': {reason}' if reason else '')
@@ -713,6 +747,10 @@ picked is appended to .gitleaksignore in the root of the checkout:
   072899102f2e...:tests/OtpTest.php:generic-api-key:34
 A finding already in the file is not listed. Without a terminal it only lists,
 and changes nothing. .gitleaksignore is outside the keep model and never ships.
+In an app set up for REUSE (LICENSES/, REUSE.toml or .reuse/dep5), a new
+.gitleaksignore starts with the copyright and licence REUSE.toml states for
+itself, as the other ignore files of an app carry them; an existing one without
+a licence header is named, since make reuse fails on it.
 
 Without flags it only writes the file and names it for git add. COMMIT=1 runs
 from main or a stable* branch, commits it on the branch ncmake/secrets/ignore
