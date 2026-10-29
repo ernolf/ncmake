@@ -16,8 +16,13 @@
 // Composer decides everything that depends on the constraints; this only picks
 // the version to ask about. Plugins stay off: a plugin of the app would run code
 // of a package the audit is about.
+//
+// With DEPS_AUDIT_NO_ADVISORIES=1 (make deps-audit NO_ADVISORIES=1) only the
+// abandoned packages are kept, and the bit of the exit code that says an advisory
+// was found is cleared, so build/deps-audit holds nothing about a vulnerability.
 
 $composer = getenv('DEPS_AUDIT_COMPOSER') ?: 'composer';
+$advisories = getenv('DEPS_AUDIT_NO_ADVISORIES') !== '1';
 // composer frames an error to the width of the terminal and breaks its words
 // there; a wide one keeps the message on one line.
 putenv('COLUMNS=1000');
@@ -86,6 +91,10 @@ function stable(string $v): bool
 
 $audit = run(['audit', '--locked', '--no-dev', '--format=json', '--abandoned=report']);
 $json = json_decode($audit['out'], true);
+if (!$advisories && is_array($json)) {
+	$json = ['abandoned' => $json['abandoned'] ?? []];
+	$audit['rc'] &= ~1;
+}
 $result = [
 	'rc' => $audit['rc'],
 	'audit' => is_array($json) ? $json : null,
