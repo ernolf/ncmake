@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
 # SPDX-License-Identifier: MIT
 #
-# ncmake developer module: four checks on a checkout.
+# ncmake developer module: five checks on a checkout.
 #
 # consistency-audit reads the metadata of a checkout and holds the statements it
 # finds against each other: the version in appinfo/info.xml against the one in
@@ -37,6 +37,15 @@
 # it. The runs use the core's build image, one make per minor, and leave their
 # output under build/php-compat, which the analyser then reads.
 #
+# deps-audit asks the package managers' own audits whether a dependency that
+# ships has a published vulnerability: composer audit over composer.lock in the
+# build image of the PHP floor, and the audit of npm, pnpm or yarn over the npm
+# lock file on the Node the app declares, dev dependencies left out on both
+# sides. For each vulnerable package it names the release that fixes it and
+# whether the declared constraints let an update reach that release. It reads
+# the advisories from the network, writes its report to build/reports and exits
+# 0 with findings: the gate is a workflow of ernolf/ncmake-workflows.
+#
 # This is its own module rather than a third target in mk/bundle.mk because a
 # module file cannot be renamed: the core includes every *.mk-<ref> it finds in the
 # per-machine cache and dev-init only ever adds files, so a renamed bundle.mk would
@@ -44,7 +53,7 @@
 # separate file costs nothing beyond its own header: fetching the analysers is the
 # core's, under "Analyser libraries" there.
 #
-# The same discovery rule is why build-verify, changelog-lint and php-compat are
+# The same discovery rule is why build-verify, changelog-lint, php-compat and deps-audit are
 # targets in this file and not modules of their own: a new module file reaches a machine only on the
 # next dev-init, while a target added to a file the cache already holds arrives with
 # the next refresh.
@@ -61,10 +70,11 @@ consistency_libs = consistency-audit.mjs report-text.mjs
 verify_libs      = build-verify.mjs bundler-config.mjs report-text.mjs
 changelog_libs   = changelog-lint.mjs report-text.mjs
 compat_libs      = php-compat.mjs report-text.mjs
+deps_libs        = deps-audit.mjs deps-audit.php report-text.mjs
 
 # What the goals on this command line need, handed to the core's analyser library
 # section: appended, never set, because every analyser module adds its own.
-ncmake_libs += $(if $(filter consistency-audit,$(MAKECMDGOALS)),$(consistency_libs)) $(if $(filter build-verify,$(MAKECMDGOALS)),$(verify_libs)) $(if $(filter changelog-lint,$(MAKECMDGOALS)),$(changelog_libs)) $(if $(filter php-compat,$(MAKECMDGOALS)),$(compat_libs))
+ncmake_libs += $(if $(filter consistency-audit,$(MAKECMDGOALS)),$(consistency_libs)) $(if $(filter build-verify,$(MAKECMDGOALS)),$(verify_libs)) $(if $(filter changelog-lint,$(MAKECMDGOALS)),$(changelog_libs)) $(if $(filter php-compat,$(MAKECMDGOALS)),$(compat_libs)) $(if $(filter deps-audit,$(MAKECMDGOALS)),$(deps_libs))
 
 # The app is mounted at /app inside the container, so the mount point cannot tell
 # the analyser what the app directory is called - the one thing it needs the host
@@ -108,6 +118,7 @@ consistency_keep = $(keep_dirs) $(keep_files) $(keep_extra)
 verify_cmdline = make build-verify ARGS=\"%s\"
 changelog_cmdline = make changelog-lint ARGS=\"%s\"
 compat_cmdline    = make php-compat ARGS=\"%s\"
+deps_cmdline      = make deps-audit ARGS=\"%s\"
 
 # In a container the scratch tree is in the container's own /tmp and goes with it,
 # so the verifier must neither offer to keep it nor name it as kept. The condition
@@ -163,7 +174,14 @@ compat_lint  = many=$$(php -n -r "echo PHP_VERSION_ID >= 80300 ? 1 : 0;"); find 
 # of an extension that does not load to stdout, which would end up in the file.
 compat_run   = out=$(compat_dir)/$(php_version); php -n -r "echo PHP_VERSION;" >"$$out/version"; if [ -f vendor/composer/installed.json ] || [ -f composer.lock ]; then composer check-platform-reqs --no-dev --format=json >"$$out/platform.json" 2>"$$out/platform.err"; echo $$? >"$$out/platform.rc"; fi; $(compat_lint) >"$$out/lint.txt"
 
-.PHONY: consistency-audit build-verify changelog-lint php-compat php-compat-run
+# deps-audit runs composer audit where make build resolves the dependencies, in
+# the build image of the PHP floor, in a make of its own as php-compat does. The
+# container sees only the app, so the composer half, lib/deps-audit.php, is
+# copied into build/deps-audit beside the output it leaves there. The npm half
+# runs in the analyser, which carries the app's Node line as build-verify does.
+deps_dir = build/deps-audit
+
+.PHONY: consistency-audit build-verify changelog-lint php-compat php-compat-run deps-audit deps-audit-composer
 
 consistency-audit:
 	@$(audit_core)
@@ -215,6 +233,21 @@ php-compat: check-app
 
 php-compat-run:
 	@$(php_run) '$(compat_run)'
+
+deps-audit: check-app
+	@$(audit_core)
+	@$(call ncmake_lib_need,$(deps_libs))
+	@echo "==> deps-audit$(if $(strip $(ARGS)), $(ARGS)) (RUNTIME=$(RUNTIME))" >&2
+	@rm -rf $(deps_dir) && mkdir -p $(deps_dir) || exit 1; \
+	if [ -f composer.lock ]; then \
+		echo "==> composer audit on PHP $(php_min)" >&2; \
+		cp "$(ncmake_lib_dir)/deps-audit.php" $(deps_dir)/ && \
+		$(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory deps-audit-composer PHP=min || echo "$$?" >$(deps_dir)/composer.failed; \
+	fi; \
+	$(ncmake_lib_run) '$(call ncmake_lib_guard,deps-audit) DEPS_AUDIT_CMDLINE="$(deps_cmdline)" node $(ncmake_lib_path)/deps-audit.mjs $(ARGS) $(ncmake_json_arg)'
+
+deps-audit-composer:
+	@$(php_run) 'php $(deps_dir)/deps-audit.php >$(deps_dir)/composer.json 2>$(deps_dir)/composer.err'
 
 define help_consistency-audit
 make consistency-audit [ARGS="<audit arguments>"] [JSON=<file>]
@@ -336,6 +369,58 @@ replaced once the run is complete, and a run that stops on an error writes none.
 It needs the network for versioncheck.php and the images. With RUNTIME=bare it
 runs on the PHP of the host, once per minor, and says so; the PHP ahead of
 master, which only its image carries, is left out there.
+endef
+
+define help_deps-audit
+make deps-audit [ARGS="<audit arguments>"] [JSON=<file>]
+
+Checks whether a dependency that ships has a published vulnerability. A release
+ships the runtime packages of composer.lock in vendor/ and the production
+packages of the npm lock file bundled into js/; this asks the package managers'
+own audits about exactly those, dev dependencies, build tools and test
+frameworks left out:
+  composer audit --locked --no-dev
+      in the build image of the PHP floor, ghcr.io/ernolf/ncmake-php:<floor>;
+      it reports abandoned packages as well
+  npm audit --omit=dev, pnpm audit --prod, yarn npm audit --environment
+  production --recursive, or for Yarn 1 yarn audit --groups dependencies
+      as the lock file decides, on the Node line the app declares; pnpm and
+      yarn come through corepack, as in make build
+
+Each vulnerable package is reported once, with its advisories, the highest
+severity among them and the first released version above the locked one that
+fixes them all. Whether the declared constraints let an update reach that
+version decides between the two findings:
+  [!] vulnerable-dependency         they allow it, and the update command named
+                                    in the finding is enough
+  [!] vulnerable-dependency-pinned  a constraint excludes it, and the finding
+                                    names the constraint to widen and who
+                                    declares it
+composer decides that itself, with composer why-not. For npm the ranges come
+from package-lock.json or yarn.lock; pnpm-lock.yaml records only those of
+package.json, so for a package further down the finding says so. [i] marks an
+abandoned package with its suggested replacement, an advisory source that did
+not answer, in which case nothing of that lock file was checked, and a
+dependency without a lock file to audit. Both vulnerability findings carry
+"security": true in the JSON.
+
+The report is written to build/reports/deps-audit.txt and
+build/reports/deps-audit.json, and the exit code is 0 with or without findings:
+the gate is the lint-deps workflow of ernolf/ncmake-workflows, with a severity
+threshold of its own. The raw output of the audits stays in build/deps-audit.
+ARGS is passed to the analyser:
+  make deps-audit                       composer.lock and the npm lock file
+  make deps-audit ARGS=--details        every advisory of a package
+  make deps-audit ARGS=--json > deps.json  machine-readable, nothing else
+  make deps-audit JSON=deps.json        the report, and the JSON in deps.json
+  make deps-audit ARGS=--help           the analyser's own option list
+
+JSON=<file> writes the JSON of ARGS=--json to <file> as well, from the same run,
+and the report is printed as without it. The file can lie outside the app; it is
+replaced once the run is complete, and a run that stops on an error writes none.
+
+It needs the network for the advisories and the released versions. With
+RUNTIME=bare composer, npm and corepack run on the host.
 endef
 
 define help_build-verify
@@ -473,3 +558,5 @@ help::
 	@echo "    $(cd)optional $(cv)ARGS=\"--nightly\"$(cd), see $(cv)make help-changelog-lint$(c0)"
 	@echo "  $(ct)php-compat$(c0)           Whether the app runs on the PHP floor and ceiling of its servers"
 	@echo "    $(cd)optional $(cv)PHP=all$(cd), see $(cv)make help-php-compat$(c0)"
+	@echo "  $(ct)deps-audit$(c0)           Whether a dependency that ships has a published vulnerability"
+	@echo "    $(cd)optional $(cv)ARGS=\"--details\"$(cd), see $(cv)make help-deps-audit$(c0)"
