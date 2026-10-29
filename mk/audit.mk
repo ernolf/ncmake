@@ -52,7 +52,9 @@
 # ships, or anywhere in the history of the checkout, and names a key, a key store,
 # an .env file, the auth.json of composer and an .npmrc with a credential by their
 # names as well. make tag and make dist run it on what ships through the core's
-# ship_check and stop on a finding. gitleaks is the binary of its GitHub release,
+# ship_check and stop on a finding. secrets-ignore lists its findings and adds
+# the fingerprints of those the maintainer marks as false positives to
+# .gitleaksignore, with a comment that says why. gitleaks is the binary of its GitHub release,
 # checked against its digest and kept in tools/ of the ncmake cache, fetched with
 # the fetcher of the lint module.
 #
@@ -231,7 +233,104 @@ ship_check = $(if $(filter 1,$(NO_SECRETS_AUDIT)),echo "==> NO_SECRETS_AUDIT=1: 
 	$(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory secrets-audit SCOPE=shipped $(if $(1),secrets_tree=$(1)) \
 	|| { echo "ERROR: stopped on the secret above - take it out of what ships and revoke it, or go on regardless with NO_SECRETS_AUDIT=1." >&2; exit 1; })
 
-.PHONY: consistency-audit build-verify changelog-lint php-compat php-compat-run deps-audit deps-audit-composer secrets-audit
+# == secrets-ignore ==
+# The findings come from a run of secrets-audit with JSON= into the build cache,
+# with the SCOPE=, TARBALL=, COMMITS= and ARGS= of the command line. The tool
+# that lists them and asks which are false positives runs on the host, since it
+# needs the terminal: plain python3, written to the build cache at run time, as
+# the core writes the integrity tool. It writes nothing into the checkout; the
+# lines it returns are appended to .gitleaksignore by the recipe, on the branch of
+# COMMIT=1 or PR=1 where one is asked for. REASON reaches it from the
+# environment, where make puts every variable of its command line.
+secrets_ignore_json = $(cache_dir)/secrets-ignore.json
+secrets_ignore_add  = $(cache_dir)/secrets-ignore.add
+secrets_ignore_list = $(cache_dir)/secrets-ignore.bullets
+
+define secrets_ignore_tool
+import json
+import os
+import sys
+
+
+def picked(answer, count):
+    if answer == 'all':
+        return list(range(count))
+    out = []
+    for word in answer.replace(',', ' ').split():
+        first, _, last = word.partition('-')
+        if not first.isdigit() or (last and not last.isdigit()):
+            sys.exit(f'secrets-ignore: {word} is no number or range; nothing is changed.')
+        a, b = int(first), int(last or first)
+        if not 1 <= a <= b <= count:
+            sys.exit(f'secrets-ignore: {word} is outside 1-{count}; nothing is changed.')
+        out.extend(i - 1 for i in range(a, b + 1) if i - 1 not in out)
+    return out
+
+
+def main():
+    report, ignore_file, add_file, list_file = sys.argv[1:5]
+    reason = os.environ.get('REASON', '').strip()
+    try:
+        with open(report, encoding='utf-8') as f:
+            data = json.load(f)
+    except (OSError, ValueError) as e:
+        sys.exit(f'secrets-ignore: the report of secrets-audit could not be read: {e}')
+    known = set()
+    if os.path.exists(ignore_file):
+        with open(ignore_file, encoding='utf-8') as f:
+            known = {line.strip() for line in f if line.strip() and not line.lstrip().startswith('#')}
+    found = [f for f in data.get('findings', [])
+             if f.get('id', '').startswith('secret-') and f.get('fingerprint') and f['fingerprint'] not in known]
+    for path in (add_file, list_file):
+        open(path, 'w').close()
+    if not found:
+        print('==> secrets-audit reports no finding that is not in .gitleaksignore already.')
+        return
+    print()
+    print('Findings of secrets-audit:')
+    rows = []
+    for f in found:
+        where = f['file'] + (f":{f['line']}" if f.get('line') else '')
+        when = f"{f['commit'][:12]} ({(f.get('date') or '')[:10]})" if f.get('commit') else 'in what ships'
+        rows.append((f, where, when))
+    width = max(len(f['rule']) for f in found)
+    for i, (f, where, when) in enumerate(rows, 1):
+        print(f'  {i:>3}  {f["rule"]:<{width}}  {where}  {when}')
+    if not sys.stdin.isatty():
+        print('No terminal to ask on: nothing is changed.')
+        return
+    answer = input('Which are false positives? Numbers or ranges (1 3-5), all, Enter for none: ').strip().lower()
+    chosen = picked(answer, len(rows))
+    if not chosen:
+        print('==> None picked; .gitleaksignore is left as it is.')
+        return
+    if not reason:
+        reason = input('Why are they false positives? (Enter to leave the reason out): ').strip()
+    block, bullets = [], []
+    for i in chosen:
+        f, where, when = rows[i]
+        comment = f"# {f['rule']} in {where}, {when}" + (f': {reason}' if reason else '')
+        block += [comment, f['fingerprint']]
+        bullets.append(f"- {f['rule']} in {where}" + (f': {reason}' if reason else ''))
+    with open(add_file, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(block) + '\n')
+    with open(list_file, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(bullets) + '\n')
+
+
+main()
+endef
+export secrets_ignore_tool
+
+define secrets_ignore_body
+`make secrets-ignore` added the fingerprints of findings of `make secrets-audit` that were marked as false positives to `.gitleaksignore`, each under a comment that names the rule, the file and the commit, and the reason where one was given. `.gitleaksignore` is outside the keep model, so it does not ship.
+endef
+export secrets_ignore_body
+
+# Appends what the tool returned, after a newline where the file lacks one at its end.
+secrets_ignore_append = f=.gitleaksignore; if [ -s "$$f" ] && [ -n "$$(tail -c1 "$$f")" ]; then echo >> "$$f"; fi; cat "$(secrets_ignore_add)" >> "$$f"
+
+.PHONY: consistency-audit build-verify changelog-lint php-compat php-compat-run deps-audit deps-audit-composer secrets-audit secrets-ignore
 
 consistency-audit:
 	@$(audit_core)
@@ -309,6 +408,28 @@ secrets-audit: check-app
 	trap 'rm -rf $(secrets_dir)' EXIT; rm -rf $(secrets_dir) && mkdir -p $(secrets_dir) || exit 1; \
 	$(secrets_ship) \
 	$(secrets_run) '$(call ncmake_lib_guard,secrets-audit) SECRETS_AUDIT_CMDLINE="$(secrets_cmdline)" node $(ncmake_lib_path)/secrets-audit.mjs $(secrets_args) $(ARGS) $(ncmake_json_arg)'
+
+# secrets-audit exits 1 with findings, which is what this target is for, so its
+# status is not taken: a run that completed is one that wrote its JSON.
+secrets-ignore: check-app
+	@$(if $(BODY),test -r "$(BODY)" || { echo "BODY=$(BODY) is not a readable file" >&2; exit 1; };) commit="$(COMMIT)"; pr="$(PR)"; if [ "$$pr" = "1" ]; then commit=1; fi; \
+	mkdir -p "$(cache_dir)" && rm -f "$(secrets_ignore_json)" "$(secrets_ignore_add)" "$(secrets_ignore_list)" || exit 1; \
+	$(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory secrets-audit JSON="$(secrets_ignore_json)"; \
+	[ -s "$(secrets_ignore_json)" ] || { echo "ERROR: secrets-audit did not complete, so there is nothing to pick from." >&2; exit 1; }; \
+	printf '%s\n' "$$secrets_ignore_tool" > "$(cache_dir)/secrets-ignore.py" \
+		&& python3 "$(cache_dir)/secrets-ignore.py" "$(secrets_ignore_json)" .gitleaksignore "$(secrets_ignore_add)" "$(secrets_ignore_list)" || exit 1; \
+	[ -s "$(secrets_ignore_add)" ] || exit 0; \
+	if [ "$$commit" != "1" ]; then \
+		$(secrets_ignore_append) || exit 1; \
+		echo "==> Added to .gitleaksignore:"; sed 's/^/    /' "$(secrets_ignore_add)"; \
+		echo "Review and commit: git add .gitleaksignore"; \
+	else \
+		eval "$$branch_flow"; \
+		flow_branch_start ncmake/secrets/ignore || exit 1; \
+		{ $(secrets_ignore_append); } || { flow_branch_abort "$$branch"; exit 1; }; \
+		git add -- .gitleaksignore; \
+		flow_branch_finish "$$branch" "chore: mark false positives of secrets-audit" "$$(cat "$(secrets_ignore_list)")" "$$secrets_ignore_body" "$$pr" || exit 1; \
+	fi
 
 define help_consistency-audit
 make consistency-audit [ARGS="<audit arguments>"] [JSON=<file>]
@@ -539,7 +660,8 @@ secret: gitleaks runs with --redact. ARGS=--reveal shows the line of each
 finding on the terminal, for the maintainer who has to find it; it never
 reaches the JSON, and a run where CI is set refuses it. Both findings carry
 "security": true in the JSON, and a fingerprint, which .gitleaksignore of the
-repository takes to silence a finding that is revoked and meant to stay.
+repository takes to silence a finding that is revoked and meant to stay, or no
+secret at all; make secrets-ignore writes it for the findings picked.
 .gitleaks.toml of the repository configures gitleaks for both scopes.
 
 make tag checks what ships before its confirmation, and make dist checks the
@@ -569,6 +691,36 @@ digest, kept in tools/ of the ncmake cache and run in the throwaway Node
 container, which carries git; the lint module, which make dev-init brings
 along, fetches it. It reads no network. With RUNTIME=bare it runs on the host,
 with the host's git.
+endef
+
+define help_secrets-ignore
+make secrets-ignore [SCOPE=...] [TARBALL=<file>] [COMMITS=<range>]
+                    [REASON=<text>] [ARGS="--reveal"]
+                    [COMMIT=1|PR=1 [BODY=<path>]]    (maintainer)
+
+Adds the findings of make secrets-audit that are no secrets to .gitleaksignore.
+gitleaks takes some values for secrets that are none, the test vectors of an
+RFC in a unit test for instance. A finding of an old commit cannot be silenced
+in the file, only by its fingerprint in .gitleaksignore, and this writes it.
+
+It runs make secrets-audit with the SCOPE=, TARBALL=, COMMITS= and ARGS= given,
+and lists its findings numbered: rule, file, line, commit and date, never the
+secret; ARGS=--reveal shows the lines in the report above the list. It asks
+which are false positives, by number or range (1 3-5) or all, and then for the
+reason, which Enter leaves out; REASON=<text> gives it up front. Each finding
+picked is appended to .gitleaksignore in the root of the checkout:
+  # generic-api-key in tests/OtpTest.php:34, 072899102f2e (2026-06-26): <reason>
+  072899102f2e...:tests/OtpTest.php:generic-api-key:34
+A finding already in the file is not listed. Without a terminal it only lists,
+and changes nothing. .gitleaksignore is outside the keep model and never ships.
+
+Without flags it only writes the file and names it for git add. COMMIT=1 runs
+from main or a stable* branch, commits it on the branch ncmake/secrets/ignore
+and prints the push command; PR=1 implies COMMIT=1 and also pushes and opens
+the pull request, with BODY=<path> as for the workflow targets.
+
+  make secrets-ignore SCOPE=history
+  make secrets-ignore SCOPE=history REASON="RFC 6238 test secret" PR=1
 endef
 
 define help_build-verify
@@ -710,3 +862,5 @@ help::
 	@echo "    $(cd)optional $(cv)ARGS=\"--details\"$(cd), see $(cv)make help-deps-audit$(c0)"
 	@echo "  $(ct)secrets-audit$(c0)        Whether a key or a token is in what ships, or in the history"
 	@echo "    $(cd)optional $(cv)SCOPE=shipped|history$(cd), $(cv)ARGS=\"--reveal\"$(cd), see $(cv)make help-secrets-audit$(c0)"
+	@echo "  $(ct)secrets-ignore$(c0)       Add the findings of secrets-audit that are false positives to .gitleaksignore  $(cm)[m]$(c0)"
+	@echo "    $(cd)add $(cv)COMMIT=1$(cd) to commit on a branch, or $(cv)PR=1$(cd) to commit and open the PR$(c0)"
