@@ -8,10 +8,10 @@ path = "LICENSE"
 SPDX-FileCopyrightText = "2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>"
 SPDX-License-Identifier = "MIT"
 
-# JSON has no comment syntax, so the sidecar of each own workflow and the rule
-# file of l10n-lint are covered here.
+# JSON has no comment syntax, so the sidecar of each own workflow, the rule file
+# of l10n-lint and the licence table of deps-audit are covered here.
 [[annotations]]
-path = [".ncmake/workflows/*.properties.json", "lib/l10n-rules.json"]
+path = [".ncmake/workflows/*.properties.json", "lib/l10n-rules.json", "lib/licences.json"]
 SPDX-FileCopyrightText = "2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>"
 SPDX-License-Identifier = "MIT"
 

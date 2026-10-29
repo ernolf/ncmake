@@ -42,9 +42,11 @@
 # build image of the PHP floor, and the audit of npm, pnpm or yarn over the npm
 # lock file on the Node the app declares, dev dependencies left out on both
 # sides. For each vulnerable package it names the release that fixes it and
-# whether the declared constraints let an update reach that release. It reads
-# the advisories from the network, writes its report to build/reports and exits
-# 0 with findings: the gate is a workflow of ernolf/ncmake-workflows.
+# whether the declared constraints let an update reach that release. The same
+# packages are held against the licence in appinfo/info.xml, by the licence
+# table lib/licences.json. It reads the advisories from the network, writes its
+# report to build/reports and exits 0 with findings: the gates are workflows of
+# ernolf/ncmake-workflows.
 #
 # This is its own module rather than a third target in mk/bundle.mk because a
 # module file cannot be renamed: the core includes every *.mk-<ref> it finds in the
@@ -70,7 +72,7 @@ consistency_libs = consistency-audit.mjs report-text.mjs
 verify_libs      = build-verify.mjs bundler-config.mjs report-text.mjs
 changelog_libs   = changelog-lint.mjs report-text.mjs
 compat_libs      = php-compat.mjs report-text.mjs
-deps_libs        = deps-audit.mjs deps-audit.php report-text.mjs
+deps_libs        = deps-audit.mjs deps-audit.php licences.json report-text.mjs
 
 # What the goals on this command line need, handed to the core's analyser library
 # section: appended, never set, because every analyser module adds its own.
@@ -374,7 +376,8 @@ endef
 define help_deps-audit
 make deps-audit [ARGS="<audit arguments>"] [JSON=<file>]
 
-Checks whether a dependency that ships has a published vulnerability. A release
+Checks whether a dependency that ships has a published vulnerability, or a
+licence the app cannot ship it under. A release
 ships the runtime packages of composer.lock in vendor/ and the production
 packages of the npm lock file bundled into js/; this asks the package managers'
 own audits about exactly those, dev dependencies, build tools and test
@@ -404,22 +407,44 @@ not answer, in which case nothing of that lock file was checked, and a
 dependency without a lock file to audit. Both vulnerability findings carry
 "security": true in the JSON.
 
+The same packages are held against the licence appinfo/info.xml declares, by
+the licence table lib/licences.json of ncmake, a data file: a bundle is one
+work, so a copyleft package in it puts its terms on the whole app. composer.lock
+records the licence of every package, package-lock.json from lockfile version
+2 on; for pnpm-lock.yaml, yarn.lock and an older package-lock.json the licence
+is read from the package's manifest in the registry. The findings:
+  [!] licence-incompatible  a licence that cannot be combined with the app's,
+                            GPL-2.0-only in an AGPL-3.0-or-later app, or GPL
+                            and AGPL in an app under MIT or Apache-2.0
+  [!] licence-non-free      a licence that forbids redistribution or
+                            commercial use, CC-BY-NC-* or UNLICENSED
+  [!] licence-missing       a package that states no licence
+  [i] licence-unknown       a licence that is no SPDX expression, or one the
+                            table gives no verdict on; shown as written
+  [i] licence-summary       the shipped packages grouped by licence, for the
+                            release notes and the App Store listing
+An expression with OR passes when one of its licences does, one with AND when
+all of them do.
+
 The report is written to build/reports/deps-audit.txt and
 build/reports/deps-audit.json, and the exit code is 0 with or without findings:
-the gate is the lint-deps workflow of ernolf/ncmake-workflows, with a severity
-threshold of its own. The raw output of the audits stays in build/deps-audit.
+the gates are the lint-deps and lint-licences workflows of
+ernolf/ncmake-workflows, lint-deps with a severity threshold of its own. The
+raw output of the audits stays in build/deps-audit.
 ARGS is passed to the analyser:
   make deps-audit                       composer.lock and the npm lock file
-  make deps-audit ARGS=--details        every advisory of a package
+  make deps-audit ARGS=--details        every advisory and package of a finding
   make deps-audit ARGS=--json > deps.json  machine-readable, nothing else
   make deps-audit JSON=deps.json        the report, and the JSON in deps.json
+  make deps-audit ARGS=--self-test      the licence table against its examples
   make deps-audit ARGS=--help           the analyser's own option list
 
 JSON=<file> writes the JSON of ARGS=--json to <file> as well, from the same run,
 and the report is printed as without it. The file can lie outside the app; it is
 replaced once the run is complete, and a run that stops on an error writes none.
 
-It needs the network for the advisories and the released versions. With
+It needs the network for the advisories, the released versions and the
+licences the lock file does not record. With
 RUNTIME=bare composer, npm and corepack run on the host.
 endef
 
@@ -558,5 +583,5 @@ help::
 	@echo "    $(cd)optional $(cv)ARGS=\"--nightly\"$(cd), see $(cv)make help-changelog-lint$(c0)"
 	@echo "  $(ct)php-compat$(c0)           Whether the app runs on the PHP floor and ceiling of its servers"
 	@echo "    $(cd)optional $(cv)PHP=all$(cd), see $(cv)make help-php-compat$(c0)"
-	@echo "  $(ct)deps-audit$(c0)           Whether a dependency that ships has a published vulnerability"
+	@echo "  $(ct)deps-audit$(c0)           Whether a dependency that ships has a published vulnerability or a licence the app cannot ship"
 	@echo "    $(cd)optional $(cv)ARGS=\"--details\"$(cd), see $(cv)make help-deps-audit$(c0)"
