@@ -10,8 +10,9 @@
 # adds what a release needs and a checkout can be missing - the link from a
 # published version back to its source, a server range that names a server that
 # exists, a lockfile, a linter that a script calls but no configuration backs.
-# Metadata only: it builds nothing and installs nothing. The one thing it reads from
-# the network is the major nextcloud/server develops on master, through make.
+# Metadata only: it builds nothing and installs nothing. From the network make reads
+# the server majors and the Node schedule, and the analyser asks whether the links
+# of info.xml answer, which NO_NETWORK=1 leaves out.
 #
 # build-verify asks the other question about the same checkout: does the build
 # output in it come from the source beside it. It copies the tracked files into a
@@ -370,7 +371,7 @@ consistency-audit:
 	@$(audit_core)
 	@$(call ncmake_lib_need,$(consistency_libs))
 	@echo "==> consistency-audit$(if $(strip $(ARGS)), $(ARGS)) (RUNTIME=$(RUNTIME))" >&2
-	@$(ncmake_lib_read_run) '$(call ncmake_lib_guard,consistency-audit) CONSISTENCY_AUDIT_CMDLINE="$(consistency_cmdline)" CONSISTENCY_AUDIT_APPDIR="$(notdir $(CURDIR))" CONSISTENCY_AUDIT_NC_MASTER="$(consistency_nc_master)" CONSISTENCY_AUDIT_NC_NEWEST="$(consistency_nc_newest)" CONSISTENCY_AUDIT_NODE_SCHEDULE="$(consistency_node_schedule)" CONSISTENCY_AUDIT_KEEP="$(consistency_keep)" node $(ncmake_lib_path)/consistency-audit.mjs $(ARGS) $(ncmake_json_arg)'
+	@$(ncmake_lib_read_run) '$(call ncmake_lib_guard,consistency-audit) CONSISTENCY_AUDIT_CMDLINE="$(consistency_cmdline)" CONSISTENCY_AUDIT_APPDIR="$(notdir $(CURDIR))" CONSISTENCY_AUDIT_NC_MASTER="$(consistency_nc_master)" CONSISTENCY_AUDIT_NC_NEWEST="$(consistency_nc_newest)" CONSISTENCY_AUDIT_NODE_SCHEDULE="$(consistency_node_schedule)" CONSISTENCY_AUDIT_KEEP="$(consistency_keep)" CONSISTENCY_AUDIT_NO_NETWORK="$(NO_NETWORK)" node $(ncmake_lib_path)/consistency-audit.mjs $(ARGS) $(ncmake_json_arg)'
 
 build-verify:
 	@$(audit_core)
@@ -466,7 +467,7 @@ secrets-ignore: check-app
 	fi
 
 define help_consistency-audit
-make consistency-audit [ARGS="<audit arguments>"] [JSON=<file>]
+make consistency-audit [ARGS="<audit arguments>"] [JSON=<file>] [NO_NETWORK=1]
 
 Checks whether the checkout agrees with itself. An app states the same fact in
 several files, and each file is valid on its own: appinfo/info.xml and
@@ -486,6 +487,19 @@ directory the code reads at run time, through __DIR__ in PHP or linkTo in the
 frontend, that the shipped file set leaves out. Each of those is reported once,
 with the reason it matters, and never as a score.
 
+The links of the App Store listing in info.xml, <website>, <bugs>,
+<repository>, the <documentation> links, <screenshot> and <donation>, are asked
+whether they answer: one HEAD each, a GET where a server refuses HEAD, each URL
+once per run, 10 seconds at most. A link that answers 404 or 410 or whose host
+does not resolve is dead [!], and so is a screenshot that is not served as an
+image, such as the page of a github.com blob URL; an error, a timeout or a
+refusal may be temporary and is named [i], as are a permanent redirect, with the
+address to write instead, and an http link that answers over https as well. A
+screenshot pinned to a release tag of the app's own repository (make version
+moves those along) whose tag is not in the checkout yet is named [i] while its
+file is in the working tree. NO_NETWORK=1 leaves the links unchecked, and the
+report says so.
+
 Findings are marked [!] worth changing, [i] worth knowing, [ok] nothing found,
 and each says which files it was read from. What the checkout does not state is
 named as not stated instead of being guessed at - with one exception, the oldest
@@ -500,7 +514,7 @@ line the release is built on and the oldest line still maintained; without the
 network a snapshot in the analyser stands in for the schedule.
 
 It reads metadata only: no build, no install, no installed dependency tree, no
-bytes. That makes it useful on a fresh clone, and on an app that never heard of
+bytes, and from the network only the links. That makes it useful on a fresh clone, and on an app that never heard of
 ncmake. The analyser runs in the throwaway Node container, so the host needs no
 Node, and it is mounted in from the ncmake cache, so nothing is written into the
 app.
@@ -889,7 +903,7 @@ help::
 	@echo ""
 	@echo "$(ch)Checkout audit (developer module):$(c0)"
 	@echo "  $(ct)consistency-audit$(c0)    Whether the checkout agrees with itself, and what a release still needs"
-	@echo "    $(cd)optional $(cv)ARGS=\"--details\"$(cd), see $(cv)make help-consistency-audit$(c0)"
+	@echo "    $(cd)optional $(cv)ARGS=\"--details\"$(cd), $(cv)NO_NETWORK=1$(cd), see $(cv)make help-consistency-audit$(c0)"
 	@echo "  $(ct)build-verify$(c0)         Whether the committed build output comes from the source beside it"
 	@echo "    $(cd)optional $(cv)ARGS=\"--details\"$(cd), see $(cv)make help-build-verify$(c0)"
 	@echo "  $(ct)changelog-lint$(c0)       Whether the App Store finds this release in the changelog"
