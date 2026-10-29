@@ -1287,6 +1287,13 @@ tag_check ?= re=$$(printf '%s' '$(version)' | sed 's/[.]/\\./g'); \
 	[ ! -f CHANGELOG.md ] || grep -qE "^\#\# \[?v?$$re(\]|[[:space:]]|$$)" CHANGELOG.md || \
 	{ echo "ERROR: no '\#\# [$(version)]' section in CHANGELOG.md - run 'make changelog' (and merge it) first." >&2; exit 1; }
 
+# Checks what a release ships, and fails the tag or the tarball when it carries
+# what must not ship. make tag calls it before the confirmation with no argument,
+# for the files make stage takes from the checkout; make dist calls it with the
+# staged tree before it packs it. The audit module puts secrets-audit here;
+# without it, nothing is checked.
+ship_check ?= :
+
 tag: check-app
 	@ver="$(version)"; \
 	git rev-parse --verify --quiet "refs/tags/v$$ver" >/dev/null && { echo "Tag v$$ver already exists - run 'make version' first" >&2; exit 1; }; \
@@ -1300,6 +1307,7 @@ tag: check-app
 	else \
 		$(tag_check) || exit 1; \
 	fi; \
+	$(call ship_check,) || exit 1; \
 	echo "############################################################################"; \
 	echo "##  About to create the signed tag v$$ver at the CURRENT commit."; \
 	echo "##  EVERYTHING that belongs in this release MUST be committed NOW:"; \
@@ -1554,8 +1562,10 @@ stage: check-app check-build
 	@mkdir -p "$(stage_dir)/$(app_id)"
 	rsync -a --relative $(stage_excludes) $(addprefix ./,$(keep_existing)) "$(stage_dir)/$(app_id)/"
 
-# Build the distribution tarball from the staged file set
+# Build the distribution tarball from the staged file set, once ship_check passed
+# on it.
 dist: stage
+	@$(call ship_check,$(patsubst $(CURDIR)/%,%,$(stage_dir))/$(app_id))
 	@rm -rf "$(dist_dir)"
 	@mkdir -p "$(dist_dir)"
 	tar czf "$(tarball)" -C "$(stage_dir)" "$(app_id)"
@@ -1976,6 +1986,7 @@ cache-clean:
 	esac; done; fi; \
 	if [ -d tools ]; then for f in tools/* tools/.[!.]* tools/..?*; do [ -e "$$f" ] || continue; case "$${f#tools/}" in \
 		zizmor-*|actionlint-*|shellcheck-*|hadolint-*|yamllint-*) t=$${f#tools/}; add ncmake "$$f/" "$${t%%-*} $${t#*-}, fetched by the lint module" "$$f" ;; \
+		gitleaks-*) t=$${f#tools/}; add ncmake "$$f/" "gitleaks $${t#*-}, fetched for secrets-audit" "$$f" ;; \
 		markdown-*|web-*) t=$${f#tools/}; add ncmake "$$f/" "the npm packages of lint-$${t%%-*}, fetched by the lint module" "$$f" ;; \
 		.fetch.*) add leftover "$$f" "left by an interrupted download" "$$f" ;; \
 		*) add foreign "$$f" "" "$$f" ;; \
@@ -2184,6 +2195,10 @@ build/stage/<app_id>/ and packs build/artifacts/dist/<app_id>-<version>.tar.gz.
 The same staged tree is what make rsync and make cp deploy, so a test deploy is
 byte-for-byte what a release ships. Run make build first if the app has build
 outputs (vendor/, js/).
+
+With the audit module (make dev-init), the staged tree is checked for secrets
+before it is packed, by make secrets-audit SCOPE=shipped, and a key or a token
+in it stops make dist. NO_SECRETS_AUDIT=1 packs regardless.
 endef
 
 define help_integrity-check
@@ -2325,6 +2340,12 @@ CHANGELOG.md has no "## [X.Y.Z]" section.
 
   make tag NO_CHANGELOG_LINT=1    skip the check and tag regardless
 
+With the audit module, what the release ships is checked for secrets before the
+confirmation as well, by make secrets-audit SCOPE=shipped over the files make
+stage takes from the checkout; a key or a token there stops the tag.
+
+  make tag NO_SECRETS_AUDIT=1     skip the secrets check and tag regardless
+
 Between the confirmation and the tag, $$(tag_hook) may add lines to the tag
 message; the integrity module installs its signature step there.
 endef
@@ -2409,7 +2430,7 @@ numbered, with the size, the last change and the status of each entry:
   ncmake    the core, the developer modules, the analyser libraries and the
             registry list of a ref, a Node.js line, the release index of
             nodejs.org, the download caches npm/ and corepack/, a tool the
-            lint module fetched into tools/, last-run
+            lint module or secrets-audit fetched into tools/, last-run
   leftover  what an interrupted download left, or a file where an older
             ncmake kept it
   in use    mounted by a running ncmake container; last-run while one runs
