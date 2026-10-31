@@ -220,8 +220,11 @@ lint_web_npm      = eslint@10.13.0 @eslint/js@10.0.1 globals@17.13.0 \
 # The PHP versions come from PHP_VERSIONS, a .php-version file or the default, as
 # in the workflow. Only a word of digits and dots is a version: the words are
 # written into the recipe, and a .php-version is part of the checkout, which may be
-# someone else's.
-lint_php_default = 8.2 8.4
+# someone else's. In an app the default is the range its servers run on, the floor
+# the build resolves against and the ceiling of the highest declared server, as
+# php-compat derives them; elsewhere it is lint_php_fallback.
+lint_php_fallback = 8.2 8.4
+lint_php_default = $(if $(wildcard appinfo/info.xml),$(shell printf '%s\n' $(php_min) $(php_server_max) | sort -uV),$(lint_php_fallback))
 lint_comma      := ,
 lint_php_given   = $(or $(strip $(subst ;, ,$(subst $(lint_comma), ,$(PHP_VERSIONS)))),$(strip $(subst ;, ,$(subst $(lint_comma), ,$(if $(wildcard .php-version),$(shell cat .php-version))))),$(lint_php_default))
 lint_php_digits  = $(subst .,,$(subst 0,,$(subst 1,,$(subst 2,,$(subst 3,,$(subst 4,,$(subst 5,,$(subst 6,,$(subst 7,,$(subst 8,,$(subst 9,,$(1))))))))))))
@@ -450,9 +453,13 @@ Runs php -l over every tracked PHP file, once per PHP version, as the
 lint-php-syntax workflow of ncmake-workflows does, and fails where that
 workflow fails: on a parse or fatal error under any of the versions. A warning
 or deprecation php -l prints is [i]. The versions are, in this order, those of
-PHP_VERSIONS, those of a .php-version file in the checkout, or
-$(lint_php_default); they are separated by spaces, commas or semicolons, and
-only digits and dots make a version. A repository without PHP files passes.
+PHP_VERSIONS, those of a .php-version file in the checkout, or the default; they
+are separated by spaces, commas or semicolons, and only digits and dots make a
+version. The default in an app is the PHP range its servers run on: the floor
+the build resolves against and the newest PHP minor of the highest declared
+server, both from the lib/versioncheck.php of the server, as php-compat checks
+them. Outside an app it is $(lint_php_fallback). A repository without PHP files
+passes.
 
 Each version runs in a throwaway container of docker.io/library/php:<version>-cli-alpine;
 with RUNTIME=bare the host's php<version> runs, or its php when that is the
