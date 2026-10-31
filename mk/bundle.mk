@@ -135,7 +135,10 @@ and rspack together with what the page's runtime loads later; every package the
 source imports by its root, with the names that import takes and what the build
 delivers of that package, because only a package that arrives in several modules
 has anything a per-module import could leave out; and, where the source is what
-pulls them in, moment or a set of statically bound date-fns locales. What the
+pulls them in, moment or a set of statically bound date-fns locales. It also
+names the framework the delivered packages are written against, Vue 2 or Vue 3,
+React and the like, with the version node_modules holds and the packages that
+belong to it, and every other delivered library with its version. What the
 bundler or a library decides on its own - how vite cuts its chunks, that a
 component library ships its translation catalogue whole - is measured and tabled
 under --details instead, because a verdict the app cannot act on is noise.
@@ -146,7 +149,8 @@ Without a build output the source-side findings still hold and the report names
 the figures it is missing, so the audit is useful on a fresh checkout. A js/
 without package.json and without a bundler is taken as written by hand, and no
 finding about source maps, module format or splitting is made about it. It reads
-the checkout only: no build, no install, no network. The analyser runs in the
+the checkout only: no build, no install, no network. The frameworks and the
+installed versions come from node_modules, so they need the build to have run. The analyser runs in the
 throwaway Node container, so the host needs no Node. The build output is found
 the way bundle-report finds it.
 
