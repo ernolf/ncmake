@@ -234,8 +234,10 @@ lint_php_versions = $(foreach v,$(lint_php_given),$(if $(call lint_php_digits,$(
 # host's php<version> runs, or its php when that is the version; without either
 # the run reports that the version did not run. php -l runs without a memory limit,
 # as only the parser runs: a large generated file exhausts the 128M of the image,
-# and php stops on it without having checked it.
-lint_php_lint = "$$p" -r "echo PHP_VERSION, PHP_EOL;" && xargs -0 -r -n 1 -P 4 "$$p" -d display_errors=1 -d log_errors=0 -d error_reporting=-1 -d memory_limit=-1 -l
+# and php stops on it without having checked it. php -l exits with 255 on a file it
+# cannot parse, and xargs stops at a command that exits with 255, so a call that
+# fails exits with 1 and xargs goes on to the next file.
+lint_php_lint = "$$p" -r "echo PHP_VERSION, PHP_EOL;" && xargs -0 -r -n 1 -P 4 sh -c "\"\$$1\" -d display_errors=1 -d log_errors=0 -d error_reporting=-1 -d memory_limit=-1 -l \"\$$2\" || exit 1" php-lint "$$p"
 ifeq ($(filter $(RUNTIME),bare none),)
   lint_php_run = $(call container_run,docker.io/library/php:$(1)-cli-alpine,-i) sh -c 'p=php; $(lint_php_lint)'
 else ifeq ($(RUNTIME),bare)
