@@ -179,11 +179,12 @@ compat_next  = ghcr.io/ernolf/ncmake-php
 # processors. busybox xargs stops at the first command that fails, and php -l fails
 # on every file it cannot parse, so each batch exits 0 and the output tells.
 # The lint runs without the ini files: a parse calls no extension, and loading the
-# ones of the build image costs about 150 ms per process, smbclient most of it. -n
-# also drops the memory_limit of ncmake.ini, which -d puts back. From PHP 8.3 on
-# php -l takes several files and lints each of them; below, it lints only the first,
-# so there every file gets a process of its own.
-compat_php   = php -n -d error_reporting=-1 -d display_errors=stderr -d log_errors=0 -d memory_limit=768M
+# ones of the build image costs about 150 ms per process, smbclient most of it. It
+# also runs without a memory limit, as only the parser runs: a file that exhausts
+# the limit ends the process, and the files after it in its batch go unchecked.
+# From PHP 8.3 on php -l takes several files and lints each of them; below, it
+# lints only the first, so there every file gets a process of its own.
+compat_php   = php -n -d error_reporting=-1 -d display_errors=stderr -d log_errors=0 -d memory_limit=-1
 compat_lint  = many=$$(php -n -r "echo PHP_VERSION_ID >= 80300 ? 1 : 0;"); find appinfo lib templates vendor -type f -name "*.php" -print0 2>/dev/null | LINT_MANY=$$many xargs -0 -n 64 -P "$$(nproc)" sh -c "if [ \"\$$LINT_MANY\" = 1 ]; then $(compat_php) -l \"\$$@\"; else for f; do $(compat_php) -l \"\$$f\"; done; fi 2>&1; exit 0" php-lint | { grep -v "^No syntax errors detected in " || :; }
 # The version is read without the ini files too: the CLI prints the startup warning
 # of an extension that does not load to stdout, which would end up in the file.

@@ -232,8 +232,10 @@ lint_php_versions = $(foreach v,$(lint_php_given),$(if $(call lint_php_digits,$(
 # php -l per version over the tracked files on stdin, the exact version first. The
 # image is the plain PHP image: php -l needs no extension. With RUNTIME=bare the
 # host's php<version> runs, or its php when that is the version; without either
-# the run reports that the version did not run.
-lint_php_lint = "$$p" -r "echo PHP_VERSION, PHP_EOL;" && xargs -0 -r -n 1 -P 4 "$$p" -d display_errors=1 -d log_errors=0 -d error_reporting=-1 -l
+# the run reports that the version did not run. php -l runs without a memory limit,
+# as only the parser runs: a large generated file exhausts the 128M of the image,
+# and php stops on it without having checked it.
+lint_php_lint = "$$p" -r "echo PHP_VERSION, PHP_EOL;" && xargs -0 -r -n 1 -P 4 "$$p" -d display_errors=1 -d log_errors=0 -d error_reporting=-1 -d memory_limit=-1 -l
 ifeq ($(filter $(RUNTIME),bare none),)
   lint_php_run = $(call container_run,docker.io/library/php:$(1)-cli-alpine,-i) sh -c 'p=php; $(lint_php_lint)'
 else ifeq ($(RUNTIME),bare)
@@ -459,7 +461,7 @@ version. The default in an app is the PHP range its servers run on: the floor
 the build resolves against and the newest PHP minor of the highest declared
 server, both from the lib/versioncheck.php of the server, as php-compat checks
 them. Outside an app it is $(lint_php_fallback). A repository without PHP files
-passes.
+passes. php -l runs without a memory limit, as only the parser runs.
 
 Each version runs in a throwaway container of docker.io/library/php:<version>-cli-alpine;
 with RUNTIME=bare the host's php<version> runs, or its php when that is the
