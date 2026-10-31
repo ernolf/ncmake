@@ -433,8 +433,9 @@ node_modules/ and vendor/, as the lint-markdown workflow of ncmake-workflows
 does, and fails where that workflow fails. A markdownlint configuration of the
 repository wins; without one the workflow's default applies: every rule except
 line length, blank lines in a block quote, inline HTML, a first line that is no
-heading, link fragments and table column style. A repository without Markdown
-passes.
+heading, link fragments and table column style, and a heading may repeat under
+another parent, as a changelog repeats its sections in every release. A
+repository without Markdown passes.
 
 The package comes from npm, checked against the integrity npm records, and is
 kept in tools/ of the ncmake cache.
