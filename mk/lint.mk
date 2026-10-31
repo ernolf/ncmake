@@ -501,9 +501,11 @@ ncmake-workflows does, and fails where that workflow fails: on an error of any
 of them. The files are the tracked ones outside node_modules/ and vendor/,
 without minified copies. A configuration of the repository for a linter wins;
 without one the workflow's default applies: ESLint's recommended rules with
-the browser globals, stylelint-config-standard, html-validate's recommended
-preset. A repository with a package.json lints through its own scripts and
-passes here, as it passes the workflow.
+the browser globals, in an app (appinfo/info.xml present) also the globals of
+the Nextcloud server as @nextcloud/eslint-config declares them,
+stylelint-config-standard, html-validate's recommended preset. A repository
+with a package.json lints through its own scripts and passes here, as it
+passes the workflow.
 
 The packages, $(lint_web_npm), come from npm, checked against the integrity
 npm records, and are kept in tools/ of the ncmake cache. A configuration of the
