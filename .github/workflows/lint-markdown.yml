@@ -10,7 +10,9 @@
 # (MD013), embedded HTML such as badges and sized images (MD033), a license
 # comment before the first heading (MD041), consecutive alerts such as
 # [!NOTE] (MD028), heading anchors with emoji, which GitHub slugs differently
-# (MD051), and tables without padded pipes (MD060).
+# (MD051), and tables without padded pipes (MD060). A heading may repeat
+# under another parent (MD024 siblings_only), as a changelog repeats its
+# sections in every release.
 #
 # A repository without Markdown files passes instead of failing, so the
 # workflow can be installed anywhere without becoming a permanent red cross.
@@ -73,6 +75,7 @@ jobs:
             "config": {
               "default": true,
               "MD013": false,
+              "MD024": { "siblings_only": true },
               "MD028": false,
               "MD033": false,
               "MD041": false,

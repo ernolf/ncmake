@@ -20,8 +20,8 @@
     "source": "ncmake"
   },
   "lint-markdown.yml": {
-    "hash": "7af20f55d6dccc7c31c2f766a9c677e078785b803db21c31993cb8ced0c3c4fc",
-    "sha": "84e0d45368c14a90a7dd93c6921c611a53a34568",
+    "hash": "62a43447d84e3b6810547bce9f459e9e261abbe92766121964a963515060c7c0",
+    "sha": "77db0e822a1e99ebf3db53609e05b8668f55ab18",
     "source": "ncmake"
   },
   "lint-yaml.yml": {
