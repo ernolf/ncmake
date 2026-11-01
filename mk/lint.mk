@@ -407,7 +407,9 @@ lint-actions workflow of ncmake-workflows does, and fails where that workflow
 fails. The workflows are everything under .github/workflows and
 .ncmake/workflows, and every YAML file with a .properties.json beside it, the
 form of a workflow template in ncmake-workflows. actionlint reads the
-repository's .github/actionlint.yaml or .yml. A repository without workflows
+repository's .github/actionlint.yaml or .yml; without one it runs with the
+default of the workflow, which declares ubuntu-latest-low, the self-hosted
+runner of Nextcloud, as a known runner label. A repository without workflows
 passes.
 
 Both binaries are the ones of their GitHub releases, checked against their
