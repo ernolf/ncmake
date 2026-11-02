@@ -707,15 +707,20 @@ SCOPE=all, the default, checks both. Next to the gitleaks rules a file is
 reported by its name: a private key (*.key, id_rsa, id_ed25519 and their
 siblings, a *.pem with a private key block), a key store (*.p12, *.pfx), an
 .env file (not .env.example, .env.dist and the like), the auth.json of composer
-with a credential and an .npmrc with a token. The public certificate of the
-integrity signature, .ncmake/certificate.crt, is committed on purpose and never
-reported.
+with a credential and an .npmrc with a token. The files that are public by
+design are never reported: the certificate of the integrity signature,
+.ncmake/certificate.crt, the signature appinfo/signature.json and the
+checksums appinfo/checksum.json an older app carried, wherever the repository
+keeps them. The two .json files only where they hold what that file holds, in
+the history as of each commit; a file of that name with anything else in it
+is checked like any other.
 
 Findings are marked [!] worth changing, [i] worth knowing, [ok] nothing found:
   [!] secret-shipped     a secret in what ships: take it out and revoke it
   [!] secret-in-history  a secret in a commit, with the commit that added it: it
                          has to be revoked, removing it does not make it secret
                          again
+  [i] public-files       the matches left out in each public file, by scope
 Each finding gives the rule, the file, the line and the commit, and never the
 secret: gitleaks runs with --redact. ARGS=--reveal shows the line of each
 finding on the terminal, for the maintainer who has to find it; it never
