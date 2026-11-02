@@ -723,6 +723,11 @@ repository takes to silence a finding that is revoked and meant to stay, or no
 secret at all; make secrets-ignore writes it for the findings picked.
 .gitleaks.toml of the repository configures gitleaks for both scopes.
 
+"rules" in the JSON is a sha256 over everything besides the commits that
+decides the result: the gitleaks version, the analyser and the repository's
+.gitleaks.toml and .gitleaksignore. A tool that keeps a history result and
+later scans only COMMITS=<last>..HEAD scans in full again once it changes.
+
 make tag checks what ships before its confirmation, and make dist checks the
 staged tree before it packs it; both stop on secret-shipped, and
 NO_SECRETS_AUDIT=1 goes on regardless. The history has its own gate, the
