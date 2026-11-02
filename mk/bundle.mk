@@ -79,8 +79,13 @@ compressed on its own, never concatenated, because each is its own HTTP response
 
 Where the build ships source maps, the delivered bytes are charged back to the
 modules they came from, so the report names the packages your bundle is actually
-made of and how much each one costs. Without maps the file sizes still hold; the
-per-package breakdown does not.
+made of and how much each one costs, for the page and, apart from it, for its
+lazy chunks. What no mapping covers goes to the owner its code shows: the glue of
+the bundler, a file of a neighbouring package, of the app, or of the bundler and
+its plugins. What none of them owns is a finding with file and byte offset, so a
+pattern the analyser does not know shows up as a place in a file. Without maps
+the file sizes still hold; the per-package breakdown then holds only what the
+code shows by itself.
 
 The output is a verdict, not a dump: the bytes per page, how the build splits
 between what every page loads and what one page loads, then the findings - a
