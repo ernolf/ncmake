@@ -700,7 +700,9 @@ gitleaks looks for secrets by its own rules, in two scopes:
   shipped   the files make stage takes from the checkout, copied aside as make
             stage copies them, or the tarball TARBALL=<file> names
   history   every commit of the checkout, or the commits of COMMITS=<range>,
-            a git log range such as main..HEAD
+            a git log range such as main..HEAD; it may take several words,
+            such as "--all --not <commit>..." for every branch and tag
+            without the commits a previous scan read
 SCOPE=all, the default, checks both. Next to the gitleaks rules a file is
 reported by its name: a private key (*.key, id_rsa, id_ed25519 and their
 siblings, a *.pem with a private key block), a key store (*.p12, *.pfx), an
@@ -726,7 +728,8 @@ secret at all; make secrets-ignore writes it for the findings picked.
 "rules" in the JSON is a sha256 over everything besides the commits that
 decides the result: the gitleaks version, the analyser and the repository's
 .gitleaks.toml and .gitleaksignore. A tool that keeps a history result and
-later scans only COMMITS=<last>..HEAD scans in full again once it changes.
+later scans only COMMITS="--all --not <tips>" scans in full again once it
+changes.
 
 make tag checks what ships before its confirmation, and make dist checks the
 staged tree before it packs it; both stop on secret-shipped, and
