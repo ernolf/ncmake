@@ -1,0 +1,25 @@
+{
+  "about": "The known toolchain defects build-audit holds a build against. lib/build-audit.mjs names no bundler and no plugin of its own: an entry matches where the lock file of the app holds a version of package in affected, a delivered chunk meets the condition, if there is one, and the build shows the symptom. condition.chunk is a regular expression the text of a delivered chunk has to match, says what that means. symptom.check names a check build-audit carries: map-misses-sidecar-packages compares the packages the .license file beside a chunk names with the packages its source map charges, and share is the part of them the map has to miss. says is what the defect does, fixed the first version of package without it, upstream where it is tracked. prove names the toolchain versions a build with --prove sets in package.json, where the app declares them, to see whether the symptom goes. A defect that is gone from every toolchain an app can still have is removed from this list, and build-audit no longer looks for it.",
+  "defects": [
+    {
+      "id": "css-injected-by-js-source-map",
+      "package": "vite-plugin-css-injected-by-js",
+      "affected": "<5.0.0",
+      "condition": {
+        "chunk": "createElement\\(\\s*[\"']style[\"']\\s*\\)",
+        "says": "the CSS is injected by JavaScript"
+      },
+      "symptom": {
+        "check": "map-misses-sidecar-packages",
+        "share": 0.25
+      },
+      "says": "puts the code that injects the CSS in front of the chunk without shifting its source map, so the map the bundler combines from it loses sources",
+      "fixed": "5.0.0",
+      "upstream": "https://github.com/marco-prontera/vite-plugin-css-injected-by-js/issues/155",
+      "prove": {
+        "@nextcloud/vite-config": "3.0.0-beta.1",
+        "vite": "8.3.5"
+      }
+    }
+  ]
+}
