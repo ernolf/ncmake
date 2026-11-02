@@ -80,10 +80,10 @@
 # What each analyser needs next to it. bundler-config.mjs reads the bundler and its
 # config, report-text.mjs prints; the analyser itself decides what is worth saying.
 consistency_libs = consistency-audit.mjs report-text.mjs
-verify_libs      = build-verify.mjs bundler-config.mjs report-text.mjs
+verify_libs      = build-verify.mjs bundler-config.mjs report-text.mjs scratch-build.mjs
 changelog_libs   = changelog-lint.mjs report-text.mjs
 compat_libs      = php-compat.mjs report-text.mjs
-deps_libs        = deps-audit.mjs deps-audit.php licences.json report-text.mjs
+deps_libs        = deps-audit.mjs deps-audit.php licences.json lockfile.mjs report-text.mjs
 secrets_libs     = secrets-audit.mjs report-text.mjs
 
 # What the goals on this command line need, handed to the core's analyser library

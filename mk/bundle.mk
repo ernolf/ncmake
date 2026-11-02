@@ -10,7 +10,8 @@
 # shipped source maps. build-audit reads the half that never ships - the bundler
 # config, package.json, src/ - and prices every finding in the same delivered
 # bytes, so a statement about how this app imports something comes with what that
-# costs. Neither builds, installs or touches dependencies.
+# costs. Neither builds, installs or touches dependencies, except build-audit
+# with PROVE=1, which builds a throwaway copy to check a known toolchain defect.
 #
 # The analysers are dependency-free ESM files that share their measuring core, so
 # both count the same way. The core Makefile fetches them into the per-machine
@@ -24,7 +25,7 @@
 # reads the bundler and its config, report-text.mjs prints; the analyser itself
 # decides what is worth saying.
 report_libs = bundle-report.mjs built-assets.mjs report-text.mjs
-audit_libs  = build-audit.mjs built-assets.mjs bundler-config.mjs report-text.mjs
+audit_libs  = build-audit.mjs build-defects.json built-assets.mjs bundler-config.mjs lockfile.mjs report-text.mjs scratch-build.mjs
 
 # What the goals on this command line need, handed to the core's analyser library
 # section: appended, never set, because every analyser module adds its own.
@@ -36,6 +37,10 @@ ncmake_libs += $(if $(filter bundle-report,$(MAKECMDGOALS)),$(report_libs)) $(if
 # quotes are resolved by the shell that runs the analyser.
 report_cmdline = make bundle-report ARGS=\"%s\"
 audit_cmdline  = make build-audit ARGS=\"%s\"
+
+# A proof builds the app, so it runs the way build-verify runs: its build steps on
+# the app's Node line. PROVE=1 and ARGS=--prove are the same request.
+audit_prove = $(or $(PROVE),$(findstring --prove,$(ARGS)))
 
 # A module is refreshed on its own terms, and an app that carries a committed core
 # Makefile refreshes that one by hand - so the core here can be older than the
@@ -55,7 +60,7 @@ build-audit:
 	@$(analyse_core)
 	@$(call ncmake_lib_need,$(audit_libs))
 	@echo "==> build-audit$(if $(strip $(ARGS)), $(ARGS)) (RUNTIME=$(RUNTIME))" >&2
-	@$(ncmake_lib_read_run) '$(call ncmake_lib_guard,build-audit) BUILD_AUDIT_CMDLINE="$(audit_cmdline)" node $(ncmake_lib_path)/build-audit.mjs $(ARGS) $(ncmake_json_arg)'
+	@$(if $(audit_prove),$(ncmake_lib_run),$(ncmake_lib_read_run)) '$(call ncmake_lib_guard,build-audit) BUILD_AUDIT_CMDLINE="$(audit_cmdline)" node $(ncmake_lib_path)/build-audit.mjs $(ARGS)$(if $(PROVE), --prove) $(ncmake_json_arg)'
 
 define help_bundle-report
 make bundle-report [ARGS="<report arguments>"] [JSON=<file>]
@@ -154,11 +159,28 @@ installed versions come from node_modules, so they need the build to have run. T
 throwaway Node container, so the host needs no Node. The build output is found
 the way bundle-report finds it.
 
+A defect of the toolchain can leave the source maps short of what the build
+delivers. The known ones are a data list, lib/build-defects.json in ncmake: each
+entry names the package and the versions it is broken in, what it does, the
+version that fixes it and where it is tracked upstream. An entry applies where
+the lock file holds an affected version and the build shows the symptom, and the
+report then names the defect and says that the app runs as built. The frameworks
+and libraries are then read from the .license files beside the chunks, with the
+versions they name, since the maps miss some of them; the byte figures stay those
+of the maps. PROVE=1 checks whether the versions the entry names fix it: it
+builds a throwaway copy of the tracked files in the container's temp directory,
+with those versions set in package.json where the app declares them, installs,
+builds on the app's Node line and checks the symptom again on the chunks that
+build writes. The report says fixed, not fixed, or that the copy does not build,
+with the first error line. That needs the network and takes as long as an
+install and a build; the checkout is not changed and the copy is removed.
+
 ARGS is passed to the analyser; a bare word in it is the checkout to audit
 (default: the current directory):
   make build-audit                            this app
   make build-audit ARGS=--details             every table behind the findings
   make build-audit ARGS="--details --top=0"    and no row limit in them
+  make build-audit PROVE=1                    and build to check a known defect
   make build-audit ARGS=--build=dist          built assets in dist/, not js/
   make build-audit ARGS=--src=srcjs           source outside src/
   make build-audit ARGS=--json > audit.json   machine-readable, nothing else
