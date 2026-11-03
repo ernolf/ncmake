@@ -541,6 +541,9 @@ php_floor_run     = $(php_floor_pick) && $(or $(container_root),$(container)) $(
 # line, below node_dir. The release index of nodejs.org names the newest release of
 # the line; it is read again once it is older than IMAGE_CHECK_MIN minutes, as the
 # images are checked, and without the network the copy on the host still answers.
+# sed takes the first match but reads the index to its end: a grep before it that
+# writes into a closed pipe prints an error where SIGPIPE is ignored, as on the
+# GitHub runners.
 # The tarball is checked against the SHASUMS256.txt of its release and unpacked once,
 # without the OpenSSL headers of the other architectures, which the Node images drop
 # too. A release that does not arrive leaves the newest one of the line already on
@@ -558,7 +561,7 @@ node_fetch = sh -c ' \
 	fi; \
 	v=$$(grep "^{\"version\":\"v[0-9]" "$$idx" 2>/dev/null | grep "\"linux-$$arch\"" \
 		| if [ "$$line" = lts ]; then grep -v "\"lts\":false"; else grep "^{\"version\":\"v$$line\."; fi \
-		| head -n 1 | sed "s/^{\"version\":\"\([^\"]*\)\".*/\1/"); \
+		| sed -n "1s/^{\"version\":\"\([^\"]*\)\".*/\1/p"); \
 	rel=$$dir/$$v-linux-$$arch; \
 	if [ -n "$$v" ] && [ ! -x "$$rel/bin/node" ] && t=$$(mktemp -d "$$dir/.fetch.XXXXXX"); then \
 		echo "==> Fetching Node.js $$v for linux-$$arch from nodejs.org" >&2; f=node-$$v-linux-$$arch.tar.gz; \
