@@ -357,7 +357,7 @@ endif
 # older than this module may lack; say which side is behind rather than run an
 # empty command.
 l10n_lint_core    = $(if $(value ncmake_lib_in),,echo "ERROR: l10n-lint needs a newer ncmake core - run 'make self-update'" >&2; exit 1;)
-# The container sees the app at /app, so the copy and its template are named
+# The container sees the app at app_path, so the copy and its template are named
 # relative to it. A rule file of one's own is mounted next to the shipped one.
 l10n_lint_rel     = $(l10n_lint_dir:$(CURDIR)/%=%)
 l10n_lint_pot     = $(l10n_lint_rel)/$(app_id)/translationfiles/templates/$(app_id).pot
@@ -411,8 +411,9 @@ l10n-init: check-app
 # Per branch the bot syncs: a copy of origin's tree, the file checks, then the
 # source validation in the bot's image. The copy is checked out through an index
 # of its own, not packed with git archive, which would drop every export-ignore
-# path - .tx/ and .l10nignore among the usual ones. Every branch is checked
-# before the exit status reports any of them.
+# path - .tx/ and .l10nignore among the usual ones. An app below the top of its
+# repository is copied from its own directory of the branch. Every branch is
+# checked before the exit status reports any of them.
 l10n-check: check-app
 	@$(if $(filter bare none,$(RUNTIME)),$(call l10n_no_runtime,l10n-check)) \
 	$(net_retry); net_retry git fetch --quiet --prune origin || { echo "ERROR: git fetch origin failed." >&2; exit 1; }; \
@@ -421,11 +422,11 @@ l10n-check: check-app
 	for b in $$(cat "$(cache_dir)/l10n_branches"); do \
 		echo; echo "==> origin/$$b"; \
 		dir="$(l10n_check_dir)/$$b/$(app_id)"; mkdir -p "$$dir"; \
-		GIT_INDEX_FILE="$(l10n_check_dir)/index" git read-tree "refs/remotes/origin/$$b" \
+		GIT_INDEX_FILE="$(l10n_check_dir)/index" git read-tree "refs/remotes/origin/$$b$(if $(app_rel),:$(app_rel))" \
 			&& GIT_INDEX_FILE="$(l10n_check_dir)/index" git --work-tree="$$dir" checkout-index -a -f \
 			|| { echo "  [!] could not copy origin/$$b"; rc=1; continue; }; \
 		$(l10n_run) check "$$dir" || rc=1; \
-		$(l10n_validate) "/app$${dir#$(CURDIR)}" || rc=1; \
+		$(l10n_validate) "$(app_path)$${dir#$(CURDIR)}" || rc=1; \
 	done; \
 	exit $$rc
 
@@ -442,7 +443,7 @@ l10n-lint: check-app
 	git ls-files -co --exclude-standard > "$(l10n_lint_dir)/files" || exit 1; \
 	tar -cf - --ignore-failed-read -T "$(l10n_lint_dir)/files" | tar -xf - -C "$$dir" || exit 1; \
 	echo "==> l10n-lint$(if $(strip $(ARGS)), $(ARGS)) (RUNTIME=$(RUNTIME))" >&2; \
-	$(l10n_template) "/app/$(l10n_lint_rel)/$(app_id)" || exit 1; \
+	$(l10n_template) "$(app_path)/$(l10n_lint_rel)/$(app_id)" || exit 1; \
 	test -s "$(l10n_lint_pot)" || { echo "ERROR: the translation tool wrote no $(l10n_lint_pot)" >&2; exit 1; }; \
 	$(call ncmake_lib_in,$(lib_node_image),$(l10n_lint_mount)) '$(call ncmake_lib_guard,l10n-lint) L10N_LINT_CMDLINE="$(l10n_lint_cmdline)" node $(ncmake_lib_path)/l10n-lint.mjs $(l10n_lint_args) $(ARGS) $(ncmake_json_arg)'
 

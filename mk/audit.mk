@@ -702,7 +702,8 @@ gitleaks looks for secrets by its own rules, in two scopes:
   history   every commit of the checkout, or the commits of COMMITS=<range>,
             a git log range such as main..HEAD; it may take several words,
             such as "--all --not <commit>..." for every branch and tag
-            without the commits a previous scan read
+            without the commits a previous scan read; for an app below the
+            top of its repository only the commits that touch its directory
 SCOPE=all, the default, checks both. Next to the gitleaks rules a file is
 reported by its name: a private key (*.key, id_rsa, id_ed25519 and their
 siblings, a *.pem with a private key block), a key store (*.p12, *.pfx), an
