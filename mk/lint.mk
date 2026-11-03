@@ -412,6 +412,14 @@ default of the workflow, which declares ubuntu-latest-low, the self-hosted
 runner of Nextcloud, as a known runner label. A repository without workflows
 passes.
 
+A shellcheck finding of severity error or warning is [!], one of severity info
+or style [i], with the shellcheck code and severity as fields of the finding
+and the line and column it has in the file. Untrusted input in a run: script
+is [!] and carries "security": true in the JSON. actionlint runs shellcheck
+without a .shellcheckrc, so the disable= and enable= of the repository's
+.shellcheckrc are handed on to it, and a run: script is judged by the rules
+lint-shell applies; disable=all leaves shellcheck out.
+
 Both binaries are the ones of their GitHub releases, checked against their
 digests and kept in tools/ of the ncmake cache.
 
