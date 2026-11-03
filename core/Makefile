@@ -286,6 +286,15 @@ reuse_image    ?= docker.io/fsfe/reuse:latest
 PHP ?= max
 active_php_image = $(if $(filter min,$(PHP)),$(php_image),$(analysis_image))
 
+# An app below the top of its git work tree, as apps/<id> of a monorepo, is mounted
+# with that top at /app and the container starts in its directory, app_path: the
+# .git above the app would lie outside a mount of the app alone, and the analysers
+# that read the tracked files or the history need it.
+app_top   := $(shell git -C "$(CURDIR)" rev-parse --show-toplevel 2>/dev/null)
+app_rel   := $(patsubst $(app_top)/%,%,$(filter $(app_top)/%,$(CURDIR)))
+app_path   = /app$(if $(app_rel),/$(app_rel))
+app_mount  = -v "$(if $(app_rel),$(app_top),$(CURDIR))":/app -w $(app_path)
+
 ifeq ($(RUNTIME),bare)
   php_run   = sh -lc
   node_run  = sh -lc
@@ -296,14 +305,14 @@ else ifeq ($(RUNTIME),none)
   reuse_run = $(no_runtime)
 else ifeq ($(RUNTIME),podman)
   container_cli = podman
-  container     = podman run --rm --label ncmake -v "$(CURDIR)":/app -w /app
+  container     = podman run --rm --label ncmake $(app_mount)
 else ifeq ($(RUNTIME),docker-rootless)
   container_cli = docker
-  container     = docker run --rm --label ncmake -v "$(CURDIR)":/app -w /app
+  container     = docker run --rm --label ncmake $(app_mount)
 else ifeq ($(RUNTIME),docker)
   container_cli  = docker
   container_user = $(shell id -u):$(shell id -g)
-  container_root = docker run --rm --label ncmake -v "$(CURDIR)":/app -w /app
+  container_root = docker run --rm --label ncmake $(app_mount)
   container      = $(container_root) --user $(container_user)
 else
   $(error Unknown RUNTIME '$(RUNTIME)'. Use: podman | docker | docker-rootless | bare)
