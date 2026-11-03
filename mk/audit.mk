@@ -715,12 +715,24 @@ keeps them. The two .json files only where they hold what that file holds, in
 the history as of each commit; a file of that name with anything else in it
 is checked like any other.
 
+Generated files are full of strings gitleaks takes for a key: hashes, minified
+names, digests and embedded data. A source map (*.map), a minified file
+(*.min.js, *.min.css), a chunk of a bundle (*.chunk.js, *.chunk.mjs), the cache
+of a tool (.php-cs-fixer.cache, .phpunit.result.cache, .eslintcache) and every
+file below a directory .gitignore takes for build output, as js/ and vendor/
+for make, count as generated. There, a match of generic-api-key, or of
+sourcegraph-access-token on a line without an sgp_ token, is [i] and not a
+secret: both rules take any string of high entropy. Every other rule, a
+private key or the token of a provider, stays [!] there as well.
+
 Findings are marked [!] worth changing, [i] worth knowing, [ok] nothing found:
   [!] secret-shipped     a secret in what ships: take it out and revoke it
   [!] secret-in-history  a secret in a commit, with the commit that added it: it
                          has to be revoked, removing it does not make it secret
                          again
   [i] public-files       the matches left out in each public file, by scope
+  [i] generated-files    the matches without a format in each generated file,
+                         by scope; the ten with the most, all with --details
 Each finding gives the rule, the file, the line and the commit, and never the
 secret: gitleaks runs with --redact. ARGS=--reveal shows the line of each
 finding on the terminal, for the maintainer who has to find it; it never
