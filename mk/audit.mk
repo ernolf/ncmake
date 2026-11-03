@@ -84,7 +84,7 @@ verify_libs      = build-verify.mjs bundler-config.mjs report-text.mjs scratch-b
 changelog_libs   = changelog-lint.mjs report-text.mjs
 compat_libs      = php-compat.mjs report-text.mjs
 deps_libs        = deps-audit.mjs deps-audit.php licences.json lockfile.mjs report-text.mjs
-secrets_libs     = secrets-audit.mjs report-text.mjs
+secrets_libs     = secrets-audit.mjs secrets-placeholders.json report-text.mjs
 
 # What the goals on this command line need, handed to the core's analyser library
 # section: appended, never set, because every analyser module adds its own.
@@ -725,6 +725,13 @@ sourcegraph-access-token on a line without an sgp_ token, is [i] and not a
 secret: both rules take any string of high entropy. Every other rule, a
 private key or the token of a provider, stays [!] there as well.
 
+Docs, examples and test scripts are full of credentials that only stand for
+one: admin:admin, "$USER:$PASS" or <password> in a curl line. A match whose
+value is such a placeholder is [i] and not a secret. The placeholders are a
+data file, lib/secrets-placeholders.json of ncmake, one regular expression per
+entry, tested against the value gitleaks matched and for a user:password pair
+against the password as well; ARGS=--placeholders=<file> reads another one.
+
 Findings are marked [!] worth changing, [i] worth knowing, [ok] nothing found:
   [!] secret-shipped     a secret in what ships: take it out and revoke it
   [!] secret-in-history  a secret in a commit, with the commit that added it: it
@@ -733,6 +740,8 @@ Findings are marked [!] worth changing, [i] worth knowing, [ok] nothing found:
   [i] public-files       the matches left out in each public file, by scope
   [i] generated-files    the matches without a format in each generated file,
                          by scope; the ten with the most, all with --details
+  [i] placeholders       the matches that are placeholders in each file, by
+                         scope; the ten with the most, all with --details
 Each finding gives the rule, the file, the line and the commit, and never the
 secret: gitleaks runs with --redact. ARGS=--reveal shows the line of each
 finding on the terminal, for the maintainer who has to find it; it never
@@ -743,10 +752,10 @@ secret at all; make secrets-ignore writes it for the findings picked.
 .gitleaks.toml of the repository configures gitleaks for both scopes.
 
 "rules" in the JSON is a sha256 over everything besides the commits that
-decides the result: the gitleaks version, the analyser and the repository's
-.gitleaks.toml and .gitleaksignore. A tool that keeps a history result and
-later scans only COMMITS="--all --not <tips>" scans in full again once it
-changes.
+decides the result: the gitleaks version, the analyser, the placeholders and
+the repository's .gitleaks.toml and .gitleaksignore. A tool that keeps a
+history result and later scans only COMMITS="--all --not <tips>" scans in full
+again once it changes.
 
 make tag checks what ships before its confirmation, and make dist checks the
 staged tree before it packs it; both stop on secret-shipped, and
@@ -759,7 +768,8 @@ The exit code is 1 when a finding is marked [!]. ARGS is passed to the analyser:
   make secrets-audit TARBALL=<file>     a tarball, e.g. the one make dist packs
   make secrets-audit SCOPE=history COMMITS=main..HEAD  the commits of a branch
   make secrets-audit ARGS=--details     every commit that changed a file found
-                                        by its name
+                                        by its name, every generated file and
+                                        every file with placeholders
   make secrets-audit ARGS=--reveal      the line of each finding, on the
                                         terminal only
   make secrets-audit ARGS=--json > secrets.json  machine-readable, nothing else
