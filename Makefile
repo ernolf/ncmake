@@ -67,7 +67,7 @@ ifeq ($(strip $(NO_COLOR)),)
 endif
 
 .DEFAULT_GOAL := help
-.PHONY: help reuse clean dist-clean dev-init
+.PHONY: help reuse clean dist-clean dev-init data-update
 
 # REUSE compliance check (https://reuse.software) in the official fsfe/reuse
 # container; RUNTIME=bare expects the reuse tool on the host. Licensing is a
@@ -75,6 +75,14 @@ endif
 reuse:
 	@echo "==> reuse lint (RUNTIME=$(RUNTIME))"
 	@$(reuse_run) lint
+
+# Regenerates every file of data/ from the sources it names, one extraction script
+# per file in data/update/. A script that fails leaves its file as it was and the
+# others still run, so one unreachable source holds back no other file; the target
+# fails at the end. -B writes no bytecode beside the scripts, which the workflow
+# would otherwise commit with data/.
+data-update:
+	@rc=0; for f in data/update/*.py; do case "$$f" in */common.py) continue ;; esac; echo "==> $$f"; python3 -B "$$f" || { echo "ERROR: $$f failed" >&2; rc=1; }; done; exit $$rc
 
 clean:
 	rm -rf build
@@ -99,6 +107,9 @@ help::
 	@echo ""
 	@echo "$(ch)Lint:$(c0)"
 	@echo "  $(ct)reuse$(c0)                Run the REUSE compliance check in the fsfe/reuse container"
+	@echo ""
+	@echo "$(ch)Data:$(c0)"
+	@echo "  $(ct)data-update$(c0)          Regenerate the files of data/ from their sources"
 
 # == Developer module: CI workflow manager ==
 include mk/workflows.mk
@@ -127,6 +138,16 @@ make reuse
 Runs the REUSE compliance check (https://reuse.software) over the whole tree in
 the official fsfe/reuse container. RUNTIME=bare runs a reuse tool installed on
 the host instead.
+endef
+define help_data-update
+make data-update
+
+Regenerates every file of data/, the facts of the world outside that ncmake goes
+by, each with its extraction script in data/update/ from the sources the file
+names. A file is rewritten only when one of its values changes. A script that
+fails leaves its file alone, the others still run, and the target exits 1. The
+workflow ncmake-data-update runs it on a schedule and opens a pull request with
+what changed.
 endef
 help-%:
 	@:$(info $(or $(help_$*),No extended help for "$*". Run "make help" for the target list.))

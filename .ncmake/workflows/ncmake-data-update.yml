@@ -1,0 +1,116 @@
+# SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
+# SPDX-License-Identifier: MIT
+#
+# ncmake self-CI - generated data. https://github.com/ernolf/ncmake
+#
+# The repository's own workflow: it lives in .ncmake/workflows/, where Dependabot
+# keeps it current, and `make workflows-install W=ncmake-data-update` installs it
+# into .github/workflows/.
+#
+# On a schedule, regenerates the files of data/ from the sources each one names
+# (make data-update) and opens a pull request when a value changed. Nothing under
+# data/ is edited by hand: what an analyser or the core goes by about the world
+# outside, the Nextcloud majors and their PHP, the Node.js release schedule, comes
+# from here. A source that cannot be read fails the job but keeps no other file
+# from its pull request. Once that pull request is merged the cleanup job deletes
+# its branch.
+#
+# Authentication is the GitHub App of the workflow updater, minted per run as a
+# short-lived token: the commits it pushes through the API are verified, and a
+# pull request it opens runs the checks, which one opened with the default
+# GITHUB_TOKEN would not. See https://github.com/ernolf/ncmake/wiki/GitHub-App.
+
+name: ncmake data update
+
+on:
+  schedule:
+    # Daily at 04:30 UTC, an hour before the workflow updater. GitHub starts
+    # scheduled runs on a best-effort basis, so expect this a few hours late.
+    - cron: '30 4 * * *'
+  workflow_dispatch:
+  # React to a merge so the cleanup job can remove the branch. This fires for
+  # every closed pull request; the cleanup job filters down to a merged
+  # ncmake/data/update.
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ncmake-data-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create app token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.NCMAKE_UPDATER_CLIENT_ID }}
+          private-key: ${{ secrets.NCMAKE_UPDATER_PRIVATE_KEY }}
+          # Without these the token carries every permission of the app.
+          permission-contents: write # push the update branch
+          permission-pull-requests: write # open the pull request
+          permission-metadata: read
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Regenerate data/ from its sources
+        run: make data-update
+
+      # Also after a failed source: the files that could be read are as current
+      # as their sources, and the failed one is as it was.
+      - name: Open pull request
+        if: ${{ !cancelled() }}
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          sign-commits: true
+          signoff: true
+          branch: ncmake/data/update
+          delete-branch: true
+          add-paths: data/
+          title: 'chore(data): update the generated data from its sources'
+          commit-message: 'chore(data): update the generated data from its sources'
+          body: |
+            Automated by the ncmake data update.
+
+            `make data-update` regenerated data/ from the sources each file
+            names, and a value changed. The diff shows which, and the sources
+            of the file name the reading it comes from. Review and merge.
+
+  cleanup:
+    if: >-
+      github.event_name == 'pull_request'
+      && github.event.pull_request.merged == true
+      && github.event.pull_request.head.ref == 'ncmake/data/update'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create app token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.NCMAKE_UPDATER_CLIENT_ID }}
+          private-key: ${{ secrets.NCMAKE_UPDATER_PRIVATE_KEY }}
+          permission-contents: write # delete the branch
+          permission-metadata: read
+
+      - name: Delete the merged branch if it is still there
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          ref="repos/${{ github.repository }}/git/refs/heads/ncmake/data/update"
+          # The repository may have deleted the head branch on merge already.
+          if gh api "$ref" >/dev/null 2>&1; then
+            gh api --method DELETE "$ref" \
+              || echo "Branch was removed concurrently; nothing to do."
+          else
+            echo "Branch already deleted; nothing to do."
+          fi

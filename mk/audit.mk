@@ -79,7 +79,8 @@
 # == Analyser configuration ==
 # What each analyser needs next to it. bundler-config.mjs reads the bundler and its
 # config, report-text.mjs prints; the analyser itself decides what is worth saying.
-consistency_libs = consistency-audit.mjs report-text.mjs
+# data.mjs reads the generated data of the ncmake repo, the data/ entries.
+consistency_libs = consistency-audit.mjs data.mjs report-text.mjs data/nextcloud-server.json data/node-schedule.json
 verify_libs      = build-verify.mjs bundler-config.mjs report-text.mjs scratch-build.mjs
 changelog_libs   = changelog-lint.mjs report-text.mjs
 compat_libs      = php-compat.mjs report-text.mjs
@@ -100,26 +101,6 @@ ncmake_libs += $(if $(filter consistency-audit,$(MAKECMDGOALS)),$(consistency_li
 # container, so the invocation is handed in as a template with %s for the options.
 # The inner quotes are resolved by the shell that runs the analyser.
 consistency_cmdline = make consistency-audit ARGS=\"%s\"
-
-# The major nextcloud/server develops on master, from its version.php. No server
-# has run a <nextcloud max-version> beyond it, so the audit holds the declared range
-# against it. A table in the analyser would have to be kept current by hand; this
-# follows the server. It is read only when the recipe runs, and where it cannot be
-# read it stays empty and the analyser falls back on its own table of majors.
-consistency_nc_master = $(shell curl -fsSL $(curl_retry) "$(nc_server_raw)/master/version.php" 2>/dev/null | sed -n 's/^\$$OC_Version[^0-9]*\([0-9]*\).*/\1/p' | head -1)
-
-# The newest major nextcloud/server has released, the highest major among its
-# release tags vX.Y.Z; a tag with a beta or rc suffix is no release. The App Store
-# rules let a <nextcloud max-version> reach one major beyond it. Read and, where it
-# cannot be read, left to the analyser like the master major.
-consistency_nc_newest = $(shell $(net_retry); t=$$(net_retry git ls-remote --tags --refs https://github.com/nextcloud/server.git 'v*') && printf '%s\n' "$$t" | sed -n 's|.*refs/tags/v\([0-9]*\)\.[0-9]*\.[0-9]*$$|\1|p' | sort -n | tail -1)
-
-# The Node.js release schedule the core picks the build Node from, so the audit
-# can tell when engines.node admits only end-of-life lines. It is handed in as one
-# word per line, v<major>=<start>,<lts>,<end>, which needs no quoting in the
-# recipe. Read only for an app with a package.json; where it cannot be read it
-# stays empty and the analyser falls back on its own snapshot.
-consistency_node_schedule = $(if $(wildcard package.json),$(shell curl -fsSL "$(node_schedule_url)" 2>/dev/null | python3 -c 'import json,sys; s=json.load(sys.stdin); print(" ".join(k+"="+",".join(s[k].get(f,"") for f in ("start","lts","end")) for k in sorted(s) if k[:1]=="v" and k[1:].isdigit()))' 2>/dev/null))
 
 # The paths a release ships, so the audit can name a directory the app reads at run
 # time that the tarball lacks. The patterns as the core packs them, keep_extra
@@ -378,7 +359,7 @@ consistency-audit:
 	@$(audit_core)
 	@$(call ncmake_lib_need,$(consistency_libs))
 	@echo "==> consistency-audit$(if $(strip $(ARGS)), $(ARGS)) (RUNTIME=$(RUNTIME))" >&2
-	@$(ncmake_lib_read_run) '$(call ncmake_lib_guard,consistency-audit) CONSISTENCY_AUDIT_CMDLINE="$(consistency_cmdline)" CONSISTENCY_AUDIT_APPDIR="$(notdir $(CURDIR))" CONSISTENCY_AUDIT_NC_MASTER="$(consistency_nc_master)" CONSISTENCY_AUDIT_NC_NEWEST="$(consistency_nc_newest)" CONSISTENCY_AUDIT_NODE_SCHEDULE="$(consistency_node_schedule)" CONSISTENCY_AUDIT_KEEP="$(consistency_keep)" CONSISTENCY_AUDIT_NO_NETWORK="$(NO_NETWORK)" node $(ncmake_lib_path)/consistency-audit.mjs $(ARGS) $(ncmake_json_arg)'
+	@$(ncmake_lib_read_run) '$(call ncmake_lib_guard,consistency-audit) CONSISTENCY_AUDIT_CMDLINE="$(consistency_cmdline)" CONSISTENCY_AUDIT_APPDIR="$(notdir $(CURDIR))" CONSISTENCY_AUDIT_KEEP="$(consistency_keep)" CONSISTENCY_AUDIT_NO_NETWORK="$(NO_NETWORK)" node $(ncmake_lib_path)/consistency-audit.mjs $(ARGS) $(ncmake_json_arg)'
 
 build-verify:
 	@$(audit_core)
@@ -397,7 +378,7 @@ php-compat: check-app
 	@$(compat_core)
 	@$(call ncmake_lib_need,$(compat_libs))
 	@floor='$(php_min)'; server='$(php_server_max)'; declared='$(php_declared_max)'; master='$(compat_master)'; \
-	[ -n "$$server" ] || { echo "ERROR: no PHP ceiling - lib/versioncheck.php of Nextcloud $(or $(nc_max),master) could not be read" >&2; exit 1; }; \
+	[ -n "$$server" ] || { echo "ERROR: no PHP ceiling of Nextcloud $(or $(nc_max),master) - $(ncmake_raw)/data/nextcloud-server.json could not be fetched - network?" >&2; exit 1; }; \
 	raise=$$declared; [ -z "$$declared" ] || [ -z "$$master" ] || raise=$$(printf '%s\n' "$$declared" "$$master" | sort -V | head -1); \
 	ceiling=$$(printf '%s\n' "$$server" $$raise | sort -V | tail -1); \
 	if [ "$(PHP)" = all ]; then \
@@ -509,16 +490,17 @@ report says so.
 
 Findings are marked [!] worth changing, [i] worth knowing, [ok] nothing found,
 and each says which files it was read from. What the checkout does not state is
-named as not stated instead of being guessed at - with one exception, the oldest
-Nextcloud major still maintained, which is written into the analyser, and the
-report names the month that is from. The newest released major is read from the
-release tags of nextcloud/server, and the major it develops on master from its
-version.php: a <nextcloud max-version> beyond that names servers nobody has run
-the app on. Without the network a list of majors in the analyser stands in for
-both, and the report says so. The Node.js release schedule is read the same way,
-so an engines.node that admits only end-of-life Node lines is reported with the
-line the release is built on and the oldest line still maintained; without the
-network a snapshot in the analyser stands in for the schedule.
+named as not stated instead of being guessed at. What the audit goes by about
+the world outside is data/nextcloud-server.json and data/node-schedule.json of
+ncmake, which a workflow there regenerates from their sources, and which the core
+fetches beside the analyser: the oldest Nextcloud major still maintained, from
+the server's Maintenance and Release Schedule, the newest released major, from
+the release tags of nextcloud/server, and the major it develops on master, from
+its version.php. A <nextcloud max-version> beyond that names servers nobody has
+run the app on. The Node.js release schedule, from nodejs/Release, tells an
+engines.node that admits only end-of-life Node lines, which is reported with the
+line the release is built on and the oldest line still maintained. The report
+names the source of each.
 
 It reads metadata only: no build, no install, no installed dependency tree, no
 bytes, and from the network only the links. That makes it useful on a fresh clone, and on an app that never heard of
@@ -603,7 +585,8 @@ JSON=<file> writes the JSON of ARGS=--json to <file> as well, from the same run,
 and the report is printed as without it. The file can lie outside the app; it is
 replaced once the run is complete, and a run that stops on an error writes none.
 
-It needs the network for versioncheck.php and the images. With RUNTIME=bare it
+It needs the network for the images, and on the first run for
+data/nextcloud-server.json of ncmake, which holds what versioncheck.php says. With RUNTIME=bare it
 runs on the PHP of the host, once per minor, and says so; the PHP ahead of
 master, which only its image carries, is left out there.
 endef

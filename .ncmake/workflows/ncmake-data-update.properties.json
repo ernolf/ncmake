@@ -1,0 +1,4 @@
+{
+    "name": "ncmake data update",
+    "description": "Regenerate the files of data/ from the sources each one names on a schedule, and open a pull request when a value changed"
+}

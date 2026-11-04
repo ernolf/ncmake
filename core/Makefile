@@ -212,33 +212,48 @@ no_runtime   = sh -c 'echo >&2; echo "ERROR: no container runtime found (podman/
 #                    PHP version does not affect the result.
 # The Node line comes from package.json's engines.node, see node_major, and runs in
 # node_tool_image.
+# What changes over time and can be read from a source, the majors of
+# nextcloud/server and the PHP each runs on, the Node.js release schedule, is data
+# of the ncmake repo: data/<name>.json, which a workflow there regenerates from the
+# sources the file names. No run reads those sources itself. A file is fetched into
+# data/ of the analyser library directory, where the analysers read it too, when a
+# value of it is first needed, and refreshed on the same TTL and ETag terms as this
+# file. ncmake_fetch_fn defines the shell function that fetches one file, here and
+# for the analyser libraries. Offline before the first fetch, a value is empty.
+ncmake_fetch_fn = ncmake_fetch() { t=$$1 u=$$2; mkdir -p "$${t%/*}"; if [ ! -s "$$t" ]; then curl -fsSL $(curl_retry) "$$u" -o "$$t" 2>/dev/null; test -s "$$t" || rm -f "$$t"; elif [ -n "$$(find "$$t" -mmin +$(NCMAKE_TTL_MIN) 2>/dev/null)" ]; then curl -fsSL $(curl_retry) --etag-compare "$$t.etag" --etag-save "$$t.etag" "$$u" -o "$$t.new" 2>/dev/null; if [ -s "$$t.new" ]; then mv "$$t.new" "$$t"; else rm -f "$$t.new"; fi; touch "$$t"; fi; };
+# $(call ncmake_data_file,<name>) fetches data/<name>.json where needed and names
+# the cached file. $(call ncmake_data,<name>,<keys>) is the value the keys lead to
+# below "values", one key per word: a list comes back as words, anything missing
+# as nothing.
+ncmake_data_file = $(shell $(ncmake_fetch_fn) ncmake_fetch "$(ncmake_lib_dir)/data/$(1).json" "$(ncmake_raw)/data/$(1).json"; echo "$(ncmake_lib_dir)/data/$(1).json")
+ncmake_data      = $(shell python3 -c 'import functools,json,sys; v=functools.reduce(lambda v,k: v.get(k) if isinstance(v,dict) else None, sys.argv[2:], json.load(open(sys.argv[1], encoding="utf-8"))["values"]); print(" ".join(map(str,v)) if isinstance(v,list) else "" if v is None or isinstance(v,dict) else v)' "$(call ncmake_data_file,$(1))" $(2) 2>/dev/null)
 # An info.xml without <php> still has a PHP floor: the one its oldest declared server
-# refuses to run below. Each server states it in its own lib/versioncheck.php, read
-# here from its stable branch, or from master for a major that has none yet.
-nc_server_raw = https://raw.githubusercontent.com/nextcloud/server
+# refuses to run below. Each server states it in its own lib/versioncheck.php, of
+# its stable branch, or of master for the major in development, and
+# data/nextcloud-server.json holds what each says. A major the file does not name,
+# one that does not exist yet, goes by master.
+nc_master     = $(call ncmake_data,nextcloud-server,master)
+nc_php        = $(or $(call ncmake_data,nextcloud-server,php $(1) $(2)),$(call ncmake_data,nextcloud-server,php $(nc_master) $(2)))
 php_declared  = $(call info_xml,dependencies/php,min-version,[0-9.]+)
 nc_min        = $(firstword $(subst ., ,$(call info_xml,dependencies/nextcloud,min-version,[0-9.]+)))
-nc_php_floor  = $(shell { curl -fsSL "$(nc_server_raw)/stable$(1)/lib/versioncheck.php" 2>/dev/null || curl -fsSL "$(nc_server_raw)/master/lib/versioncheck.php" 2>/dev/null; } | sed -n 's/.*PHP_VERSION_ID < \([0-9]*\).*/\1/p' | head -1 | awk '{ printf "%d.%d", $$1 / 10000, $$1 % 10000 / 100 }')
+nc_php_floor  = $(call nc_php,$(1),min)
 # The PHP images are tagged by major and minor, so a declared "8" means 8.0 and a
 # patch level is dropped.
 php_major_minor = $(if $(1),$(word 1,$(subst ., ,$(1))).$(or $(word 2,$(subst ., ,$(1))),0))
 php_app       = $(or $(call php_major_minor,$(php_declared)),$(call nc_php_floor,$(nc_min)))
 # The floor never drops below the one of the newest end-of-life Nextcloud major,
 # whatever the app declares: an app in the App Store supports current servers, none
-# of which runs on an older PHP. That major is the first row under "EOL Versions" in
-# the server's Maintenance and Release Schedule; nc_eol_fallback stands in when the
-# page cannot be read.
-nc_schedule_url = https://raw.githubusercontent.com/wiki/nextcloud/server/Maintenance-and-Release-Schedule.md
-nc_eol_fallback = 32
-nc_eol        = $(or $(shell curl -fsSL "$(nc_schedule_url)" 2>/dev/null | sed -n '/^## EOL Versions/,$$ s/^| \*\*\([0-9]*\)\*\*.*/\1/p' | head -1),$(nc_eol_fallback))
+# of which runs on an older PHP. That major is the newest under "EOL Versions" in
+# the server's Maintenance and Release Schedule, as data/nextcloud-server.json holds it.
+nc_eol        = $(call ncmake_data,nextcloud-server,eol)
 php_eol_floor = $(call nc_php_floor,$(nc_eol))
-php_min       = $(or $(lastword $(shell printf '%s\n' $(php_app) $(php_eol_floor) | sort -V)),$(error No PHP floor: neither appinfo/info.xml nor lib/versioncheck.php of Nextcloud $(nc_min) and $(nc_eol) gave one))
+php_min       = $(or $(lastword $(shell printf '%s\n' $(php_app) $(php_eol_floor) | sort -V)),$(error No PHP floor: neither appinfo/info.xml nor $(ncmake_raw)/data/nextcloud-server.json gave one - network?))
 # The ceiling is the newest PHP minor the highest declared server runs on, from the
 # same file: it refuses PHP_VERSION_ID >= N, so the ceiling is the minor below N. A
 # max-version without a stable branch, a major in development or one that does not
-# exist, is read from master. <php max-version> can only raise it.
+# exist, goes by master. <php max-version> can only raise it.
 nc_max          = $(firstword $(subst ., ,$(call info_xml,dependencies/nextcloud,max-version,[0-9.]+)))
-nc_php_ceiling  = $(shell { curl -fsSL "$(nc_server_raw)/stable$(1)/lib/versioncheck.php" 2>/dev/null || curl -fsSL "$(nc_server_raw)/master/lib/versioncheck.php" 2>/dev/null; } | sed -n 's/.*PHP_VERSION_ID >= \([0-9]*\).*/\1/p' | head -1 | awk '{ $$1 -= 100; printf "%d.%d", $$1 / 10000, $$1 % 10000 / 100 }')
+nc_php_ceiling  = $(call nc_php,$(1),max)
 php_declared_max = $(call php_major_minor,$(call info_xml,dependencies/php,max-version,[0-9.]+))
 php_server_max  = $(call nc_php_ceiling,$(nc_max))
 # The PHP minor of the build images. make php-compat sets it per run, for each minor
@@ -249,12 +264,10 @@ php_version     = $(php_min)
 # floor, not the version to build on. When no LTS line fits, the newest current
 # line that does; when only end-of-life lines fit, the newest of them, with a
 # warning. A line the schedule lists before its start date has no image yet and
-# counts in none of these. Without engines.node it is the newest LTS line. When the
-# schedule cannot be read, node_schedule_fallback stands in, a snapshot of it from
-# 2026-10.
-node_schedule_url      = https://raw.githubusercontent.com/nodejs/Release/main/schedule.json
-node_schedule_fallback = {"v20":{"lts":"2023-10-24","end":"2026-04-30"},"v22":{"lts":"2024-10-29","end":"2027-04-30"},"v24":{"lts":"2025-10-28","end":"2028-04-30"},"v26":{"lts":"2026-10-28","end":"2029-04-30"}}
-node_pick   = $(if $(wildcard package.json),$(shell { curl -fsSL "$(node_schedule_url)" 2>/dev/null || echo '$(node_schedule_fallback)'; } | python3 -c 'import json,re,sys,datetime; r=re.sub(r"([<>=^~]+)\s+",r"\1",re.sub(r"(\S+)\s+-\s+(\S+)",r">=\1 <=\2",str(json.load(open("package.json")).get("engines",{}).get("node","")).strip())); s=json.load(sys.stdin); t=datetime.date.today().isoformat(); I=(1e9,0,0); P=lambda x:[int(n) for n in re.match(r"[v=]*([0-9.]*)",x).group(1).split(".") if n][:3]; pad=lambda p:tuple((p+[0,0,0])[:3]); up=lambda p:pad(p[:-1]+[p[-1]+1]) if p else I; C=lambda o,p:{"^":(pad(p),up(p[:1])),"~":(pad(p),up(p[:2])),">=":(pad(p),I),">":(up(p),I),"<":((0,0,0),pad(p)),"<=":((0,0,0),up(p))}.get(o,(pad(p),up(p))); ok=lambda M:any(all(max(lo,(M,0,0))<min(hi,(M+1,0,0)) for lo,hi in (C(m.group(1),P(m.group(2))) for m in (re.match(r"([<>]=?|[\^~]?)(.*)",c) for c in a.split()))) for a in r.split("||")); M=sorted((int(k[1:]) for k in s if re.fullmatch(r"v[0-9]+",k) and s[k].get("start","")<=t),reverse=True); live=lambda m:s["v"+str(m)].get("end","")>t; lts=lambda m:s["v"+str(m)].get("lts","9")<=t; c=[m for m in M if ok(m) and live(m) and lts(m)] or [m for m in M if ok(m) and live(m)]; x=c[:1] or [m for m in M if ok(m)][:1]; print(" ".join([str(x[0])]+([] if c else ["eol"])) if r and x else "")' 2>/dev/null))
+# counts in none of these. Without engines.node it is the newest LTS line. The
+# schedule is data/node-schedule.json; offline before its first fetch the pick is
+# empty, and node_line builds on the newest LTS line.
+node_pick   = $(if $(wildcard package.json),$(shell python3 -c 'import json,re,sys,datetime; r=re.sub(r"([<>=^~]+)\s+",r"\1",re.sub(r"(\S+)\s+-\s+(\S+)",r">=\1 <=\2",str(json.load(open("package.json")).get("engines",{}).get("node","")).strip())); s=json.load(open(sys.argv[1], encoding="utf-8"))["values"]; t=datetime.date.today().isoformat(); I=(1e9,0,0); P=lambda x:[int(n) for n in re.match(r"[v=]*([0-9.]*)",x).group(1).split(".") if n][:3]; pad=lambda p:tuple((p+[0,0,0])[:3]); up=lambda p:pad(p[:-1]+[p[-1]+1]) if p else I; C=lambda o,p:{"^":(pad(p),up(p[:1])),"~":(pad(p),up(p[:2])),">=":(pad(p),I),">":(up(p),I),"<":((0,0,0),pad(p)),"<=":((0,0,0),up(p))}.get(o,(pad(p),up(p))); ok=lambda M:any(all(max(lo,(M,0,0))<min(hi,(M+1,0,0)) for lo,hi in (C(m.group(1),P(m.group(2))) for m in (re.match(r"([<>]=?|[\^~]?)(.*)",c) for c in a.split()))) for a in r.split("||")); M=sorted((int(k) for k in s if s[k].get("start","")<=t),reverse=True); live=lambda m:s[str(m)].get("end","")>t; lts=lambda m:s[str(m)].get("lts","9")<=t; c=[m for m in M if ok(m) and live(m) and lts(m)] or [m for m in M if ok(m) and live(m)]; x=c[:1] or [m for m in M if ok(m)][:1]; print(" ".join([str(x[0])]+([] if c else ["eol"])) if r and x else "")' "$(call ncmake_data_file,node-schedule)" 2>/dev/null))
 node_major  = $(call node_major_of,$(node_pick))
 node_major_of = $(if $(filter eol,$(1)),$(warning engines.node in package.json allows only end-of-life Node lines - building on Node $(firstword $(1))))$(firstword $(1))
 php_base_image ?= docker.io/library/php:$(php_version)-cli-alpine
@@ -2599,19 +2612,23 @@ help::
 # them to ncmake_libs. That declaration is what this section works on, which is why
 # it stands after the module include.
 ncmake_lib_dir = $(ncmake_cache)/lib-$(ncmake_ref)
+# An entry data/<name>.json is a file of the generated data, which the repo keeps
+# beside lib/ and the cache in data/ beside the analysers; ncmake_lib_src sets s to
+# the repo path of entry f.
+ncmake_lib_src = case "$$f" in data/*) s="$$f" ;; *) s="lib/$$f" ;; esac
 
 # Fetched on first use, then refreshed on the same TTL and ETag terms as this file
 # and the modules: unchanged or offline keeps the cached copy. The list is empty
 # unless an analyser is among the goals, so no other target in any app ever pays
 # for a network round trip.
 ifneq ($(strip $(ncmake_libs)),)
-  $(shell mkdir -p "$(ncmake_lib_dir)"; for f in $(sort $(ncmake_libs)); do t="$(ncmake_lib_dir)/$$f"; u="$(ncmake_raw)/lib/$$f"; if [ ! -s "$$t" ]; then curl -fsSL $(curl_retry) "$$u" -o "$$t" 2>/dev/null; test -s "$$t" || rm -f "$$t"; elif [ -n "$$(find "$$t" -mmin +$(NCMAKE_TTL_MIN) 2>/dev/null)" ]; then curl -fsSL $(curl_retry) --etag-compare "$$t.etag" --etag-save "$$t.etag" "$$u" -o "$$t.new" 2>/dev/null; if [ -s "$$t.new" ]; then mv "$$t.new" "$$t"; else rm -f "$$t.new"; fi; touch "$$t"; fi; done)
+  $(shell $(ncmake_fetch_fn) for f in $(sort $(ncmake_libs)); do $(ncmake_lib_src); ncmake_fetch "$(ncmake_lib_dir)/$$f" "$(ncmake_raw)/$$s"; done)
 endif
 
 # The first fetch fails silently on a machine that is offline, so a target states
 # what is missing instead of letting node report a path: $(call ncmake_lib_need,
 # <files>) as its first recipe line.
-ncmake_lib_need = for f in $(1); do test -s "$(ncmake_lib_dir)/$$f" || { echo "ERROR: could not fetch $(ncmake_raw)/lib/$$f - network?" >&2; exit 1; }; done
+ncmake_lib_need = for f in $(1); do $(ncmake_lib_src); test -s "$(ncmake_lib_dir)/$$f" || { echo "ERROR: could not fetch $(ncmake_raw)/$$s - network?" >&2; exit 1; }; done
 
 # The library directory is mounted at /ncmake, read-only, alongside the app at
 # /app, and gets the npm and corepack cache every other npm call here gets: an
