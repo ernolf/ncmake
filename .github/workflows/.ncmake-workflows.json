@@ -29,9 +29,14 @@
     "sha": "8c0e719d3e84f9eb591c7651ce72645fd85f8988",
     "source": "ncmake"
   },
+  "ncmake-data-update.yml": {
+    "hash": "45730a5895c544558a6ae4f8cca2226a43d83b0ea689dcc5fbc1623a5889ce4c",
+    "sha": "00324d83e941e9263f8edab45371624cdcc3c4e6",
+    "source": "local"
+  },
   "ncmake-smoke.yml": {
-    "hash": "37a5e8e1753b72ee45bfbfd1964d68e901d9a8e70395b0f47d1eed2bd40979c4",
-    "sha": "16e294fa4a1f4cfbc0e1a773e432fd2ae3c8bf88",
+    "hash": "56b1a687c8e3cf58388da0dd56ca32f44e5602783111c89cd76b02f31818f8cd",
+    "sha": "7e93e2d886cf90a712e1ed52ba507111bf8c8aec",
     "source": "local"
   },
   "reuse.yml": {

@@ -17,14 +17,15 @@
 # Each heavy target runs from a pristine tree (dist-clean in between), so a
 # target that only works on leftovers from a previous run is caught.
 #
-# The run reads from this revision only core/Makefile, core/image-sources, lib/,
-# mk/ and this workflow; the images it pulls are the published ones. A change that
-# touches none of them is skipped: the changes job lists the changed files through
-# the compare API, and end-to-end runs unless every one of them is on the exclude
-# list in reaches. A path filter in on: would not do, since a workflow it skips
-# reports no status and end-to-end is a required check; a job its if: skips
-# reports success. Whenever the list cannot be had, end-to-end runs, and so it does
-# when the changes job itself fails: only its explicit false skips it.
+# The run reads from this revision only core/Makefile, core/image-sources, the
+# JSON files of data/, lib/, mk/ and this workflow; the images it pulls are the
+# published ones. A change that touches none of them is skipped: the changes job
+# lists the changed files through the compare API, and end-to-end runs unless
+# every one of them is on the exclude list in reaches. A path filter in on: would
+# not do, since a workflow it skips reports no status and end-to-end is a required
+# check; a job its if: skips reports success. Whenever the list cannot be had,
+# end-to-end runs, and so it does when the changes job itself fails: only its
+# explicit false skips it.
 #
 # The rule file of l10n-lint and the licence table of deps-audit are data that a
 # pull request may change on its own, so their examples are tested on every run,
@@ -67,7 +68,7 @@ jobs:
               .github/workflows/ncmake-smoke.yml) return 0 ;;
               .github/workflows/* | .ncmake/workflows/*) return 1 ;;
               .ncmake-workflows.json | .ncmake-workflows.json.license) return 1 ;;
-              skills/*) return 1 ;;
+              skills/* | data/update/*) return 1 ;;
               LICENSES/* | *.license | REUSE.toml) return 1 ;;
               core/* | lib/* | mk/*) return 0 ;;
               *.md) return 1 ;;
