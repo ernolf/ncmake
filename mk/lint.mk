@@ -138,7 +138,10 @@ lint_node    = $(call lint_run,$(2)) '$(call ncmake_lib_guard,$(1)) LINT_CMDLINE
 
 # What an analyser needs next to it, handed to the core's analyser library
 # section: appended, never set, because every analyser module adds its own.
+# lint_data_<target> is the generated data of the ncmake repo one of them reads.
 lint_libs = lint-common.mjs report-text.mjs
+lint_data_lint-actions = data.mjs data/github-runners.json
+lint_data_lint-web     = data.mjs data/nextcloud-eslint.json
 
 # == lint-actions-security ==
 # zizmor runs as the Linux binary of its GitHub release, and not from its image
@@ -251,7 +254,7 @@ endif
 # Every target of this module, in the order make lint runs them.
 lint_targets = lint-actions lint-actions-security lint-containerfiles lint-markdown lint-php-syntax lint-shell lint-vue-imports lint-web lint-yaml
 lint_plain   = $(filter-out lint-actions-security,$(lint_targets))
-ncmake_libs += $(foreach t,$(filter $(lint_plain),$(MAKECMDGOALS)),$(t).mjs $(lint_libs))
+ncmake_libs += $(foreach t,$(filter $(lint_plain),$(MAKECMDGOALS)),$(t).mjs $(lint_libs) $(lint_data_$(t)))
 
 .PHONY: lint $(lint_targets)
 
@@ -260,21 +263,21 @@ lint_banner = echo "==> $(1)$(if $(strip $(ARGS)), $(ARGS)) ($(2), RUNTIME=$(RUN
 
 lint-actions:
 	@$(lint_core)
-	@$(call ncmake_lib_need,$@.mjs $(lint_libs))
+	@$(call ncmake_lib_need,$@.mjs $(lint_libs) $(lint_data_$@))
 	@$(call lint_banner,$@,actionlint $(actionlint_version) with shellcheck $(shellcheck_version))
 	@adir=$$($(lint_bin_fetch) $(lint_actionlint)) && sdir=$$($(lint_bin_fetch) $(lint_shellcheck)) || exit 1; \
 	$(call lint_node,$@,$(call lint_tool,LINT_ACTIONLINT,adir,actionlint) $(call lint_tool,LINT_SHELLCHECK,sdir,shellcheck))
 
 lint-containerfiles:
 	@$(lint_core)
-	@$(call ncmake_lib_need,$@.mjs $(lint_libs))
+	@$(call ncmake_lib_need,$@.mjs $(lint_libs) $(lint_data_$@))
 	@$(call lint_banner,$@,hadolint $(hadolint_version))
 	@hdir=$$($(lint_bin_fetch) $(lint_hadolint)) || exit 1; \
 	$(call lint_node,$@,$(call lint_tool,LINT_HADOLINT,hdir,hadolint))
 
 lint-markdown:
 	@$(lint_core)
-	@$(call ncmake_lib_need,$@.mjs $(lint_libs))
+	@$(call ncmake_lib_need,$@.mjs $(lint_libs) $(lint_data_$@))
 	@$(call lint_banner,$@,$(lint_markdown_npm))
 	@$(call lint_npm_fetch,markdown,$(lint_markdown_npm)); \
 	$(call lint_node,$@,$(lint_modules))
@@ -283,7 +286,7 @@ lint-markdown:
 # output per version from a directory of its own.
 lint-php-syntax:
 	@$(lint_core)
-	@$(call ncmake_lib_need,$@.mjs $(lint_libs))
+	@$(call ncmake_lib_need,$@.mjs $(lint_libs) $(lint_data_$@))
 	@$(if $(filter-out $(lint_php_versions),$(lint_php_given)),echo "ERROR: PHP_VERSIONS or .php-version holds a word that is no PHP version (digits and dots, as in 8.2)" >&2; exit 1,:)
 	@$(call lint_banner,$@,PHP $(lint_php_versions))
 	@pdir=$$(mktemp -d) && trap 'rm -rf "$$pdir"' EXIT && mkdir "$$pdir/runs" \
@@ -293,27 +296,27 @@ lint-php-syntax:
 
 lint-shell:
 	@$(lint_core)
-	@$(call ncmake_lib_need,$@.mjs $(lint_libs))
+	@$(call ncmake_lib_need,$@.mjs $(lint_libs) $(lint_data_$@))
 	@$(call lint_banner,$@,shellcheck $(shellcheck_version))
 	@sdir=$$($(lint_bin_fetch) $(lint_shellcheck)) || exit 1; \
 	$(call lint_node,$@,$(call lint_tool,LINT_SHELLCHECK,sdir,shellcheck))
 
 lint-vue-imports:
 	@$(lint_core)
-	@$(call ncmake_lib_need,$@.mjs $(lint_libs))
+	@$(call ncmake_lib_need,$@.mjs $(lint_libs) $(lint_data_$@))
 	@$(call lint_banner,$@,the root-import pattern)
 	@$(call lint_node,$@,)
 
 lint-web:
 	@$(lint_core)
-	@$(call ncmake_lib_need,$@.mjs $(lint_libs))
+	@$(call ncmake_lib_need,$@.mjs $(lint_libs) $(lint_data_$@))
 	@$(call lint_banner,$@,$(lint_web_npm))
 	@$(call lint_npm_fetch,web,$(lint_web_npm)); \
 	$(call lint_node,$@,$(lint_modules))
 
 lint-yaml:
 	@$(lint_core)
-	@$(call ncmake_lib_need,$@.mjs $(lint_libs))
+	@$(call ncmake_lib_need,$@.mjs $(lint_libs) $(lint_data_$@))
 	@$(call lint_banner,$@,yamllint $(yamllint_version))
 	@ydir=$$($(lint_py_fetch) $(lint_yamllint)) || exit 1; \
 	$(call lint_node,$@,$(call lint_tool,LINT_YAMLLINT,ydir,.))
@@ -407,10 +410,10 @@ lint-actions workflow of ncmake-workflows does, and fails where that workflow
 fails. The workflows are everything under .github/workflows and
 .ncmake/workflows, and every YAML file with a .properties.json beside it, the
 form of a workflow template in ncmake-workflows. actionlint reads the
-repository's .github/actionlint.yaml or .yml; without one it runs with the
-default of the workflow, which declares ubuntu-latest-low, the self-hosted
-runner of Nextcloud, as a known runner label. A repository without workflows
-passes.
+repository's .github/actionlint.yaml or .yml; without one it runs with a
+default that declares the self-hosted runners of Nextcloud, as
+data/github-runners.json of ncmake names them, as known runner labels. A
+repository without workflows passes.
 
 A shellcheck finding of severity error or warning is [!], one of severity info
 or style [i], with the shellcheck code and severity as fields of the finding
