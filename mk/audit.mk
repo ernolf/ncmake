@@ -215,14 +215,17 @@ secrets_core = $(if $(value lint_bin_fetch),:,echo "ERROR: secrets-audit fetches
 # What ships, as a tree inside the app, since the container sees only the app:
 # secrets_tree when ship_check names one (make dist, the staged tree), else the
 # unpacked TARBALL=<file>, else the files make stage takes from the checkout,
-# copied as make stage copies them. The copy goes when the run ends.
+# copied as make stage copies them. A checkout without an app id has no keep
+# model, so its tracked files stand for what ships. The copy goes when the run
+# ends.
 secrets_dir   = build/secrets-audit
 SCOPE        ?= all
 secrets_scope = $(if $(filter shipped history all,$(SCOPE)),$(SCOPE),$(error SCOPE is shipped, history or all))
 secrets_ship  = $(if $(filter history,$(secrets_scope)),, \
 	$(if $(secrets_tree),tree='$(secrets_tree)' from=stage, \
 	$(if $(TARBALL),mkdir -p $(secrets_dir)/tarball && tar -xzf "$(TARBALL)" -C $(secrets_dir)/tarball --no-same-owner || exit 1; tree=$(secrets_dir)/tarball from=tarball, \
-	mkdir -p "$(secrets_dir)/stage/$(app_id)" && rsync -a --relative $(stage_excludes) $(addprefix ./,$(keep_existing)) "$(secrets_dir)/stage/$(app_id)/" || exit 1; tree=$(secrets_dir)/stage/$(app_id) from=checkout));)
+	$(if $(app_id),mkdir -p "$(secrets_dir)/stage/$(app_id)" && rsync -a --relative $(stage_excludes) $(addprefix ./,$(keep_existing)) "$(secrets_dir)/stage/$(app_id)/" || exit 1; tree=$(secrets_dir)/stage/$(app_id) from=checkout, \
+	mkdir -p "$(secrets_dir)/tracked" && git ls-files -z | rsync -a --from0 --files-from=- --ignore-missing-args ./ "$(secrets_dir)/tracked/" || exit 1; tree=$(secrets_dir)/tracked from=tracked)));)
 # The tree is named by the shell of the recipe, so the analyser's command, which
 # runs in another shell, gets it from outside its quotes.
 secrets_args  = --scope=$(secrets_scope) $(if $(filter history,$(secrets_scope)),,--shipped="'"$$tree"'" --from='"$$from"') $(if $(COMMITS),--commits="$(COMMITS)")
@@ -437,7 +440,7 @@ deps-audit: check-app
 deps-audit-composer:
 	@$(php_run) 'DEPS_AUDIT_NO_ADVISORIES="$(deps_no_advisories)" php $(deps_dir)/deps-audit.php >$(deps_dir)/composer.json 2>$(deps_dir)/composer.err'
 
-secrets-audit: check-app
+secrets-audit:
 	@$(audit_core)
 	@$(secrets_core)
 	@$(if $(and $(CI)$(GITHUB_ACTIONS),$(filter --reveal,$(ARGS))),echo "ERROR: ARGS=--reveal shows the secrets and is refused where CI is set" >&2; exit 1,:)
@@ -450,7 +453,7 @@ secrets-audit: check-app
 
 # secrets-audit exits 1 with findings, which is what this target is for, so its
 # status is not taken: a run that completed is one that wrote its JSON.
-secrets-ignore: check-app
+secrets-ignore:
 	@$(if $(BODY),test -r "$(BODY)" || { echo "BODY=$(BODY) is not a readable file" >&2; exit 1; };) commit="$(COMMIT)"; pr="$(PR)"; if [ "$$pr" = "1" ]; then commit=1; fi; \
 	mkdir -p "$(cache_dir)" && rm -f "$(secrets_ignore_json)" "$(secrets_ignore_add)" "$(secrets_ignore_list)" || exit 1; \
 	$(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory secrets-audit JSON="$(secrets_ignore_json)"; \
@@ -698,7 +701,9 @@ shipped file set it is in every tarball on the App Store.
 
 gitleaks looks for secrets by its own rules, in two scopes:
   shipped   the files make stage takes from the checkout, copied aside as make
-            stage copies them, or the tarball TARBALL=<file> names
+            stage copies them, or the tarball TARBALL=<file> names; in a
+            checkout without appinfo/info.xml, which ships nothing make
+            stage knows of, the tracked files of the checkout
   history   every commit of the checkout, or the commits of COMMITS=<range>,
             a git log range such as main..HEAD; it may take several words,
             such as "--all --not <commit>..." for every branch and tag

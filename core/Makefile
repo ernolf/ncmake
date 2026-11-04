@@ -801,7 +801,8 @@ export changelog_pr_body
 
 all: dist
 
-# Every functional target needs the app id; help stays runnable anywhere.
+# The targets of an app need its id; help and the targets that read only the
+# repository, reuse and the analysers, run in any checkout.
 check-app:
 	@test -n "$(app_id)" || { echo >&2; echo "ERROR: no valid <id> found in appinfo/info.xml - run make from a Nextcloud app root." >&2; echo >&2; exit 1; }
 
@@ -1546,9 +1547,10 @@ npm: check-app
 # forwarded to reuse lint, e.g. --json for a machine-readable report.
 # The REUSE Specification requires LICENSES/ of every compliant project, and
 # REUSE.toml or the deprecated .reuse/dep5 are the other ways to state licensing.
-# An app with none of them never claimed compliance, so linting it would only list
-# every file; FORCE=1 lints it anyway.
-reuse: check-app
+# A repository with none of them never claimed compliance, so linting it would only
+# list every file; FORCE=1 lints it anyway. It reads nothing of appinfo/info.xml
+# and runs in any repository.
+reuse:
 	@echo "==> reuse lint (RUNTIME=$(RUNTIME))"
 	@if [ -z "$(FORCE)" ] && [ ! -d LICENSES ] && [ ! -e REUSE.toml ] && [ ! -e .reuse/dep5 ]; then \
 		echo "Not set up for REUSE: no LICENSES/, REUSE.toml or .reuse/dep5. FORCE=1 lints it anyway."; \
@@ -2191,12 +2193,14 @@ make reuse [ARGS="<reuse lint arguments>"] [FORCE=1]
 Runs the REUSE compliance check (reuse.software) in the fsfe/reuse container:
 every file must carry a license, via an SPDX header or a REUSE.toml annotation.
 RUNTIME=bare expects the reuse tool on the host. ARGS is forwarded to reuse lint.
-An app without LICENSES/, REUSE.toml and .reuse/dep5 is reported as not set up
-for REUSE in one line, without a lint; FORCE=1 lints it anyway.
+A repository without LICENSES/, REUSE.toml and .reuse/dep5 is reported as not
+set up for REUSE in one line, without a lint; FORCE=1 lints it anyway. It needs
+no appinfo/info.xml and runs in any repository, also one that is no Nextcloud
+app; in an app below the top of its repository it lints the whole repository.
 
   make reuse                 check
   make reuse ARGS=--json     the report as JSON
-  make reuse FORCE=1         lint an app that is not set up for REUSE
+  make reuse FORCE=1         lint a repository that is not set up for REUSE
 endef
 
 define help_dist
