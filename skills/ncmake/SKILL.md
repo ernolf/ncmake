@@ -24,6 +24,8 @@ GNU make reads the first of `GNUmakefile`, `makefile` and `Makefile` it finds an
 
 The stub must sit in the repository root. Everything derives from `$(CURDIR)`, and the CI workflows expect it there. An app below the top of its repository, as `apps/<id>` of a monorepo, still builds and is analysed locally with a stub in its own directory: the containers mount the top of the repository and start in the app's directory.
 
+The stub also works in a repository that is no Nextcloud app. Without `appinfo/info.xml` the targets that read only the repository run: `reuse`, `secrets-audit` (its shipped scope then checks the tracked files), `consistency-audit` and every `lint-*` target. Every other target stops with "no valid <id> found in appinfo/info.xml".
+
 ## Ground rules
 
 Follow these before proposing any command. They are the mistakes that cost the most time.
