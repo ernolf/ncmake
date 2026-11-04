@@ -16,6 +16,8 @@ ncmake_ref = $(or $(NCMAKE_REF),main)
 ncmake_raw = https://raw.githubusercontent.com/ernolf/ncmake/$(ncmake_ref)
 gh_slug    = $(shell git remote get-url origin 2>/dev/null | sed -E 's#^git@github.com:##; s#^https://github.com/##; s#\.git$$##')
 cache_dir  = $(CURDIR)/build/cache
+# The data of this checkout, read as the core reads its fetched copy.
+ncmake_data = $(shell python3 -c 'import functools,json,sys; v=functools.reduce(lambda v,k: v.get(k) if isinstance(v,dict) else None, sys.argv[2:], json.load(open(sys.argv[1], encoding="utf-8"))["values"]); print(" ".join(map(str,v)) if isinstance(v,list) else "" if v is None or isinstance(v,dict) else v)' "$(CURDIR)/data/$(1).json" $(2) 2>/dev/null)
 
 # == Container runtime (for 'make reuse') ==
 # reuse runs in the official fsfe/reuse container, so the host needs no reuse

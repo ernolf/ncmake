@@ -43,10 +43,12 @@ export wf_src_nextcloud_raw  = https://raw.githubusercontent.com/nextcloud/.gith
 
 wf_dir  = .github/workflows
 
-# The Nextcloud templates target the org's own runner pool: labels like
-# ubuntu-latest-low are org-scoped and do not exist in a repo outside that org,
-# so those jobs would queue forever. On install each old=new pair is applied to
-# the fetched file, so the templates run anywhere.
+# The Nextcloud templates target the org's own runner pool: its labels are
+# org-scoped and do not exist in a repo outside that org, so those jobs would
+# queue forever. On install each old=new pair is applied to the fetched file, so
+# the templates run anywhere. The labels are data of ncmake,
+# data/github-runners.json, and each is rewritten to ubuntu-latest, the runner
+# GitHub hosts for every repository.
 #
 # Whether to rewrite is decided from the origin owner (gh_slug): a repo INSIDE
 # wf_runner_org keeps the labels (it really has those runners), every other repo
@@ -54,8 +56,7 @@ wf_dir  = .github/workflows
 # ncmake.mk: set wf_runner_org to your org, or set wf_runner_rewrite directly
 # (empty = never rewrite, or your own space-separated old=new pairs).
 wf_runner_org     ?= nextcloud
-wf_runner_rewrite ?= $(if $(filter $(wf_runner_org),$(firstword $(subst /, ,$(gh_slug)))),,ubuntu-latest-low=ubuntu-latest)
-export wf_runner_rewrite
+wf_runner_rewrite ?= $(if $(filter $(wf_runner_org),$(firstword $(subst /, ,$(gh_slug)))),,$(foreach l,$(call ncmake_data,github-runners,self_hosted),$(l)=ubuntu-latest))
 
 # REUSE for the generated lock file: JSON carries no comment, so a .license
 # sidecar declares it (the REUSE sidecar convention). It is generated content, so
@@ -385,7 +386,7 @@ else:
 endef
 export wf_tool
 
-wf_run = mkdir -p "$(cache_dir)" && printf '%s\n' "$$wf_tool" > "$(cache_dir)/ncmake_workflows.py" && python3 "$(cache_dir)/ncmake_workflows.py"
+wf_run = mkdir -p "$(cache_dir)" && printf '%s\n' "$$wf_tool" > "$(cache_dir)/ncmake_workflows.py" && wf_runner_rewrite='$(wf_runner_rewrite)' python3 "$(cache_dir)/ncmake_workflows.py"
 
 # COMMIT / PR: by default both targets only rewrite the files in place - that is
 # what the workflow updater relies on, so it stays flag-free. COMMIT=1 puts the
@@ -504,8 +505,9 @@ make workflows-install W="<name>[,<name>...]" [COMMIT=1|PR=1 [BODY=<path>]]
 Fetches the named workflows (the .yml suffix is optional; separate several with
 a comma or a space), replaces GitHub's template placeholders ($$default-branch
 from the origin HEAD; unknown ones are warned about and left as-is), rewrites the
-org-scoped runner labels so the templates run outside that org (unless your
-origin owner is wf_runner_org, in which case the labels are kept), writes them
+org-scoped runner labels of data/github-runners.json to ubuntu-latest so the
+templates run outside that org (unless your origin owner is wf_runner_org, in
+which case the labels are kept), writes them
 into .github/workflows/ and records source, upstream sha and content hash in
 .ncmake-workflows.json, with a .license sidecar next to it. A license that a
 written file or the sidecar names (wf_lock_license, default CC0-1.0) and that
