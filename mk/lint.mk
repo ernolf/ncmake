@@ -7,7 +7,8 @@
 # which collects the same files, runs the same tool in the same version and fails
 # where the workflow fails. A finding so shows on the maintainer's machine before it
 # shows in a public CI log, and gh-nc-appsdiag runs the targets with JSON= next to
-# the audits. The tool version is pinned here and nowhere else.
+# the audits. Which release of a tool runs, and the digest it is checked against,
+# is generated data of the ncmake repo, data/tools.json.
 #
 # The targets read the checkout and write nothing into it, and none needs a token.
 # make lint runs all of them.
@@ -27,19 +28,26 @@ lint_tools_idle = ! { for c in $(image_engines); do "$$c" ps -q --filter label=n
 lint_empty :=
 lint_space := $(lint_empty) $(lint_empty)
 
-# $(lint_bin_fetch) <name> <version> <release url> <asset x86_64> <sha256> <asset
-# aarch64> <sha256> [<tar member>] prints the directory that holds the binary
-# <name>, the Linux build of a GitHub release. Without a member the asset is the
-# binary itself.
+# $(call lint_release,<keys>) is the value of data/tools.json the keys lead to, as
+# $(call ncmake_data,tools,<keys>) reads it. A value it lacks, offline before the
+# first fetch or with a core older than this module, stops the target that needs
+# it, instead of a fetch of nothing.
+lint_release = $(or $(call ncmake_data,tools,$(1)),$(error data/tools.json of ncmake names no $(1): the file could not be fetched, or the core is older than this module - run 'make self-update'))
+
+# $(lint_bin_fetch) <name> <version> <url x86_64> <sha256> <url aarch64> <sha256>
+# [<tar member>] prints the directory that holds the binary <name>, the Linux build
+# of a GitHub release. Without a member the asset is the binary itself.
+# $(call lint_bin,<name>) is what it takes for <name> before the member.
+lint_bin = $(1) $(call lint_release,$(1) version) $(foreach a,x86_64 aarch64,$(call lint_release,$(1) $(a) url) $(call lint_release,$(1) $(a) sha256))
 lint_bin_fetch = sh -c ' \
-	name=$$1 ver=$$2 url=$$3 member=$$8; \
-	case "$$(uname -m)" in x86_64|amd64) arch=x86_64 asset=$$4 sum=$$5 ;; aarch64|arm64) arch=aarch64 asset=$$6 sum=$$7 ;; \
+	name=$$1 ver=$$2 member=$$7; \
+	case "$$(uname -m)" in x86_64|amd64) arch=x86_64 url=$$3 sum=$$4 ;; aarch64|arm64) arch=aarch64 url=$$5 sum=$$6 ;; \
 		*) echo "ERROR: $$name has no Linux build for $$(uname -m)" >&2; exit 1 ;; esac; \
-	dir=$(lint_tools_dir)/$$name-$$ver-$$arch; \
+	asset=$${url\#\#*/} dir=$(lint_tools_dir)/$$name-$$ver-$$arch; \
 	if [ ! -x "$$dir/$$name" ]; then \
 		mkdir -p "$(lint_tools_dir)" && t=$$(mktemp -d "$(lint_tools_dir)/.fetch.XXXXXX") || exit 1; \
 		echo "==> Fetching $$name $$ver for linux-$$arch from GitHub" >&2; \
-		if curl -fsSL $(curl_retry) "$$url/$$asset" -o "$$t/$$asset" && echo "$$sum  $$t/$$asset" | sha256sum -c - >/dev/null \
+		if curl -fsSL $(curl_retry) "$$url" -o "$$t/$$asset" && echo "$$sum  $$t/$$asset" | sha256sum -c - >/dev/null \
 			&& mkdir "$$t/x" "$$t/bin" \
 			&& if [ -n "$$member" ]; then tar -xf "$$t/$$asset" -C "$$t/x" --no-same-owner "$$member" && mv "$$t/x/$$member" "$$t/bin/$$name"; \
 				else mv "$$t/$$asset" "$$t/bin/$$name"; fi \
@@ -57,7 +65,8 @@ lint_bin_fetch = sh -c ' \
 # $(lint_py_fetch) <name> <version> {<path> <sha256> <member>}... prints a
 # directory to put on PYTHONPATH: the members of source distributions from PyPI,
 # each the import package of a pure-Python project, which so needs no pip. <path>
-# is the one below packages/source/ of files.pythonhosted.org.
+# is the one below packages/source/ of files.pythonhosted.org. <version> names the
+# set, so it changes with the version of any member.
 lint_py_fetch = sh -c ' \
 	name=$$1 ver=$$2; shift 2; dir=$(lint_tools_dir)/$$name-$$ver; \
 	if [ ! -f "$$dir/.complete" ]; then \
@@ -80,12 +89,14 @@ lint_py_fetch = sh -c ' \
 	echo "$$dir"' lint-py-fetch
 
 # $(call lint_npm_fetch,<group>,<packages>) sets npmdir to the directory whose
-# node_modules holds the npm packages, each pinned to a version; npm checks every
+# node_modules holds the npm packages, each pinned to a version, as
+# $(call lint_npm,<names>) pins them to data/tools.json; npm checks every
 # tarball against the integrity the registry records. npm runs in the analyser's
 # Node container, so the host needs no Node. A recipe fragment, not a command:
 # the container call carries quotes of its own. npm runs in the tools directory,
 # so it reads no .npmrc of the checkout; its summary on stdout is dropped, its
 # errors on stderr are not.
+lint_npm       = $(foreach p,$(1),$(p)@$(call lint_release,$(p) version))
 lint_npm_key   = $(1)-$(subst /,-,$(subst @,-,$(subst $(lint_space),+,$(patsubst @%,%,$(strip $(2))))))
 lint_npm_flags = --no-audit --no-fund --no-package-lock --loglevel=error --update-notifier=false
 ifeq ($(filter $(RUNTIME),bare none),)
@@ -148,12 +159,8 @@ lint_data_lint-web     = data.mjs data/nextcloud-eslint.json
 # ghcr.io/zizmorcore/zizmor: on an older x86-64 CPU such as the Pentium E5700 the
 # binary in that image stops with an illegal instruction, while the release binary
 # runs. It needs glibc 2.34 or newer, which the analyser's Node image has.
-zizmor_version        = 1.31.1
-zizmor_sha256_x86_64  = d185f726bdaf92df78273217dfdd24ebcd6b0ef48cf3ce776ff5762b6e138c99
-zizmor_sha256_aarch64 = 37eebbd5762a44f262d94875431b14a6d2402991e90a685113ea97b8b41be833
-zizmor_url            = https://github.com/zizmorcore/zizmor/releases/download/v$(zizmor_version)
-lint_zizmor           = zizmor $(zizmor_version) $(zizmor_url) \
-	zizmor-x86_64-unknown-linux-gnu.tar.gz $(zizmor_sha256_x86_64) zizmor-aarch64-unknown-linux-gnu.tar.gz $(zizmor_sha256_aarch64) zizmor
+zizmor_version = $(call ncmake_data,tools,zizmor version)
+lint_zizmor    = $(call lint_bin,zizmor) zizmor
 
 # Its analyser has a report of its own and needs no lint-common.mjs.
 security_libs = lint-actions-security.mjs report-text.mjs
@@ -183,41 +190,36 @@ lint_core = $(if $(and $(ncmake_lib_read_run),$(or $(filter bare none,$(RUNTIME)
 # == lint-actions ==
 # actionlint calls shellcheck on the run: scripts, so it gets the same shellcheck
 # as lint-shell.
-actionlint_version        = 1.7.12
-actionlint_sha256_x86_64  = 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
-actionlint_sha256_aarch64 = 325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6
-lint_actionlint           = actionlint $(actionlint_version) https://github.com/rhysd/actionlint/releases/download/v$(actionlint_version) \
-	actionlint_$(actionlint_version)_linux_amd64.tar.gz $(actionlint_sha256_x86_64) actionlint_$(actionlint_version)_linux_arm64.tar.gz $(actionlint_sha256_aarch64) actionlint
+actionlint_version = $(call ncmake_data,tools,actionlint version)
+lint_actionlint    = $(call lint_bin,actionlint) actionlint
 
 # == lint-shell ==
-shellcheck_version        = 0.11.0
-shellcheck_sha256_x86_64  = b7af85e41cc99489dcc21d66c6d5f3685138f06d34651e6d34b42ec6d54fe6f6
-shellcheck_sha256_aarch64 = 68a8133197a50beb8803f8d42f9908d1af1c5540d4bb05fdfca8c1fa47decefc
-lint_shellcheck           = shellcheck $(shellcheck_version) https://github.com/koalaman/shellcheck/releases/download/v$(shellcheck_version) \
-	shellcheck-v$(shellcheck_version).linux.x86_64.tar.gz $(shellcheck_sha256_x86_64) shellcheck-v$(shellcheck_version).linux.aarch64.tar.gz $(shellcheck_sha256_aarch64) \
-	shellcheck-v$(shellcheck_version)/shellcheck
+shellcheck_version = $(call ncmake_data,tools,shellcheck version)
+lint_shellcheck    = $(call lint_bin,shellcheck) shellcheck-v$(shellcheck_version)/shellcheck
 
 # == lint-containerfiles ==
 # hadolint's release assets are the binaries themselves.
-hadolint_version        = 2.15.1
-hadolint_sha256_x86_64  = c7187db94eeeeca956519a6af171adc31453941a1e777961f6e680f697c8c507
-hadolint_sha256_aarch64 = f6198ef8090f404dbb771abfee086eb8c48ac177f30da7fd3510aca35b344b5d
-lint_hadolint           = hadolint $(hadolint_version) https://github.com/hadolint/hadolint/releases/download/v$(hadolint_version) \
-	hadolint-linux-x86_64 $(hadolint_sha256_x86_64) hadolint-linux-arm64 $(hadolint_sha256_aarch64)
+hadolint_version = $(call ncmake_data,tools,hadolint version)
+lint_hadolint    = $(call lint_bin,hadolint)
 
 # == lint-yaml ==
 # yamllint and the two packages it imports are pure Python, so their source
 # distributions run as they are on the Python of the analyser's Node image.
-yamllint_version = 1.38.0
-lint_yamllint    = yamllint $(yamllint_version) \
-	y/yamllint/yamllint-$(yamllint_version).tar.gz 09e5f29531daab93366bb061e76019d5e91691ef0a40328f04c927387d1d364d yamllint-$(yamllint_version)/yamllint \
-	p/pathspec/pathspec-1.1.1.tar.gz 17db5ecd524104a120e173814c90367a96a98d07c45b2e10c2f3919fff91bf5a pathspec-1.1.1/pathspec \
-	p/pyyaml/pyyaml-6.0.3.tar.gz d76623373421df22fb4cf8817020cbb7ef15c725b9d5e45f17e189bfc384190f pyyaml-6.0.3/lib/yaml
+# $(call lint_sdist,<name>,<member>) is what lint_py_fetch takes for one of them.
+yamllint_version = $(call ncmake_data,tools,yamllint version)
+lint_sdist       = $(call lint_release,$(1) path) $(call lint_release,$(1) sha256) $(1)-$(call lint_release,$(1) version)/$(2)
+lint_yamllint    = yamllint $(subst $(lint_space),-,$(foreach p,yamllint pathspec pyyaml,$(call lint_release,$(p) version))) \
+	$(call lint_sdist,yamllint,yamllint) $(call lint_sdist,pathspec,pathspec) $(call lint_sdist,pyyaml,lib/yaml)
 
 # == lint-markdown and lint-web ==
-lint_markdown_npm = markdownlint-cli2@0.24.0
-lint_web_npm      = eslint@10.13.0 @eslint/js@10.0.1 globals@17.13.0 \
-	stylelint@17.16.0 stylelint-config-standard@40.0.0 html-validate@11.17.0
+# A recipe expands a list several times, so each is read from data/tools.json once,
+# on first use. The help names the versions without that check, so it shows
+# offline too.
+lint_markdown_pkgs = markdownlint-cli2
+lint_web_pkgs      = eslint @eslint/js globals stylelint stylelint-config-standard html-validate
+lint_markdown_npm  = $(eval lint_markdown_npm := $$(call lint_npm,$$(lint_markdown_pkgs)))$(lint_markdown_npm)
+lint_web_npm       = $(eval lint_web_npm := $$(call lint_npm,$$(lint_web_pkgs)))$(lint_web_npm)
+lint_npm_shown     = $(foreach p,$(1),$(p)@$(call ncmake_data,tools,$(p) version))
 
 # == lint-php-syntax ==
 # The PHP versions come from PHP_VERSIONS, a .php-version file or the default, as
@@ -448,7 +450,7 @@ endef
 define help_lint-markdown
 make lint-markdown [ARGS="<options>"] [JSON=<file>]
 
-Runs $(lint_markdown_npm) over every tracked Markdown file outside
+Runs $(call lint_npm_shown,$(lint_markdown_pkgs)) over every tracked Markdown file outside
 node_modules/ and vendor/, as the lint-markdown workflow of ncmake-workflows
 does, and fails where that workflow fails. A markdownlint configuration of the
 repository wins; without one the workflow's default applies: every rule except
@@ -531,7 +533,7 @@ stylelint-config-standard, html-validate's recommended preset. A repository
 with a package.json lints through its own scripts and passes here, as it
 passes the workflow.
 
-The packages, $(lint_web_npm), come from npm, checked against the integrity
+The packages, $(call lint_npm_shown,$(lint_web_pkgs)), come from npm, checked against the integrity
 npm records, and are kept in tools/ of the ncmake cache. A configuration of the
 repository can import them.
 

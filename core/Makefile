@@ -214,9 +214,10 @@ no_runtime   = sh -c 'echo >&2; echo "ERROR: no container runtime found (podman/
 # node_tool_image.
 # What changes over time and can be read from a source, the majors of
 # nextcloud/server with the PHP and the extensions each needs, the Node.js release
-# schedule, what the App Store accepts, the globals of @nextcloud/eslint-config and
-# the self-hosted runners of Nextcloud, is data of the ncmake repo: data/<name>.json, which a workflow there regenerates from the
-# sources the file names. No run reads those sources itself. A file is fetched into
+# schedule, what the App Store accepts, the globals of @nextcloud/eslint-config,
+# the self-hosted runners of Nextcloud and the releases of the tools the developer
+# modules fetch, is data of the ncmake repo: data/<name>.json, which a workflow
+# there regenerates from the sources the file names. No run reads those sources itself. A file is fetched into
 # data/ of the analyser library directory, where the analysers read it too, when a
 # value of it is first needed, and refreshed on the same TTL and ETag terms as this
 # file. ncmake_fetch_fn defines the shell function that fetches one file, here and
