@@ -82,9 +82,12 @@ reuse:
 # per file in data/update/. A script that fails leaves its file as it was and the
 # others still run, so one unreachable source holds back no other file; the target
 # fails at the end. -B writes no bytecode beside the scripts, which the workflow
-# would otherwise commit with data/.
+# would otherwise commit with data/. tools.py runs first: github-runners.py reads
+# the actionlint release it writes.
+data_update_first = data/update/tools.py
+data_update_order = $(data_update_first) $(filter-out $(data_update_first) data/update/common.py,$(sort $(wildcard data/update/*.py)))
 data-update:
-	@rc=0; for f in data/update/*.py; do case "$$f" in */common.py) continue ;; esac; echo "==> $$f"; python3 -B "$$f" || { echo "ERROR: $$f failed" >&2; rc=1; }; done; exit $$rc
+	@rc=0; for f in $(data_update_order); do echo "==> $$f"; python3 -B "$$f" || { echo "ERROR: $$f failed" >&2; rc=1; }; done; exit $$rc
 
 clean:
 	rm -rf build

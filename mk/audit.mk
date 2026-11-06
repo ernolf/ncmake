@@ -183,15 +183,13 @@ deps_no_advisories = $(if $(or $(filter 1,$(NO_ADVISORIES)),$(filter --no-adviso
 
 # == secrets-audit ==
 # gitleaks runs as the Linux binary of its GitHub release, checked against the
-# digest of its checksums file, in the analyser's Node container, which carries
-# the git it calls. It is fetched by lint_bin_fetch of the lint module, which
-# make dev-init brings along with this one.
-gitleaks_version        = 8.30.1
-gitleaks_sha256_x86_64  = 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
-gitleaks_sha256_aarch64 = e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080
-secrets_gitleaks        = gitleaks $(gitleaks_version) https://github.com/gitleaks/gitleaks/releases/download/v$(gitleaks_version) \
-	gitleaks_$(gitleaks_version)_linux_x64.tar.gz $(gitleaks_sha256_x86_64) gitleaks_$(gitleaks_version)_linux_arm64.tar.gz $(gitleaks_sha256_aarch64) gitleaks
-secrets_core = $(if $(value lint_bin_fetch),:,echo "ERROR: secrets-audit fetches gitleaks through the lint module - run 'make dev-init'" >&2; exit 1)
+# digest GitHub publishes for it, in the analyser's Node container, which carries
+# the git it calls. The release is the one data/tools.json names, and it is
+# fetched by lint_bin_fetch of the lint module, which make dev-init brings along
+# with this one.
+gitleaks_version = $(call ncmake_data,tools,gitleaks version)
+secrets_gitleaks = $(call lint_bin,gitleaks) gitleaks
+secrets_core     = $(if $(and $(value lint_bin_fetch),$(value lint_bin)),:,echo "ERROR: secrets-audit fetches gitleaks through the lint module - run 'make dev-init'" >&2; exit 1)
 
 # What ships, as a tree inside the app, since the container sees only the app:
 # secrets_tree when ship_check names one (make dist, the staged tree), else the
