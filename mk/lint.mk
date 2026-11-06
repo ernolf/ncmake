@@ -151,8 +151,11 @@ lint_node    = $(call lint_run,$(2)) '$(call ncmake_lib_guard,$(1)) LINT_CMDLINE
 # section: appended, never set, because every analyser module adds its own.
 # lint_data_<target> is the generated data of the ncmake repo one of them reads.
 lint_libs = lint-common.mjs report-text.mjs
-lint_data_lint-actions = data.mjs data/github-runners.json
-lint_data_lint-web     = data.mjs data/nextcloud-eslint.json
+lint_data_lint-actions        = data.mjs data/github-runners.json data/tool-configs.json
+lint_data_lint-containerfiles = data.mjs data/tool-configs.json
+lint_data_lint-markdown       = data.mjs data/tool-configs.json
+lint_data_lint-web            = data.mjs data/nextcloud-eslint.json data/tool-configs.json
+lint_data_lint-yaml           = data.mjs data/tool-configs.json
 
 # == lint-actions-security ==
 # zizmor runs as the Linux binary of its GitHub release, and not from its image
@@ -163,7 +166,7 @@ zizmor_version = $(call ncmake_data,tools,zizmor version)
 lint_zizmor    = $(call lint_bin,zizmor) zizmor
 
 # Its analyser has a report of its own and needs no lint-common.mjs.
-security_libs = lint-actions-security.mjs report-text.mjs
+security_libs = lint-actions-security.mjs report-text.mjs data.mjs data/tool-configs.json
 ncmake_libs += $(if $(filter lint-actions-security,$(MAKECMDGOALS)),$(security_libs))
 
 security_cmdline = make lint-actions-security ARGS=\"%s\"
@@ -353,8 +356,8 @@ The files are the tracked ones: everything under .github/workflows and
 .ncmake/workflows, every action.yml or action.yaml outside node_modules/ and
 vendor/, and every YAML file with a .properties.json beside it, the form of a
 workflow template in ncmake-workflows. zizmor runs offline, needs no token, and
-reads the repository's own .github/zizmor.yml or zizmor.yml when there is one.
-A repository without workflows passes.
+reads the repository's own configuration when there is one. A repository
+without workflows passes.
 
 Findings of medium and high severity are [!] and exit 1; low and informational
 ones are [i]. Each names the file and line, the zizmor audit and its page, which
@@ -412,10 +415,9 @@ lint-actions workflow of ncmake-workflows does, and fails where that workflow
 fails. The workflows are everything under .github/workflows and
 .ncmake/workflows, and every YAML file with a .properties.json beside it, the
 form of a workflow template in ncmake-workflows. actionlint reads the
-repository's .github/actionlint.yaml or .yml; without one it runs with a
-default that declares the self-hosted runners of Nextcloud, as
-data/github-runners.json of ncmake names them, as known runner labels. A
-repository without workflows passes.
+repository's configuration; without one it runs with a default that declares
+the self-hosted runners of Nextcloud, as data/github-runners.json of ncmake
+names them, as known runner labels. A repository without workflows passes.
 
 A shellcheck finding of severity error or warning is [!], one of severity info
 or style [i], with the shellcheck code and severity as fields of the finding
@@ -437,9 +439,9 @@ make lint-containerfiles [ARGS="<options>"] [JSON=<file>]
 Runs hadolint $(hadolint_version), with shellcheck over the RUN instructions built
 in, over every tracked Containerfile and Dockerfile outside node_modules/ and
 vendor/, as the lint-containerfiles workflow of ncmake-workflows does, and
-fails where that workflow fails. hadolint reads the repository's .hadolint.yaml
-or .hadolint.yml; its failure-threshold decides what is [!], info unless it is
-set. A repository without Containerfiles passes.
+fails where that workflow fails. hadolint reads the repository's configuration;
+its failure-threshold decides what is [!], info unless it is set. A repository
+without Containerfiles passes.
 
 The binary is the one of hadolint's GitHub release, checked against its digest
 and kept in tools/ of the ncmake cache.
@@ -545,10 +547,10 @@ make lint-yaml [ARGS="<options>"] [JSON=<file>]
 
 Runs yamllint $(yamllint_version) over every tracked YAML file, as the lint-yaml
 workflow of ncmake-workflows does, and fails where that workflow fails. A
-.yamllint, .yamllint.yaml or .yamllint.yml of the repository wins; without one
-the workflow's default applies: yamllint's default, with true and false as the
-only truthy values, keys not checked for them, and neither line length nor
-document start. A repository without YAML passes.
+configuration of the repository wins; without one the workflow's default
+applies: yamllint's default, with true and false as the only truthy values, keys
+not checked for them, and neither line length nor document start. A repository
+without YAML passes.
 
 yamllint and the two packages it needs are the source distributions from PyPI,
 checked against their digests and kept in tools/ of the ncmake cache; they run
