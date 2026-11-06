@@ -80,7 +80,7 @@
 # What each analyser needs next to it. bundler-config.mjs reads the bundler and its
 # config, report-text.mjs prints; the analyser itself decides what is worth saying.
 # data.mjs reads the generated data of the ncmake repo, the data/ entries.
-consistency_libs = consistency-audit.mjs data.mjs report-text.mjs data/appstore.json data/nextcloud-server.json data/node-schedule.json
+consistency_libs = consistency-audit.mjs bundler-config.mjs data.mjs report-text.mjs data/appstore.json data/nextcloud-server.json data/node-schedule.json
 verify_libs      = build-verify.mjs bundler-config.mjs report-text.mjs scratch-build.mjs
 changelog_libs   = changelog-lint.mjs data.mjs report-text.mjs data/appstore.json
 compat_libs      = php-compat.mjs report-text.mjs
@@ -149,13 +149,13 @@ compat_master = $(if $(nc_max),$(call nc_php_ceiling,),$(php_server_max))
 # doing so. The run records the PHP it actually ran on, so the analyser can tell a
 # runtime that ignores the minor, RUNTIME=bare above all, from one that did not.
 compat_dir   = build/php-compat
-compat_image = $(if $(filter local,$(php_floor_mode)),localhost,ghcr.io/ernolf)/ncmake-php
+compat_image = $(if $(filter local,$(php_floor_mode)),localhost/ncmake-php,$(php_image_repo))
 # The PHP ahead of master runs once more, in the image the ncmake-images repository
 # publishes for it: <minor>-next for a <php max-version> above master, next, the
 # newest minor it publishes, for NEXT=1. Only the published image carries that
 # PHP, as php_base_image names no alpha, beta or RC, so php_floor_mode is emptied and
 # the run uses it as an image of one's own, with nothing built in its place.
-compat_next  = ghcr.io/ernolf/ncmake-php
+compat_next  = $(php_image_repo)
 # Every PHP file that ships, linted by as many PHP processes as the runtime has
 # processors. busybox xargs stops at the first command that fails, and php -l fails
 # on every file it cannot parse, so each batch exits 0 and the output tells.
@@ -396,7 +396,7 @@ php-compat: check-app
 	elif [ "$(NEXT)" = 1 ]; then next=next; fi; \
 	if [ -n "$$next" ]; then \
 		$(if $(filter bare none,$(RUNTIME)),echo "==> PHP ahead of master: RUNTIME=$(RUNTIME) runs no image; $(compat_next):$$next is left out" >&2;, \
-		echo "==> PHP ahead of master ($(compat_next):$$next)" >&2; mkdir -p $(compat_dir)/next; echo "next=$$next" >>$(compat_dir)/range; \
+		echo "==> PHP ahead of master ($(compat_next):$$next)" >&2; mkdir -p $(compat_dir)/next; printf 'next=%s\nnext_image=%s:%s\n' "$$next" '$(compat_next)' "$$next" >>$(compat_dir)/range; \
 		$(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory php-compat-run php_version=next php_image=$(compat_next):$$next php_floor_mode= PHP=min || echo "$$?" >$(compat_dir)/next/failed;) \
 	fi; \
 	$(ncmake_lib_read_run) '$(call ncmake_lib_guard,php-compat) PHP_COMPAT_CMDLINE="$(compat_cmdline)" node $(ncmake_lib_path)/php-compat.mjs $(ARGS) $(ncmake_json_arg)'
