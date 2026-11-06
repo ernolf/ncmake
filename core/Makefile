@@ -273,7 +273,9 @@ node_pick   = $(if $(wildcard package.json),$(shell python3 -c 'import json,re,s
 node_major  = $(call node_major_of,$(node_pick))
 node_major_of = $(if $(filter eol,$(1)),$(warning engines.node in package.json allows only end-of-life Node lines - building on Node $(firstword $(1))))$(firstword $(1))
 php_base_image ?= docker.io/library/php:$(php_version)-cli-alpine
-php_image      ?= ghcr.io/ernolf/ncmake-php:$(php_version)
+# php_image_repo is the repository ncmake-images publishes the PHP images under.
+php_image_repo  = ghcr.io/ernolf/ncmake-php
+php_image      ?= $(php_image_repo):$(php_version)
 analysis_image ?= docker.io/library/composer:2
 # One image runs Node for every line: node_tool_image, Debian slim with git, the CA
 # certificates, the compiler node-gyp builds a native module with and Yarn 1, which
@@ -553,7 +555,7 @@ php_floor_setup   = for t in $(php_floor_tools); do command -v $$t >/dev/null ||
 # php_floor_mode: pull for the published image, local for one built on this host, empty
 # for a php_image of one's own. php_floor_pick leaves the image to run in img.
 php_local_image   = $(if $(filter localhost/ncmake-php:%,$(php_image)),$(php_image),localhost/ncmake-php:$(php_version))
-php_floor_mode    = $(if $(filter localhost/ncmake-php:%,$(php_image)),local,$(if $(filter ghcr.io/ernolf/ncmake-php:%,$(php_image)),$(if $(filter-out $(php_extensions_published),$(php_extensions)),local,pull)))
+php_floor_mode    = $(if $(filter localhost/ncmake-php:%,$(php_image)),local,$(if $(filter $(php_image_repo):%,$(php_image)),$(if $(filter-out $(php_extensions_published),$(php_extensions)),local,pull)))
 php_floor_build   = { $(image_prep) $(container_cli) '$(php_base_image)' '$(image_sources)' '$(image_sources_url)' || :; } && { $(image_prep) $(container_cli) '$(analysis_image)' '$(image_sources)' '$(image_sources_url)' || :; } && $(php_image_build) $(container_cli) '$(php_base_image)' '$(analysis_image)' '$(php_local_image)' '$(php_extensions)' && $(call container_prep,$(php_local_image))
 php_floor_pick    = { img='$(php_image)'; \
 	$(if $(filter pull,$(php_floor_mode)),$(call container_prep,$(php_image)); $(container_cli) image inspect "$$img" >/dev/null 2>&1 || { echo "==> $(php_image) is not available; building $(php_local_image) instead" >&2; img='$(php_local_image)'; $(php_floor_build); }; ) \
