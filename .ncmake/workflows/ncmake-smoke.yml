@@ -32,6 +32,7 @@
 # in a job of seconds that needs no app. So are the gitleaks rules secrets-audit
 # names and the ids of the licence table, against data/ that the data workflow
 # regenerates: a rule gitleaks drops or an id SPDX does not know fails there.
+# make data-check fails when a value of data/ is written out in lib/, mk/ or core/.
 
 name: Smoke
 
@@ -70,7 +71,7 @@ jobs:
               .github/workflows/ncmake-smoke.yml) return 0 ;;
               .github/workflows/* | .ncmake/workflows/*) return 1 ;;
               .ncmake-workflows.json | .ncmake-workflows.json.license) return 1 ;;
-              skills/* | data/update/*) return 1 ;;
+              skills/* | data/update/* | data/check.py) return 1 ;;
               LICENSES/* | *.license | REUSE.toml) return 1 ;;
               core/* | lib/* | mk/*) return 0 ;;
               *.md) return 1 ;;
@@ -140,6 +141,18 @@ jobs:
 
       - name: Self-test of lib/secrets-audit.mjs
         run: node lib/secrets-audit.mjs --self-test
+
+  data-check:
+    name: check that no value of data/ is written out in lib/, mk/ or core/
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out this revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: make data-check
+        run: make data-check
 
   end-to-end:
     name: build twofactor_oath with this revision

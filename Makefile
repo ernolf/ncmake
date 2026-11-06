@@ -69,7 +69,7 @@ ifeq ($(strip $(NO_COLOR)),)
 endif
 
 .DEFAULT_GOAL := help
-.PHONY: help reuse clean dist-clean dev-init data-update
+.PHONY: help reuse clean dist-clean dev-init data-update data-check
 
 # REUSE compliance check (https://reuse.software) in the official fsfe/reuse
 # container; RUNTIME=bare expects the reuse tool on the host. Licensing is a
@@ -88,6 +88,11 @@ data_update_first = data/update/tools.py
 data_update_order = $(data_update_first) $(filter-out $(data_update_first) data/update/common.py,$(sort $(wildcard data/update/*.py)))
 data-update:
 	@rc=0; for f in $(data_update_order); do echo "==> $$f"; python3 -B "$$f" || { echo "ERROR: $$f failed" >&2; rc=1; }; done; exit $$rc
+
+# Fails when a value of data/ is written out in lib/, mk/ or core/ instead of
+# being read from data/; data/check.py says what counts as a copy.
+data-check:
+	@python3 -B data/check.py
 
 clean:
 	rm -rf build
@@ -115,6 +120,7 @@ help::
 	@echo ""
 	@echo "$(ch)Data:$(c0)"
 	@echo "  $(ct)data-update$(c0)          Regenerate the files of data/ from their sources"
+	@echo "  $(ct)data-check$(c0)           Fail when a value of data/ is written out in lib/, mk/ or core/"
 
 # == Developer module: CI workflow manager ==
 include mk/workflows.mk
@@ -153,6 +159,16 @@ names. A file is rewritten only when one of its values changes. A script that
 fails leaves its file alone, the others still run, and the target exits 1. The
 workflow ncmake-data-update runs it on a schedule and opens a pull request with
 what changed.
+endef
+define help_data-check
+make data-check
+
+Fails when a value of data/ is written out in lib/, mk/ or core/ instead of being
+read from data/: a sha256 digest, a URL or a version of three numbers, or more
+than half of the values of one list of a data file in one file. Such a copy goes
+stale while data/ moves on. A table ncmake keeps by hand and keys by such values
+is named in ALLOWED of data/check.py with its reason. The smoke workflow runs it
+on every change.
 endef
 help-%:
 	@:$(info $(or $(help_$*),No extended help for "$*". Run "make help" for the target list.))
