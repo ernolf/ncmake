@@ -1,5 +1,5 @@
 {
-  "about": "The licence table deps-audit holds the licences of the shipped dependencies against the licence of the app with. lib/deps-audit.mjs carries no licence of its own. Each SPDX id belongs to one group; compatible names, for the group of the app's licence, the groups of a dependency licence that can be combined with it in one distributed work, and notes says, per group of a dependency licence, why it does not go with the others. non-free lists the licences that forbid redistribution or commercial use. A licence the table does not name, such as EPL-2.0 or OFL-1.1 whose compatibility depends on how the package states it, gets no verdict. aliases maps an id that is deprecated or not SPDX to the id it stands for, where that is unambiguous. Every example is tested before an app is judged; deps-audit.mjs --self-test runs only that. The format is described on the wiki page Checkout audit, section The licence table.",
+  "about": "The licence table deps-audit holds the licences of the shipped dependencies against the licence of the app with. lib/deps-audit.mjs carries no licence of its own. Each SPDX id belongs to one group; compatible names, for the group of the app's licence, the groups of a dependency licence that can be combined with it in one distributed work, and notes says, per group of a dependency licence, why it does not go with the others. non-free lists the licences that forbid redistribution or commercial use. not-spdx names the ids among them that are no SPDX id: proprietary, which composer writes, and UNLICENSED, which npm writes. A licence the table does not name, such as EPL-2.0 or OFL-1.1 whose compatibility depends on how the package states it, gets no verdict. aliases maps an id that is deprecated or not SPDX to the id it stands for, where that is unambiguous. Every example is tested before an app is judged; deps-audit.mjs --self-test runs only that, and holds every id but the keys of aliases against the SPDX licence list, data/spdx-licenses.json. The format is described on the wiki page Checkout audit, section The licence table.",
   "sources": {
     "spdx": "https://spdx.org/licenses/",
     "fsf": "https://www.gnu.org/licenses/license-list.html",
@@ -52,6 +52,8 @@
     "CC-BY-ND-1.0", "CC-BY-ND-2.0", "CC-BY-ND-2.5", "CC-BY-ND-3.0", "CC-BY-ND-4.0", "Elastic-2.0",
     "proprietary", "SSPL-1.0", "UNLICENSED"
   ],
+
+  "not-spdx": ["proprietary", "UNLICENSED"],
   "aliases": {
     "AGPL-3.0": "AGPL-3.0-only",
     "AGPL-3.0+": "AGPL-3.0-or-later",

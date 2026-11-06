@@ -35,8 +35,8 @@
     "source": "local"
   },
   "ncmake-smoke.yml": {
-    "hash": "56b1a687c8e3cf58388da0dd56ca32f44e5602783111c89cd76b02f31818f8cd",
-    "sha": "7e93e2d886cf90a712e1ed52ba507111bf8c8aec",
+    "hash": "9e5de3428a72f3e54d2daf9a176f56b3adb15ebadb4e971eae7c981c37e21780",
+    "sha": "1d43ed1744395edd1bfaf6c5324e84ffb66ee409",
     "source": "local"
   },
   "reuse.yml": {
