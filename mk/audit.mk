@@ -80,7 +80,7 @@
 # What each analyser needs next to it. bundler-config.mjs reads the bundler and its
 # config, report-text.mjs prints; the analyser itself decides what is worth saying.
 # data.mjs reads the generated data of the ncmake repo, the data/ entries.
-consistency_libs = consistency-audit.mjs bundler-config.mjs data.mjs report-text.mjs data/appstore.json data/nextcloud-server.json data/node-schedule.json data/tool-configs.json
+consistency_libs = consistency-audit.mjs bundler-config.mjs data.mjs report-text.mjs data/appstore.json data/nextcloud-server.json data/node-schedule.json data/tool-configs.json data/spdx-licenses.json
 verify_libs      = build-verify.mjs bundler-config.mjs report-text.mjs scratch-build.mjs
 changelog_libs   = changelog-lint.mjs data.mjs report-text.mjs data/appstore.json
 compat_libs      = php-compat.mjs report-text.mjs
