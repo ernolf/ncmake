@@ -84,8 +84,8 @@ consistency_libs = consistency-audit.mjs bundler-config.mjs data.mjs report-text
 verify_libs      = build-verify.mjs bundler-config.mjs report-text.mjs scratch-build.mjs
 changelog_libs   = changelog-lint.mjs data.mjs report-text.mjs data/appstore.json
 compat_libs      = php-compat.mjs report-text.mjs
-deps_libs        = deps-audit.mjs deps-audit.php licences.json lockfile.mjs report-text.mjs
-secrets_libs     = secrets-audit.mjs secrets-placeholders.json report-text.mjs
+deps_libs        = deps-audit.mjs data.mjs deps-audit.php licences.json lockfile.mjs report-text.mjs data/spdx-licenses.json
+secrets_libs     = secrets-audit.mjs data.mjs secrets-placeholders.json report-text.mjs data/composer-auth.json data/gitleaks-rules.json
 
 # What the goals on this command line need, handed to the core's analyser library
 # section: appended, never set, because every analyser module adds its own.

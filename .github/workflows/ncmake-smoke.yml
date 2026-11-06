@@ -29,7 +29,9 @@
 #
 # The rule file of l10n-lint and the licence table of deps-audit are data that a
 # pull request may change on its own, so their examples are tested on every run,
-# in a job of seconds that needs no app.
+# in a job of seconds that needs no app. So are the gitleaks rules secrets-audit
+# names and the ids of the licence table, against data/ that the data workflow
+# regenerates: a rule gitleaks drops or an id SPDX does not know fails there.
 
 name: Smoke
 
@@ -116,7 +118,7 @@ jobs:
         run: node lib/l10n-lint.mjs --self-test
 
   licence-table:
-    name: test the licence table of deps-audit against its examples
+    name: test the licence table of deps-audit against its examples and the SPDX licence list
     runs-on: ubuntu-latest
     steps:
       - name: Check out this revision
@@ -126,6 +128,18 @@ jobs:
 
       - name: Self-test of lib/licences.json
         run: node lib/deps-audit.mjs --self-test
+
+  gitleaks-rules:
+    name: test the gitleaks rules secrets-audit names against those of gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out this revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Self-test of lib/secrets-audit.mjs
+        run: node lib/secrets-audit.mjs --self-test
 
   end-to-end:
     name: build twofactor_oath with this revision
