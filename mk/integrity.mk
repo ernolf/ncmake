@@ -19,7 +19,9 @@
 #
 # Signed is the staged tree, never the checkout: 'stage' has already applied the
 # keep model and .nextcloudignore, so that file set is the shipped file set, and
-# the checkout keeps no build artefact it would otherwise have to carry.
+# the checkout keeps no build artefact it would otherwise have to carry. At tag
+# time the tree is staged from a fresh clone of HEAD, built there, because the
+# release runner builds from the tag as well.
 #
 # The counterpart, integrity-check, needs no key - it verifies against the
 # certificate inside the file - so it runs on a release runner, which is what
@@ -61,6 +63,43 @@ publish_hook = $(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory int
 integrity_check_material = test -n "$(cert_file)" || { echo "ERROR: certificate not found: $(cert_display) - 'make csr' starts the issuing." >&2; exit 1; }; test -f "$(key_file)" || { echo "ERROR: key not found: $(key_file)" >&2; exit 1; }
 integrity_require = @$(integrity_check_material)
 
+# REUSE for the certificate: a .crt carries no comment, so a .license sidecar
+# declares it, as nextcloud/server does for its own certificates. Its copyright and
+# licence are the ones REUSE.toml states for itself, as make l10n-init takes them for
+# its files. An app that does not follow REUSE gets no sidecar, and one that exists
+# is left as it is.
+integrity_license = $(integrity_certificate).license
+# REUSE-IgnoreStart
+integrity_write_license = if [ -e "$(integrity_license)" ]; then \
+		echo "$(integrity_license) exists, left as it is."; \
+	elif [ -d LICENSES ] || [ -e REUSE.toml ] || [ -e .reuse/dep5 ]; then \
+		cop=$$(sed -n 's/^\#[[:space:]]*SPDX-FileCopyrightText:[[:space:]]*//p' REUSE.toml 2>/dev/null | head -1); \
+		lic=$$(sed -n 's/^\#[[:space:]]*SPDX-License-Identifier:[[:space:]]*//p' REUSE.toml 2>/dev/null | head -1); \
+		if [ -n "$$cop" ] && [ -n "$$lic" ]; then \
+			printf 'SPDX-FileCopyrightText: %s\nSPDX-License-Identifier: %s\n' "$$cop" "$$lic" > "$(integrity_license)" || exit 1; \
+			echo "Wrote $(integrity_license)"; \
+		else \
+			echo "REUSE.toml states no copyright and license of its own - write $(integrity_license) yourself."; \
+		fi; \
+	fi
+# REUSE-IgnoreEnd
+
+# Pull-request text for integrity-enable. Kept in a make variable and exported so
+# the backticks survive into the shell as literal text.
+define integrity_enable_body
+`make integrity-enable` committed the public code signing certificate of the app as `$(integrity_certificate)`. The file marks the app as signed:
+
+- `make tag` offers to produce `appinfo/signature.json` and names it in the tag message.
+- The release workflow refuses to attach a tarball for a release whose tag names no signature.
+- Every verification is held against this certificate, so a file signed with another key fails as `CERTIFICATE_MISMATCH`.
+
+It is the public certificate and carries no key material.
+endef
+export integrity_enable_body
+
+# The tree the tag hook builds and signs.
+integrity_tree = $(cache_dir)/integrity-tag
+
 .PHONY: integrity-sign dist-signed integrity-enable integrity-tag integrity-gist-drop
 
 # DIR= points at a tree that already exists, so only the default case needs stage.
@@ -71,19 +110,34 @@ integrity-sign: check-app $(if $(DIR),,stage)
 
 # Puts the public certificate in the repository, which is what marks the app as
 # signed: from here on 'make tag' offers the signature and the release workflow
-# refuses a release that names none.
+# refuses a release that names none. COMMIT / PR as for l10n-init; COMMIT, PR,
+# BODY and the branch flow are defined in the core.
 integrity-enable: check-app
 	$(integrity_require)
-	@mkdir -p "$(dir $(integrity_certificate))"
-	@cp "$(cert_file)" "$(integrity_certificate)"
-	@echo "Wrote $(integrity_certificate) - it belongs in the repository:"
-	@echo "  git add $(integrity_certificate) && git commit -s -m 'build(release): pin the code signing certificate'"
+	@$(if $(BODY),test -r "$(BODY)" || { echo "BODY=$(BODY) is not a readable file" >&2; exit 1; };) commit="$(COMMIT)"; pr="$(PR)"; if [ "$$pr" = "1" ]; then commit=1; fi; \
+	if [ "$$commit" = "1" ]; then eval "$$branch_flow"; flow_branch_start ncmake/build/integrity-enable || exit 1; fi; \
+	{ mkdir -p "$(dir $(integrity_certificate))" && cp "$(cert_file)" "$(integrity_certificate)"; } || { [ "$$commit" != "1" ] || flow_branch_abort "$$branch"; exit 1; }; \
+	echo "Wrote $(integrity_certificate)"; \
+	( $(integrity_write_license) ) || { [ "$$commit" != "1" ] || flow_branch_abort "$$branch"; exit 1; }; \
+	paths="$(integrity_certificate)"; [ ! -e "$(integrity_license)" ] || paths="$$paths $(integrity_license)"; \
+	if [ "$$commit" != "1" ]; then \
+		echo "Commit to the repository:"; \
+		echo "  git add $$paths && git commit -sm 'build(release): pin the code signing certificate'"; \
+	else \
+		mkdir -p "$(cache_dir)"; git add -- $$paths; \
+		flow_branch_finish "$$branch" "build(release): pin the code signing certificate" "" "$$integrity_enable_body" "$$pr" || exit 1; \
+	fi
 
 # The tag hook: runs after the confirmation in 'make tag' and before the tag exists.
 # Signs the staged tree, holds it against the committed certificate, puts the file
 # in a secret gist and names that gist in the tag message, where the tag's own GPG
 # signature covers the line. The key stays on this machine; the runner needs nothing
 # but the gist id, which anyone holding it can read and nobody can guess.
+# The tree is built and staged in a clone of HEAD, not in the checkout: stage takes
+# a git-ignored js/ or vendor/ as it finds it, and an older build there, or a file
+# the source no longer builds, would be signed while the runner packs a fresh build
+# from the tag. A plain local clone, not --shared, because the build containers
+# mount the clone alone and git in there has to find every object.
 integrity-tag: check-app
 	@test -f "$(integrity_certificate)" || exit 0; \
 	printf 'Generate appinfo/signature.json for this release? [Y/n] '; read yn; \
@@ -92,13 +146,18 @@ integrity-tag: check-app
 	esac; \
 	$(integrity_check_material); \
 	command -v gh >/dev/null 2>&1 || { echo "ERROR: gh not found - it uploads the signature gist." >&2; exit 1; }; \
-	$(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory stage || exit 1; \
-	$(integrity_run) sign "$(stage_dir)/$(app_id)" "$(app_id)" "$(key_file)" "$(cert_file)" || exit 1; \
-	$(integrity_run) check "$(stage_dir)/$(app_id)" "$(app_id)" "$(integrity_certificate)" || exit 1; \
+	tree="$(integrity_tree)"; app="$$tree$(if $(app_rel),/$(app_rel))"; staged="$$app/$(patsubst $(CURDIR)/%,%,$(stage_dir))/$(app_id)"; \
+	rm -rf "$$tree"; \
+	{ git clone -q --no-checkout "$(app_top)" "$$tree" && git -C "$$tree" checkout -q --detach "$$(git rev-parse HEAD)"; } || { echo "ERROR: could not clone HEAD into $$tree." >&2; exit 1; }; \
+	echo "==> Building v$(version) in a clean clone of HEAD, as the release runner does"; \
+	$(MAKE) -C "$$app" -f "$(abspath $(firstword $(MAKEFILE_LIST)))" --no-print-directory build stage || exit 1; \
+	$(integrity_run) sign "$$staged" "$(app_id)" "$(key_file)" "$(cert_file)" || exit 1; \
+	$(integrity_run) check "$$staged" "$(app_id)" "$(integrity_certificate)" || exit 1; \
 	sig_gist() { l=$$(gh gist list --secret --limit 20) || return 1; printf '%s\n' "$$l" | awk -F '\t' -v d="$(app_id) v$(version) appinfo/signature.json" '$$2 == d { print $$1; exit }'; }; \
-	$(net_create); id=$$(net_create sig_gist gh gist create -d "$(app_id) v$(version) appinfo/signature.json" "$(stage_dir)/$(app_id)/appinfo/signature.json" | tail -1 | sed 's#.*/##'); \
+	$(net_create); id=$$(net_create sig_gist gh gist create -d "$(app_id) v$(version) appinfo/signature.json" "$$staged/appinfo/signature.json" | tail -1 | sed 's#.*/##'); \
 	test -n "$$id" || { echo "ERROR: gh gist create returned no gist id." >&2; exit 1; }; \
 	printf '\n%s: %s\n' "$(integrity_trailer)" "$$id" >> "$(tag_message)"; \
+	rm -rf "$$tree"; \
 	echo "Signature uploaded as the secret gist $$id and named in the tag message."
 
 # The publish hook: the gist has done its job once the App Store has the release, so
@@ -163,10 +222,10 @@ attached by hand.
 endef
 
 define help_integrity-enable
-make integrity-enable    (maintainer, once per app)
+make integrity-enable [COMMIT=1|PR=1 [BODY=<path>]]    (maintainer, once per app)
 
-Copies the App Store certificate to $(integrity_certificate) and leaves it
-for you to commit. That file is what marks the app as signed: nothing else keeps
+Copies the App Store certificate to $(integrity_certificate). That file is
+what marks the app as signed: nothing else keeps
 that record - not the server, which skips an app without signature.json in
 silence, and not the App Store, which verifies the tarball signature and knows
 nothing about this one.
@@ -179,6 +238,19 @@ file signed with another key fails as CERTIFICATE_MISMATCH.
 It is the public certificate; it carries no key material. It sits outside the
 keep model, so it is not part of the tarball.
 
+Where the app follows REUSE, the certificate gets the sidecar
+$(integrity_license) with the copyright and license REUSE.toml states for
+itself, as nextcloud/server keeps one next to each of its certificates. An
+existing sidecar is left as it is.
+
+Without flags it only writes the files and prints the command that commits them.
+COMMIT=1 commits them on ncmake/build/integrity-enable, from main or a stable*
+branch, without pushing. PR=1 implies COMMIT=1 and additionally pushes and opens
+the pull request; BODY=<path> replaces its text with the contents of that file.
+
+  make integrity-enable
+  make integrity-enable PR=1
+
 To stop signing, remove the file from the repository. The next release then ships
 unsigned, which costs the integrity check and nothing else.
 endef
@@ -189,14 +261,19 @@ make integrity-tag    (the tag hook, not called by hand)
 Installed as $$(tag_hook), so it runs inside 'make tag' between the confirmation
 and the tag. Does nothing while $(integrity_certificate) is absent.
 
-Otherwise it asks, stages, signs the staged tree, holds it against the committed
-certificate, uploads appinfo/signature.json as a secret gist and writes
+Otherwise it asks, clones HEAD into $(integrity_tree), builds and stages
+there, signs the staged tree, holds it against the committed certificate,
+uploads appinfo/signature.json as a secret gist and writes
 
   $(integrity_trailer): <gist id>
 
 into the tag message, where the tag's GPG signature covers it. The key never
 leaves this machine: the runner reads the gist without any token, since a secret
 gist is readable by anyone holding its id and findable by nobody.
+
+The clone keeps the checkout out of the signature: a git-ignored js/ or vendor/
+there may hold an older build, or files the source no longer builds, while the
+release runner builds the tarball fresh from the tag.
 
 Answering n skips the signature for this release, with no further question.
 endef
@@ -222,6 +299,7 @@ help::
 	@echo ""
 	@echo "  $(ct)integrity-enable$(c0)     Commit the certificate - marks $(app_id) as signed  $(cm)[m]$(c0)"
 	@echo "                       $(cd)Then 'make tag' offers the signature and the runner verifies it.$(c0)"
+	@echo "                       $(cd)add $(cv)COMMIT=1$(cd) to commit on a branch, or $(cv)PR=1$(cd) to commit and open the PR$(c0)"
 	@echo "  $(ct)integrity-sign$(c0)       Write appinfo/signature.json into the staged tree  $(cm)[m]$(c0)"
 	@echo "                       $(cv)DIR=<path>$(c0) signs a tree that already exists (a deployed app)."
 	@echo "  $(ct)dist-signed$(c0)          stage + sign + check + tarball, in that order  $(cm)[m]$(c0)"
