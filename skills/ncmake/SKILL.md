@@ -390,7 +390,7 @@ The repository side of the Nextcloud Transifex sync, in `mk/l10n.mk`. Transifex 
 
 ## git module
 
-`make git-aliases` writes the git aliases of the wiki page [Git tips](https://github.com/ernolf/ncmake/wiki/Git-tips) into the global git configuration of the calling user: the short forms `ci`, `p`, `pf`, `pu`, `amend`, `st`, `lg`, `last` and `alias`, the guarded first push `puh`, the post-merge cleanup `merged` and `gone`, which deletes local branches whose upstream is gone. An alias that is not defined yet is set, one with the same command is reported as up to date, and one the user defined with a different command is left as it is and reported with both commands; `FORCE=1` overwrites it. It needs no root. The commands live in one table in `mk/git.mk`, one line per alias.
+`make git-aliases` writes the git aliases of the wiki page [Git tips](https://github.com/ernolf/ncmake/wiki/Git-tips) into the global git configuration of the calling user: the short forms `ci`, `p`, `pf`, `pu`, `co`, `br`, `sw`, `unstage`, `amend` (with `-a`), `st`, `lg`, `last` and `alias`, the guarded branch creation `swc`, the guarded first push `puh` (`-y` skips the prompt, a branch whose upstream is gone is refused), the post-merge cleanup `merged` (`into <base>` for a base other than `main`) and `gone`, which deletes local branches whose upstream is gone. An alias that is not defined yet is set, one with the same command is reported as up to date, and one the user defined with a different command is left as it is and reported with both commands; `FORCE=1` overwrites it. It needs no root. The commands live in one table in `mk/git.mk`, one line per alias.
 
 ## Self-update and pinning
 
