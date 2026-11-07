@@ -82,10 +82,10 @@
 # config, report-text.mjs prints; the analyser itself decides what is worth saying.
 # data.mjs reads the generated data of the ncmake repo, the data/ entries.
 consistency_libs = consistency-audit.mjs bundler-config.mjs data.mjs report-text.mjs data/appstore.json data/nextcloud-server.json data/node-schedule.json data/tool-configs.json data/spdx-licenses.json
-verify_libs      = build-verify.mjs bundler-config.mjs report-text.mjs scratch-build.mjs
+verify_libs      = build-verify.mjs bundler-config.mjs lockfile.mjs report-text.mjs scratch-build.mjs
 changelog_libs   = changelog-lint.mjs data.mjs report-text.mjs data/appstore.json
 compat_libs      = php-compat.mjs report-text.mjs
-deps_libs        = deps-audit.mjs data.mjs deps-audit.php licences.json lockfile.mjs report-text.mjs data/spdx-licenses.json
+deps_libs        = deps-audit.mjs data.mjs deps-audit.php licences.json lockfile.mjs report-text.mjs scratch-build.mjs data/spdx-licenses.json
 secrets_libs     = secrets-audit.mjs data.mjs secrets-placeholders.json report-text.mjs data/composer-auth.json data/gitleaks-rules.json
 
 # What the goals on this command line need, handed to the core's analyser library
