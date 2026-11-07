@@ -48,7 +48,7 @@ Follow these before proposing any command. They are the mistakes that cost the m
 | --- | --- |
 | `appinfo/info.xml` | `<id>` (app id, tarball and stage directory name), `<version>`, `<dependencies><php min-version>` (the build image, never below the PHP floor of the newest end-of-life Nextcloud major) |
 | `composer.json` | a composer step is needed when `require` holds anything besides `php` and `ext-*`, or when `composer/autoload.php` exists; the version is bumped here too when the key exists |
-| `package.json` | an npm step is needed when `scripts.build` exists; the lock file picks npm, pnpm or yarn; `engines.node` picks the Node line, the newest LTS line it allows that is not end of life; the version is bumped here too |
+| `package.json` | an npm step is needed when `scripts.build` exists; the lock file picks npm, pnpm or yarn; `engines.node` picks the Node line, the newest LTS line it allows that is not end of life; `engines.npm` picks npm where the one that line ships is outside it, the newest release in the range that runs on the line; the version is bumped here too |
 | `.gitignore` | classifies `js/` and `vendor/`: ignored means build output that must be built before shipping, committed means a fresh checkout is already dist ready |
 | `.nextcloudignore` | optional, rsync exclude syntax, filters within the shipped file set |
 | `.ncmake/certificate.crt` | optional, the committed public certificate that marks the app as signed and pins every verification against it |

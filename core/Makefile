@@ -169,6 +169,21 @@ node_pm        = $(if $(filter pnpm-lock.yaml,$(node_lock)),pnpm,$(if $(filter y
 yarn_frozen    = $(if $(shell grep -q '^__metadata:' yarn.lock 2>/dev/null && echo 1),--immutable,--frozen-lockfile)
 node_install   = $(if $(filter pnpm,$(node_pm)),pnpm install --frozen-lockfile,$(if $(filter yarn,$(node_pm)),yarn install $(yarn_frozen),$(if $(node_lock),npm ci,npm install)))
 node_build_cmd ?= $(if $(need_npm),$(node_install) && $(node_pm) run build)
+# engines.npm in package.json names the npm the app builds with, as engines.node
+# names its Node line. Each Node release ships one npm; where that one is outside
+# the range, the newest npm release in the range whose own engines.node admits the
+# Node of the build is installed below node_pm_prefix and goes first on PATH. The
+# pick is made with the semver of the shipped npm, because npm 6 installs the
+# newest release in a range whatever Node it needs. Where no release fits or the
+# install fails, the shipped npm runs and the build says so.
+node_npm_range = $(if $(wildcard package.json),$(shell python3 -c 'import json,re; e=json.load(open("package.json", encoding="utf-8")).get("engines"); r=e.get("npm") if isinstance(e,dict) else None; print(r.strip() if isinstance(r,str) and re.fullmatch(r"[0-9A-Za-z.<>=^~|*+ -]+",r.strip()) else "")' 2>/dev/null))
+node_npm_setup = $(if $(node_npm_range),$(node_npm_pick))
+node_npm_pick  = r="$(node_npm_range)" s=$$(npm root -g)/npm/node_modules/semver h=$$(npm --version); \
+	node -e "process.exit(require(process.argv[1]).satisfies(process.argv[2],process.argv[3])?0:1)" "$$s" "$$h" "$$r" \
+	|| { v=$$(npm view "npm@$$r" version engines.node --json 2>/dev/null | node -e "const s=require(process.argv[1]);console.log([].concat(JSON.parse(String(require(\`fs\`).readFileSync(0)).trim()||\`[]\`)).filter(m=>!m[\`engines.node\`]||s.satisfies(process.version,m[\`engines.node\`])).map(m=>m.version).sort(s.rcompare)[0]||\`\`)" "$$s"); \
+	if [ -z "$$v" ]; then echo "npm: no npm release that engines.npm $$r in package.json allows runs on Node $$(node --version) - running npm $$h, which it ships" >&2; \
+	elif npm install --global --prefix $(node_pm_prefix)/npm "npm@$$v" >/dev/null; then export PATH=$(node_pm_prefix)/npm/bin:$$PATH; echo "npm: engines.npm $$r in package.json - running npm $$v, Node $$(node --version) ships npm $$h" >&2; \
+	else echo "npm: npm $$v, which engines.npm $$r in package.json asks for, could not be installed - running npm $$h" >&2; fi; };
 # pnpm and yarn come through corepack, in the version the packageManager field of
 # package.json names. Node 25 and later no longer ship corepack, so there it is
 # installed from npm first. The shims go to a directory on PATH, where a script
@@ -1528,7 +1543,7 @@ build: check-app
 	else echo "(composer: nothing to build)"; fi
 	@if [ -n "$(node_build_cmd)" ]; then \
 		if [ -z "$(node_lock)" ]; then echo "npm: no lock file, so the dependencies are resolved anew and this build is not reproducible" >&2; fi; \
-		echo "+ $(node_build_cmd)"; $(node_run) '$(node_pm_setup)$(node_build_cmd)' || exit 1; \
+		echo "+ $(node_build_cmd)"; $(node_run) '$(if $(filter npm,$(node_pm)),$(node_npm_setup))$(node_pm_setup)$(node_build_cmd)' || exit 1; \
 	else echo "(npm: nothing to build)"; fi
 
 # Generic pass-through into the throwaway containers: run any composer or npm
@@ -1558,7 +1573,7 @@ psalm: check-app
 npm: check-app
 	@test -n "$(ARGS)" || { echo >&2; echo "Usage: make npm ARGS=\"<npm arguments>\"" >&2; echo >&2; exit 1; }
 	@echo "==> npm $(ARGS) (RUNTIME=$(RUNTIME))"
-	@$(node_run) 'npm $(ARGS)'
+	@$(node_run) '$(node_npm_setup)npm $(ARGS)'
 
 # REUSE compliance check (https://reuse.software) with the official fsfe/reuse
 # container image; RUNTIME=bare expects the reuse tool on the host. ARGS is
@@ -2187,6 +2202,8 @@ the host needs neither PHP nor Node. What runs is detected from your files:
                                pnpm-lock.yaml or yarn.lock that package manager,
                                through corepack; without a lock file npm install,
                                and the build is not reproducible
+npm is the one the Node line ships, unless engines.npm in package.json does not
+allow it: then the newest npm release in that range that runs on the Node line.
 Composer ignores the PHP extensions the build image loads but neither
 composer.json nor a locked package requires, so the build fails only on what the
 app requires. A side that does not apply is skipped; override in ncmake.mk (php_build_cmd,
@@ -2245,7 +2262,9 @@ make npm ARGS="<npm arguments>"
 
 Runs any npm command in the throwaway Node container; no Node on the host. Node
 is the newest LTS line that engines.node in package.json allows and that is not
-end of life, the official build from nodejs.org.
+end of life, the official build from nodejs.org. npm is the one that line ships,
+unless engines.npm does not allow it: then the newest npm release in that range
+that runs on the line.
 
 Examples:
   make npm ARGS=ci                   install from package-lock.json
