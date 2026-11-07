@@ -278,9 +278,10 @@ php_image_repo  = ghcr.io/ernolf/ncmake-php
 php_image      ?= $(php_image_repo):$(php_version)
 analysis_image ?= docker.io/library/composer:2
 # One image runs Node for every line: node_tool_image, Debian slim with git, the CA
-# certificates, the compiler node-gyp builds a native module with and Yarn 1, which
-# the official Node images carry for a build script that calls yarn without a
-# yarn.lock, published by the ncmake-images repository for amd64 and arm64. The
+# certificates, the compiler node-gyp builds a native module with, the archive and
+# download tools an install script finds in the official Node images, and Yarn 1,
+# which they carry for a build script that calls yarn without a yarn.lock,
+# published by the ncmake-images repository for amd64 and arm64. The
 # line itself is the official build from nodejs.org, fetched by node_fetch and
 # mounted read-only at /usr/local, where the Node images keep node, npm and
 # corepack too. A host so keeps one image and one directory per line instead of an
