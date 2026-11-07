@@ -129,8 +129,9 @@ lint_npm_fetch = npmdir="$(lint_tools_dir)/$(call lint_npm_key,$(1),$(2))"; \
 # mounted read-only and <variable> names <path> in it. npm packages are mounted as
 # /node_modules, where Node looks last for a package that a configuration in the
 # checkout imports, so a repository configuration finds them without anything
-# written into the checkout. $(call lint_node,<target>,<tools>) runs the analyser
-# of <target> with them.
+# written into the checkout. With RUNTIME=bare the analyser hands LINT_MODULES to
+# the linter as that last place itself (moduleEnv in lint-common.mjs).
+# $(call lint_node,<target>,<tools>) runs the analyser of <target> with them.
 ifeq ($(filter $(RUNTIME),bare none),)
   lint_tool    = -v "$$$(2)":/ncmake-$(2):ro -e $(1)=/ncmake-$(2)/$(3)
   lint_modules = -v "$$npmdir/node_modules":/node_modules:ro -e LINT_MODULES=/node_modules
@@ -149,12 +150,14 @@ lint_node    = $(call lint_run,$(2)) '$(call ncmake_lib_guard,$(1)) LINT_CMDLINE
 
 # What an analyser needs next to it, handed to the core's analyser library
 # section: appended, never set, because every analyser module adds its own.
-# lint_data_<target> is the generated data of the ncmake repo one of them reads.
-lint_libs = lint-common.mjs report-text.mjs
+# lint_data_<target> is the generated data of the ncmake repo one of them reads,
+# and for a target that hands LINT_MODULES to its linter the resolve hook.
+lint_libs    = lint-common.mjs report-text.mjs
+lint_resolve = lint-resolve.mjs lint-resolve-hooks.mjs
 lint_data_lint-actions        = data.mjs data/github-runners.json data/tool-configs.json
 lint_data_lint-containerfiles = data.mjs data/tool-configs.json
-lint_data_lint-markdown       = data.mjs data/tool-configs.json
-lint_data_lint-web            = data.mjs data/nextcloud-eslint.json data/tool-configs.json
+lint_data_lint-markdown       = data.mjs data/tool-configs.json $(lint_resolve)
+lint_data_lint-web            = data.mjs data/nextcloud-eslint.json data/tool-configs.json $(lint_resolve) lint-stylelint-config.mjs
 lint_data_lint-yaml           = data.mjs data/tool-configs.json
 
 # == lint-actions-security ==
@@ -468,7 +471,9 @@ another parent, as a changelog repeats its sections in every release. A
 repository without Markdown passes.
 
 The package comes from npm, checked against the integrity npm records, and is
-kept in tools/ of the ncmake cache.
+kept in tools/ of the ncmake cache. A configuration of the repository can
+import it or require it, with RUNTIME=bare as in the container; a package of
+the checkout's own node_modules/ wins.
 
 $(call lint_help_common,lint-markdown)
 endef
@@ -558,7 +563,9 @@ passes the workflow.
 
 The packages, $(call lint_npm_shown,$(lint_web_pkgs)), come from npm, checked against the integrity
 npm records, and are kept in tools/ of the ncmake cache. A configuration of the
-repository can import them.
+repository can import them, require them or extend them, with RUNTIME=bare as
+in the container; a package of the checkout's own node_modules/ wins. Nothing
+is written into the checkout.
 
 $(call lint_help_common,lint-web)
 endef
