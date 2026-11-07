@@ -89,7 +89,7 @@ Follow these before proposing any command. They are the mistakes that cost the m
 | Whether the Transifex sync setup passes the Nextcloud check | `make l10n-check` |
 | Whether the source strings pass the review of the translation team | `make l10n-lint` (`FIX=1` rewrites what has a fix) |
 | Release tarball | `make build && make dist` |
-| Mark the app as signed (once per app) | `make integrity-enable` |
+| Mark the app as signed (once per app) | `make integrity-enable PR=1` |
 | Verify a tree or a tarball against its signature | `make integrity-check DIR=<path>`, `make integrity-check TARBALL=<file>` |
 | Signed tarball without the runner | `make dist-signed` |
 | Deploy to a test instance | `make build && make rsync TARGET=/var/www/nextcloud/apps OCC=1` |
@@ -211,7 +211,7 @@ It uses the App Store certificate and key from `cert_dir`, so an app is onboarde
 
 | Target | Effect |
 | --- | --- |
-| `make integrity-enable` | copies the public certificate to `.ncmake/certificate.crt` and prints the commit command; that committed file is the whole switch |
+| `make integrity-enable [COMMIT=1\|PR=1]` | copies the public certificate to `.ncmake/certificate.crt`, gives it a `.license` sidecar with the copyright and license `REUSE.toml` states for itself where the app follows REUSE, and prints the commit command, or commits both on a branch; that committed file is the whole switch |
 | `make integrity-sign [DIR=<path>]` | writes `appinfo/signature.json` into the staged tree, or into a tree that already exists; refuses the checkout itself |
 | `make integrity-check [DIR=<path>] [TARBALL=<file>] [ROOT_CERT=<file>] [JSON=<file>]` | holds a tree or a packed release against its own `signature.json`; needs no key and is a core target, not part of the module, so the release runner has it without `make dev-init` |
 | `make dist-signed` | stage, sign, check, pack - the tarball the runner would have produced, for a release attached by hand |
@@ -220,7 +220,7 @@ It uses the App Store certificate and key from `cert_dir`, so an app is onboarde
 
 **`.ncmake/certificate.crt` does two things.** It marks the app as signed, so `make tag` offers the signature and the release workflow fails a release that carries none; and it pins the certificate every verification is held against. It holds no key material, and it lies outside the keep model, so it never reaches the tarball. Removing it from the repository stops the signing; the next release then ships unsigned.
 
-**How a signed release runs.** After the confirmation in `make tag`, and before the tag exists, ncmake asks `Generate appinfo/signature.json for this release? [Y/n]`. On yes it stages, signs, verifies the result against the pinned certificate, uploads the file as a **secret gist** and writes one line into the tag message, `ncmake-signature: <gist id>`, which the tag's own GPG signature then covers. The release workflow reads that id back, fetches the gist into `appinfo/signature.json` **without a token** (a secret gist is readable by anyone holding its id, and `GITHUB_TOKEN` cannot read gists at all), and runs `make integrity-check` before `make dist`, so nothing is packed that did not verify. No id while `.ncmake/certificate.crt` is committed fails the job. `make publish` deletes the gist once the store has answered 200 or 201 - not earlier, because a failed release job has to stay re-runnable.
+**How a signed release runs.** After the confirmation in `make tag`, and before the tag exists, ncmake asks `Generate appinfo/signature.json for this release? [Y/n]`. On yes it builds and stages in a fresh clone of `HEAD`, as the runner builds from the tag, signs, verifies the result against the pinned certificate, uploads the file as a **secret gist** and writes one line into the tag message, `ncmake-signature: <gist id>`, which the tag's own GPG signature then covers. The release workflow reads that id back, fetches the gist into `appinfo/signature.json` **without a token** (a secret gist is readable by anyone holding its id, and `GITHUB_TOKEN` cannot read gists at all), and runs `make integrity-check` before `make dist`, so nothing is packed that did not verify. No id while `.ncmake/certificate.crt` is committed fails the job. `make publish` deletes the gist once the store has answered 200 or 201 - not earlier, because a failed release job has to stay re-runnable.
 
 That detour is the point: the signature travels to CI, the signing key never does.
 

@@ -1182,7 +1182,7 @@ version: check-app
 	git add appinfo/info.xml; \
 	[ -f composer.json ] && git add composer.json; [ -f composer.lock ] && git add composer.lock; \
 	[ -f package.json ] && git add package.json; [ -f package-lock.json ] && git add package-lock.json; \
-	git commit -s -m "build(release): bump version to $$new"; \
+	git commit -sm "build(release): bump version to $$new"; \
 	echo; \
 	summary="$$(xmllint --xpath 'string(/info/summary)' appinfo/info.xml 2>/dev/null)"; \
 	for f in composer.json package.json; do \
@@ -1300,14 +1300,14 @@ changelog: check-app
 			echo "      git push -u origin $$cur"; \
 			echo "    Open a PR against $$base and merge it; afterwards on $$base: git pull && make tag"; \
 		else \
-			echo "      git add CHANGELOG.md && git commit -s -m '$$title'"; \
+			echo "      git add CHANGELOG.md && git commit -sm '$$title'"; \
 		fi; \
 	else \
 		if [ -z "$$(git branch -r --contains HEAD 2>/dev/null)" ]; then \
 			echo "      git add CHANGELOG.md && git commit --amend --no-edit"; \
 			echo "    which folds it into the commit it describes ($$(git log -1 --format='%h %s')), or on its own:"; \
 		fi; \
-		echo "      git add CHANGELOG.md && git commit -s -m '$$title'"; \
+		echo "      git add CHANGELOG.md && git commit -sm '$$title'"; \
 	fi
 
 # Freeze the current HEAD as a signed release tag. Everything that belongs in the
@@ -1395,9 +1395,10 @@ tag: check-app
 # Transifex sync, which reaches app release lines only through .tx/backport on main: after a
 # prompt of its own the new branch goes into that file, and .tx/backport into the REUSE.toml
 # annotation of .tx/config, through the branch flow and a pull request against main; the new
-# branch is checked out again afterwards. Its name is kept in stable because the flow functions
-# overwrite branch and base. Stale remote branches are pruned in a fetch of their own: --prune
-# together with --tags would also delete local tags that origin does not have.
+# branch is checked out again afterwards. Its name is kept in stable and the tag it starts from
+# in from_tag, because the flow functions overwrite branch and base. Stale remote branches are
+# pruned in a fetch of their own: --prune together with --tags would also delete local tags that
+# origin does not have.
 stable-branch: check-app
 	@cur=$$(git rev-parse --abbrev-ref HEAD 2>/dev/null); \
 	[ "$$cur" = main ] || { echo "make stable-branch must run on 'main' (you are on '$$cur')." >&2; exit 1; }; \
@@ -1430,8 +1431,8 @@ stable-branch: check-app
 	printf 'Release line to branch from (X.Y%s, empty = abort): ' "$${suggest:+, e.g. $$suggest}"; read line; \
 	[ -z "$$line" ] && { echo "Aborted."; exit 0; }; \
 	echo "$$line" | grep -qE '^[0-9]+\.[0-9]+$$' || { echo "Not a X.Y release line: $$line" >&2; exit 1; }; \
-	base=$$(git tag --list "v$$line.*" --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | head -1); \
-	[ -n "$$base" ] || { echo "There is no tag v$$line.x - no release line $$line to maintain." >&2; exit 1; }; \
+	from_tag=$$(git tag --list "v$$line.*" --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | head -1); \
+	[ -n "$$from_tag" ] || { echo "There is no tag v$$line.x - no release line $$line to maintain." >&2; exit 1; }; \
 	[ "$$line" = "$$cline" ] && { echo "$$line is the current line on main and is released from there." >&2; exit 1; }; \
 	older=$$(printf '%s\n%s\n' "$$line" "$$cline" | sort -V | head -1); \
 	[ "$$older" = "$$line" ] || { echo "$$line is newer than the current line $$cline on main." >&2; exit 1; }; \
@@ -1443,10 +1444,10 @@ stable-branch: check-app
 	remote=$$(net_retry git ls-remote --heads origin "$$branch") || { echo "ERROR: could not query origin for $$branch (network?)" >&2; exit 1; }; \
 	[ -z "$$remote" ] || { echo "Branch $$branch already exists on origin: git switch $$branch" >&2; exit 1; }; \
 	deps='import sys, xml.etree.ElementTree as E; d = E.parse(sys.stdin).getroot().find("dependencies"); g = lambda t, a: (d.find(t).get(a) if d is not None and d.find(t) is not None else None) or "-"; print(g("nextcloud", "min-version"), g("nextcloud", "max-version"), g("php", "min-version"), g("php", "max-version"))'; \
-	set -- $$(git show "$$base:appinfo/info.xml" | python3 -c "$$deps" 2>/dev/null); lnmin=$${1:--}; lnmax=$${2:--}; lpmin=$${3:--}; lpmax=$${4:--}; \
+	set -- $$(git show "$$from_tag:appinfo/info.xml" | python3 -c "$$deps" 2>/dev/null); lnmin=$${1:--}; lnmax=$${2:--}; lpmin=$${3:--}; lpmax=$${4:--}; \
 	set -- $$(git show "HEAD:appinfo/info.xml" | python3 -c "$$deps" 2>/dev/null); mnmin=$${1:--}; mnmax=$${2:--}; mpmin=$${3:--}; mpmax=$${4:--}; \
-	echo "==> $$branch starts at $$base, the newest tag of the line (not at main)."; \
-	printf '    %-10s %-14s %s\n' "" "Nextcloud" "PHP" "$$base" "$$lnmin - $$lnmax" "$$lpmin - $$lpmax" "main" "$$mnmin - $$mnmax" "$$mpmin - $$mpmax"; \
+	echo "==> $$branch starts at $$from_tag, the newest tag of the line (not at main)."; \
+	printf '    %-10s %-14s %s\n' "" "Nextcloud" "PHP" "$$from_tag" "$$lnmin - $$lnmax" "$$lpmin - $$lpmax" "main" "$$mnmin - $$mnmax" "$$mpmin - $$mpmax"; \
 	case "$$mnmin" in [0-9]*) \
 		cap=$$(( $${mnmin%%.*} - 1 )); \
 		case "$$lnmax" in [0-9]*) over=$$([ "$${lnmax%%.*}" -gt "$$cap" ] && echo 1);; *) over=1;; esac; \
@@ -1455,12 +1456,12 @@ stable-branch: check-app
 			echo "      on <nextcloud> in appinfo/info.xml with the first PR against $$branch."; \
 		fi;; \
 	esac; \
-	printf 'Create %s from %s and push it to origin? [y/N] ' "$$branch" "$$base"; read yn; \
+	printf 'Create %s from %s and push it to origin? [y/N] ' "$$branch" "$$from_tag"; read yn; \
 	if [ "$$yn" != y ] && [ "$$yn" != Y ]; then \
 		echo "Aborted. To do it manually:"; \
-		echo "  git switch -c $$branch $$base && git push -u origin $$branch"; exit 0; \
+		echo "  git switch -c $$branch $$from_tag && git push -u origin $$branch"; exit 0; \
 	fi; \
-	git switch -c "$$branch" "$$base" || exit 1; \
+	git switch -c "$$branch" "$$from_tag" || exit 1; \
 	net_retry git push -u origin "$$branch" || exit 1; \
 	tx=; reuse_note=; \
 	if git cat-file -e main:.tx/config 2>/dev/null; then \
@@ -1501,10 +1502,10 @@ stable-branch: check-app
 	echo "        git switch -c <branch> $$branch && git cherry-pick -x <commit>"; \
 	echo "      -x records the original commit in the message."; \
 	echo "    - Release from it: on $$branch, make version, make changelog, make tag. Its"; \
-	echo "      versions lie above $$base and below the next tag of a newer line, and make"; \
+	echo "      versions lie above $$from_tag and below the next tag of a newer line, and make"; \
 	echo "      version shows that range. When you publish the GitHub release, untick"; \
 	echo "      'Set as the latest release'."; \
-	echo "    - The workflows on $$branch stay as they were at $$base; comment and scheduled"; \
+	echo "    - The workflows on $$branch stay as they were at $$from_tag; comment and scheduled"; \
 	echo "      events run the workflows of the default branch. A workflow main gained later,"; \
 	echo "      for example one whose check your rules require, comes over on $$branch with:"; \
 	echo "        make workflows-install W=<name> PR=1"; \
