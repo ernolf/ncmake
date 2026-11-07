@@ -1651,6 +1651,20 @@ def fail(message):
     sys.exit('ERROR: %s' % message)
 
 
+def write_json(path, report):
+    # Beside the target first and renamed over it, as the analysers write theirs,
+    # so a run that stops on the way leaves an existing file whole.
+    scratch = os.path.join(os.path.dirname(os.path.abspath(path)), '.%s.%d.tmp' % (os.path.basename(path), os.getpid()))
+    try:
+        with open(scratch, 'w', encoding='utf-8', newline='\n') as handle:
+            handle.write(json.dumps(report, indent=2) + '\n')
+        os.replace(scratch, path)
+    except OSError as error:
+        if os.path.exists(scratch):
+            os.remove(scratch)
+        fail('could not write the JSON file: %s' % error)
+
+
 def is_excluded(name):
     return name in EXCLUDED_NAMES or any(p.match(name) for p in EXCLUDED_PATTERNS)
 
@@ -1725,9 +1739,15 @@ def sign(root, app_id, key, certificate):
     print('Signed %d files -> %s' % (len(hashes), target))
 
 
-def check(root, app_id, pinned=None):
+def check(root, app_id, pinned=None, trusted=None, report=None):
+    outcome = {'root': root, 'app': app_id, 'state': 'unsigned', 'certificate': None, 'pinned': pinned,
+              'rootCert': trusted, 'files': None, 'findings': []}
+    if trusted and not os.path.isfile(trusted):
+        fail('ROOT_CERT not found: %s' % trusted)
     path = os.path.join(root, 'appinfo', 'signature.json')
     if not os.path.isfile(path):
+        if report:
+            write_json(report, outcome)
         fail('%s not found - the app would not be integrity-checked at all' % path)
     with open(path, 'r', encoding='utf-8') as handle:
         document = json.load(handle)
@@ -1745,13 +1765,22 @@ def check(root, app_id, pinned=None):
         with open(certificate, 'w', encoding='utf-8', newline='') as handle:
             handle.write(document['certificate'])
         name = common_name(certificate)
-        if name != app_id:
+        # The server takes core besides the app id, the CN of the server's own files.
+        if name not in (app_id, 'core'):
             problems.append(('CERTIFICATE_CN', '%s, expected %s' % (name, app_id)))
         # Against the committed certificate: the hashes and the signature agree with
         # each other in any self-signed file, so only the pin says the key was the
         # app's own. It is the check the release runner is there for.
         if pinned and fingerprint(certificate) != fingerprint(pinned):
             problems.append(('CERTIFICATE_MISMATCH', 'not the certificate in %s' % pinned))
+        # Every certificate in the file is a trust anchor, as loadCA makes it on the
+        # server, and the dates are not checked, as Checker::verify does not.
+        if trusted:
+            verified = subprocess.run(['openssl', 'verify', '-partial_chain', '-no_check_time',
+                                       '-CAfile', trusted, certificate],
+                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            if verified.returncode != 0:
+                problems.append(('CERTIFICATE_UNTRUSTED', 'not issued by a certificate in %s' % trusted))
         public_key = os.path.join(scratch, 'certificate.pub')
         with open(public_key, 'wb') as handle:
             handle.write(openssl(['x509', '-in', certificate, '-pubkey', '-noout']))
@@ -1768,23 +1797,43 @@ def check(root, app_id, pinned=None):
             problems.append(('INVALID_SIGNATURE', result.stderr.decode('utf-8', 'replace').strip()
                              or 'the signature does not match the hashes in the file'))
 
+    outcome['state'] = 'invalid' if problems else 'valid'
+    outcome['certificate'] = name
+    outcome['files'] = {'signed': len(expected), 'found': len(actual)}
+    # One [!] finding per problem, shaped as the analysers shape theirs: a file class
+    # names the path, the others a detail.
+    for kind, detail in problems:
+        place = detail if kind in ('EXTRA_FILE', 'FILE_MISSING', 'INVALID_HASH') else None
+        outcome['findings'].append({'level': 'warn', 'id': kind, 'file': place,
+                                   'lines': ['%s  %s' % (place or 'no location', kind)] + ([] if place else [detail])})
+    if report:
+        write_json(report, outcome)
+
     print('%s: %d files in signature.json, %d in %s' % (app_id, len(expected), len(actual), root))
+    for kind, detail in problems:
+        print('  %-21s %s' % (kind, detail))
+    if not problems:
+        print('  no errors found, signature valid for CN=%s' % name)
+    # The root is the server's resources/codesigning/root.crt, which ncmake does not
+    # carry: without one given, who issued the certificate stays open.
+    if trusted:
+        print('  issuer checked against %s' % trusted)
+    else:
+        print('  issuer not checked: ROOT_CERT=<file> holds the certificate against a root')
     if problems:
-        for kind, detail in problems:
-            print('  %-18s %s' % (kind, detail))
         sys.exit(1)
-    # The chain against resources/codesigning/root.crt is the server's check: that
-    # root certificate is not ncmake's to carry.
-    print('  no errors found, signature valid for CN=%s' % app_id)
 
 
 if len(sys.argv) < 4:
     sys.exit('usage: ncmake_integrity.py sign <root> <app id> <key> <certificate>\n'
-             '       ncmake_integrity.py check <root> <app id> [<pinned certificate>]')
+             '       ncmake_integrity.py check [--root-cert=<file>] [--json-file=<file>] <root> <app id> [<pinned certificate>]')
 if sys.argv[1] == 'sign':
     sign(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5])
 elif sys.argv[1] == 'check':
-    check(sys.argv[2], sys.argv[3], sys.argv[4] if len(sys.argv) > 4 else None)
+    options = dict(a[2:].split('=', 1) for a in sys.argv[2:] if a.startswith('--') and '=' in a)
+    positional = [a for a in sys.argv[2:] if not a.startswith('--')]
+    check(positional[0], positional[1], positional[2] if len(positional) > 2 else None,
+          options.get('root-cert') or None, options.get('json-file') or None)
 else:
     sys.exit('unknown command: %s' % sys.argv[1])
 endef
@@ -1801,7 +1850,8 @@ integrity-check: check-app $(if $(or $(DIR),$(TARBALL)),,stage)
 	else \
 		root="$(integrity_dir)"; \
 	fi; \
-	$(integrity_run) check "$$root" "$(app_id)" $(wildcard $(integrity_certificate))
+	$(integrity_run) check $(if $(ROOT_CERT),--root-cert="$(ROOT_CERT)") $(if $(JSON),--json-file="$(JSON)") \
+		"$$root" "$(app_id)" $(wildcard $(integrity_certificate))
 
 # == Local deploy ==
 
@@ -2235,13 +2285,13 @@ in it stops make dist. NO_SECRETS_AUDIT=1 packs regardless.
 endef
 
 define help_integrity-check
-make integrity-check [DIR=<path>|TARBALL=<file>]
+make integrity-check [DIR=<path>|TARBALL=<file>] [ROOT_CERT=<file>] [JSON=<file>]
 
 Holds a tree against the appinfo/signature.json inside it: the hashes are
 recomputed and compared, and the signature is verified against the certificate
 the file carries. Differences are reported in the classes Checker::verify uses -
-EXTRA_FILE, FILE_MISSING, INVALID_HASH - plus a CN that is not the app id and a
-signature that does not match. Any of them exits non-zero.
+EXTRA_FILE, FILE_MISSING, INVALID_HASH - plus a CN that is neither the app id
+nor core and a signature that does not match. Any of them exits non-zero.
 
 While $(integrity_certificate) is committed, the certificate in the file is
 also held against it (CERTIFICATE_MISMATCH): hashes and signature agree with each
@@ -2255,9 +2305,18 @@ already installed on a server.
   make integrity-check TARBALL=build/artifacts/dist/$(app_id)-$(version).tar.gz
   make integrity-check DIR=/var/www/nextcloud/apps/$(app_id)
 
-What it does not check is the certificate chain: that the certificate was issued
-by Nextcloud is verified by the server against resources/codesigning/root.crt,
-and that root is not ncmake's to carry.
+Who issued the certificate is checked only with ROOT_CERT=<file>. The server
+holds it against resources/codesigning/root.crt, which ncmake does not carry;
+ROOT_CERT gives that file or any other, and every certificate in it counts as a
+root, as on the server. A certificate none of them issued is CERTIFICATE_UNTRUSTED;
+the dates are not checked, as the server does not check them. Without ROOT_CERT
+the last line says that the issuer was not checked.
+
+  make integrity-check DIR=/var/www/nextcloud/apps/$(app_id) ROOT_CERT=/var/www/nextcloud/resources/codesigning/root.crt
+
+JSON=<file> writes the result to <file> as well: the state - valid, invalid, or
+unsigned for a tree without signature.json - and one [!] finding per problem,
+with its class and its path or detail. The exit code is the same as without it.
 endef
 
 define help_rsync
