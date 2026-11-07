@@ -257,7 +257,7 @@ endif
 
 # == make lint ==
 # Every target of this module, in the order make lint runs them.
-lint_targets = lint-actions lint-actions-security lint-containerfiles lint-markdown lint-php-syntax lint-shell lint-vue-imports lint-web lint-yaml
+lint_targets = lint-actions lint-actions-security lint-containerfiles lint-markdown lint-php-syntax lint-shell lint-version lint-vue-imports lint-web lint-yaml
 lint_plain   = $(filter-out lint-actions-security,$(lint_targets))
 ncmake_libs += $(foreach t,$(filter $(lint_plain),$(MAKECMDGOALS)),$(t).mjs $(lint_libs) $(lint_data_$(t)))
 
@@ -305,6 +305,12 @@ lint-shell:
 	@$(call lint_banner,$@,shellcheck $(shellcheck_version))
 	@sdir=$$($(lint_bin_fetch) $(lint_shellcheck)) || exit 1; \
 	$(call lint_node,$@,$(call lint_tool,LINT_SHELLCHECK,sdir,shellcheck))
+
+lint-version:
+	@$(lint_core)
+	@$(call ncmake_lib_need,$@.mjs $(lint_libs) $(lint_data_$@))
+	@$(call lint_banner,$@,the version files against appinfo/info.xml)
+	@$(call lint_node,$@,)
 
 lint-vue-imports:
 	@$(lint_core)
@@ -506,6 +512,21 @@ digest and kept in tools/ of the ncmake cache.
 $(call lint_help_common,lint-shell)
 endef
 
+define help_lint-version
+make lint-version [ARGS="<options>"] [JSON=<file>]
+
+Holds the version in appinfo/info.xml, which the App Store and the server
+read, against version in package.json and composer.json and the root entries
+version and packages[""].version of package-lock.json, where the file is
+tracked and states one, and fails where the lint-version workflow of
+ncmake-workflows fails: on every version that differs, compared as written,
+and on a manifest that is not valid JSON. make version bumps them all in one
+step. A file that states no version is not checked, and a repository without
+appinfo/info.xml passes.
+
+$(call lint_help_common,lint-version)
+endef
+
 define help_lint-vue-imports
 make lint-vue-imports [ARGS="<options>"] [JSON=<file>]
 
@@ -581,6 +602,7 @@ help::
 	@echo "  $(ct)lint-php-syntax$(c0)      php -l over the PHP files, per PHP version"
 	@echo "    $(cd)optional $(cv)PHP_VERSIONS=\"8.2 8.4\"$(cd), see $(cv)make help-lint-php-syntax$(c0)"
 	@echo "  $(ct)lint-shell$(c0)           shellcheck over the shell scripts"
+	@echo "  $(ct)lint-version$(c0)         version files against appinfo/info.xml"
 	@echo "  $(ct)lint-vue-imports$(c0)     imports of the @nextcloud/vue root"
 	@echo "  $(ct)lint-web$(c0)             ESLint, Stylelint, html-validate without a package.json"
 	@echo "  $(ct)lint-yaml$(c0)            yamllint over the YAML files"
