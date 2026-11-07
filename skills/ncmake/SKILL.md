@@ -213,7 +213,7 @@ It uses the App Store certificate and key from `cert_dir`, so an app is onboarde
 | --- | --- |
 | `make integrity-enable` | copies the public certificate to `.ncmake/certificate.crt` and prints the commit command; that committed file is the whole switch |
 | `make integrity-sign [DIR=<path>]` | writes `appinfo/signature.json` into the staged tree, or into a tree that already exists; refuses the checkout itself |
-| `make integrity-check [DIR=<path>] [TARBALL=<file>]` | holds a tree or a packed release against its own `signature.json`; needs no key and is a core target, not part of the module, so the release runner has it without `make dev-init` |
+| `make integrity-check [DIR=<path>] [TARBALL=<file>] [ROOT_CERT=<file>] [JSON=<file>]` | holds a tree or a packed release against its own `signature.json`; needs no key and is a core target, not part of the module, so the release runner has it without `make dev-init` |
 | `make dist-signed` | stage, sign, check, pack - the tarball the runner would have produced, for a release attached by hand |
 | `make integrity-tag` | the step `make tag` runs; not called by hand |
 | `make integrity-gist-drop` | the step `make publish` runs; not called by hand |
@@ -226,7 +226,7 @@ That detour is the point: the signature travels to CI, the signing key never doe
 
 **What gets hashed is the staged tree**, never the checkout, so the hashed file set is the shipped file set. That also makes build reproducibility a release gate - the hashes were taken over a build on the maintainer's machine, so a runner build that does not reproduce it fails with `INVALID_HASH` instead of shipping. `make build-verify` is the target that asks that question ahead of time.
 
-`integrity-check` reports `EXTRA_FILE`, `FILE_MISSING` and `INVALID_HASH` (the classes `Checker::verify()` itself uses), plus `CERTIFICATE_CN` when the certificate's CN is not the app id, `CERTIFICATE_MISMATCH` when the signature was made with a certificate other than the pinned one, and `INVALID_SIGNATURE`. It does not check the certificate chain: that the certificate was issued by Nextcloud is what the server verifies against its own `resources/codesigning/root.crt`.
+`integrity-check` reports `EXTRA_FILE`, `FILE_MISSING` and `INVALID_HASH` (the classes `Checker::verify()` itself uses), plus `CERTIFICATE_CN` when the certificate's CN is neither the app id nor `core`, `CERTIFICATE_MISMATCH` when the signature was made with a certificate other than the pinned one, and `INVALID_SIGNATURE`. Who issued the certificate is checked only with `ROOT_CERT=<file>`, for example the server's `resources/codesigning/root.crt`, which ncmake does not carry: every certificate in the file is a root, and a certificate none of them issued is `CERTIFICATE_UNTRUSTED`. `JSON=<file>` writes the state (`valid`, `invalid`, `unsigned`) and one finding per problem; the exit code stays the same.
 
 ## Bundle analysis module
 
