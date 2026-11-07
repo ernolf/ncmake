@@ -4,12 +4,13 @@
 # ncmake developer module: six checks on a checkout.
 #
 # consistency-audit reads the metadata of a checkout and holds the statements it
-# finds against each other: the version in appinfo/info.xml against the one in
-# package.json, the PHP floor in info.xml against composer.json, the Node version
-# in package.json against .nvmrc and against the installed workflows. To that it
-# adds what a release needs and a checkout can be missing - the link from a
-# published version back to its source, a server range that names a server that
-# exists, a lockfile, a linter that a script calls but no configuration backs.
+# finds against each other: the version in appinfo/info.xml against the ones in
+# package.json and composer.json, the PHP floor in info.xml against composer.json,
+# the Node version in package.json against .nvmrc and against the installed
+# workflows. To that it adds what a release needs and a checkout can be missing -
+# the link from a published version back to its source, a server range that names
+# a server that exists, a lockfile, a linter that a script calls but no
+# configuration backs.
 # Metadata only: it builds nothing and installs nothing. From the network make reads
 # the server majors and the Node schedule, and the analyser asks whether the links
 # of info.xml answer, which NO_NETWORK=1 leaves out.
@@ -456,9 +457,9 @@ define help_consistency-audit
 make consistency-audit [ARGS="<audit arguments>"] [JSON=<file>] [NO_NETWORK=1]
 
 Checks whether the checkout agrees with itself. An app states the same fact in
-several files, and each file is valid on its own: appinfo/info.xml and
-package.json both carry a version, info.xml and composer.json both bound the PHP
-version, package.json, .nvmrc and the installed workflows each name a Node
+several files, and each file is valid on its own: appinfo/info.xml, package.json
+and composer.json each carry a version, info.xml and composer.json both bound the
+PHP version, package.json, .nvmrc and the installed workflows each name a Node
 version. A linter checks one file against a rule and cannot see any of that; this
 holds the files against each other and reports where they disagree.
 
