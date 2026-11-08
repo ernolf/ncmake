@@ -123,7 +123,9 @@ keep_files    = CHANGELOG.md CHANGELOG.*.md AUTHORS AUTHORS.md REUSE.toml COPYIN
 keep_existing = $(wildcard $(keep_dirs) $(keep_files) $(keep_extra) $(addsuffix .license,$(keep_files) $(keep_extra)))
 # Optional excludes WITHIN the shipped set come from .nextcloudignore (the
 # ecosystem convention; rsync exclude syntax: anchored /path, dir/, wildcards).
-stage_excludes = $(if $(wildcard .nextcloudignore),--exclude-from=.nextcloudignore)
+# js/node_modules is where a frontend in js/ installs its dependencies (see
+# node_root); the build bundles from it, and the server never loads it.
+stage_excludes = --exclude=/js/node_modules/ $(if $(wildcard .nextcloudignore),--exclude-from=.nextcloudignore)
 
 # == Build heuristics ==
 # composer runs when composer.json declares real runtime requirements (anything
@@ -136,8 +138,19 @@ stage_excludes = $(if $(wildcard .nextcloudignore),--exclude-from=.nextcloudigno
 # which only the composer step writes, even for an app that requires nothing.
 # Without composer.json there is nothing composer could install; such an app
 # commits vendor/, which already is the build output.
-need_composer = $(if $(wildcard composer.json),$(if $(wildcard composer/autoload.php),1,$(shell python3 -c 'import json;d=json.load(open("composer.json"));print(1 if [k for k in d.get("require",{}) if k not in ("php","bamarni/composer-bin-plugin") and not k.startswith("ext-")] else "")' 2>/dev/null)))
-need_npm      = $(shell python3 -c 'import json;d=json.load(open("package.json"));print(1 if "build" in d.get("scripts",{}) else "")' 2>/dev/null)
+# So does a PHP file of the shipped set that requires vendor/autoload.php by a
+# fixed path: without vendor/ the server stops at that require.
+# composer_vendor_require names the first such file, which make build prints.
+composer_requires      = $(shell python3 -c 'import json;d=json.load(open("composer.json"));print(1 if [k for k in d.get("require",{}) if k not in ("php","bamarni/composer-bin-plugin") and not k.startswith("ext-")] else "")' 2>/dev/null)
+composer_vendor_require = $(firstword $(shell grep -rlsE --include='*.php' "(require|include)(_once)?[^;]*['\"]/?(\.\./)*vendor/autoload\.php['\"]" $(filter-out vendor composer,$(keep_existing)) 2>/dev/null))
+need_composer = $(if $(wildcard composer.json),$(if $(or $(wildcard composer/autoload.php),$(composer_requires),$(composer_vendor_require)),1))
+# The frontend sits at the root of the app; an app without a package.json there
+# may keep it in js/, beside what its build writes. node_root is the directory
+# npm runs in, node_cd the cd into it, and every file the npm step reads, the
+# lock files and engines included, is the one in node_root.
+node_root     = $(if $(wildcard package.json),.,$(if $(wildcard js/package.json),js,.))
+node_cd       = $(if $(filter js,$(node_root)),cd js && )
+need_npm      = $(shell python3 -c 'import json;d=json.load(open("$(node_root)/package.json"));print(1 if "build" in d.get("scripts",{}) else "")' 2>/dev/null)
 # .gitignore classifies the outputs: an ignored js/ or vendor/ is a build
 # artifact that must be built before shipping; a committed one (apps that ship
 # built js/ in git) makes a fresh checkout dist-ready. git check-ignore applies
@@ -146,6 +159,10 @@ need_npm      = $(shell python3 -c 'import json;d=json.load(open("package.json")
 # even while the directory does not exist yet (fresh checkout before the build).
 js_ignored     = $(shell git check-ignore -q js/ 2>/dev/null && echo 1)
 vendor_ignored = $(shell git check-ignore -q vendor/ 2>/dev/null && echo 1)
+# A frontend in js/ keeps its sources there, so js/ itself is committed and its
+# build output is whatever an ignore rule for js/ names besides node_modules: a
+# line of .gitignore under js/, or one of js/.gitignore.
+js_out_ignored = $(if $(filter js,$(node_root)),$(shell { sed -n 's|^/\{0,1\}js/||p' .gitignore 2>/dev/null; cat js/.gitignore 2>/dev/null; } | grep -v '^[[:space:]]*\(#\|$$\)' | grep -vq '^/\{0,1\}node_modules/\{0,1\}$$' && echo 1))
 # The app's own post-install-cmd runs with the install: it is where an app moves
 # dependencies into a prefixed namespace under lib/Vendor.
 php_build_cmd  ?= $(if $(need_composer),composer install --no-dev --prefer-dist --no-progress)
@@ -164,11 +181,11 @@ php_ignored_ext = php -r "\$$r = []; foreach ([\"composer.json\", \"composer.loc
 # yarn.lock tells the two yarn lines apart: Yarn 2 and later write a __metadata
 # block and take --immutable, Yarn 1 writes "yarn lockfile v1" and takes
 # --frozen-lockfile.
-node_lock      = $(firstword $(wildcard npm-shrinkwrap.json package-lock.json pnpm-lock.yaml yarn.lock))
+node_lock      = $(notdir $(firstword $(wildcard $(addprefix $(node_root)/,npm-shrinkwrap.json package-lock.json pnpm-lock.yaml yarn.lock))))
 node_pm        = $(if $(filter pnpm-lock.yaml,$(node_lock)),pnpm,$(if $(filter yarn.lock,$(node_lock)),yarn,npm))
-yarn_frozen    = $(if $(shell grep -q '^__metadata:' yarn.lock 2>/dev/null && echo 1),--immutable,--frozen-lockfile)
+yarn_frozen    = $(if $(shell grep -q '^__metadata:' $(node_root)/yarn.lock 2>/dev/null && echo 1),--immutable,--frozen-lockfile)
 node_install   = $(if $(filter pnpm,$(node_pm)),pnpm install --frozen-lockfile,$(if $(filter yarn,$(node_pm)),yarn install $(yarn_frozen),$(if $(node_lock),npm ci,npm install)))
-node_build_cmd ?= $(if $(need_npm),$(node_install) && $(node_pm) run build)
+node_build_cmd ?= $(if $(need_npm),$(node_cd)$(node_install) && $(node_pm) run build)
 # engines.npm in package.json names the npm the app builds with, as engines.node
 # names its Node line. Each Node release ships one npm; where that one is outside
 # the range, the newest npm release in the range whose own engines.node admits the
@@ -176,7 +193,7 @@ node_build_cmd ?= $(if $(need_npm),$(node_install) && $(node_pm) run build)
 # pick is made with the semver of the shipped npm, because npm 6 installs the
 # newest release in a range whatever Node it needs. Where no release fits or the
 # install fails, the shipped npm runs and the build says so.
-node_npm_range = $(if $(wildcard package.json),$(shell python3 -c 'import json,re; e=json.load(open("package.json", encoding="utf-8")).get("engines"); r=e.get("npm") if isinstance(e,dict) else None; print(r.strip() if isinstance(r,str) and re.fullmatch(r"[0-9A-Za-z.<>=^~|*+ -]+",r.strip()) else "")' 2>/dev/null))
+node_npm_range = $(if $(wildcard $(node_root)/package.json),$(shell python3 -c 'import json,re; e=json.load(open("$(node_root)/package.json", encoding="utf-8")).get("engines"); r=e.get("npm") if isinstance(e,dict) else None; print(r.strip() if isinstance(r,str) and re.fullmatch(r"[0-9A-Za-z.<>=^~|*+ -]+",r.strip()) else "")' 2>/dev/null))
 node_npm_setup = $(if $(node_npm_range),$(node_npm_pick))
 node_npm_pick  = r="$(node_npm_range)" s=$$(npm root -g)/npm/node_modules/semver h=$$(npm --version); \
 	node -e "process.exit(require(process.argv[1]).satisfies(process.argv[2],process.argv[3])?0:1)" "$$s" "$$h" "$$r" \
@@ -284,7 +301,7 @@ php_version     = $(php_min)
 # counts in none of these. Without engines.node it is the newest LTS line. The
 # schedule is data/node-schedule.json; offline before its first fetch the pick is
 # empty, and node_line builds on the newest LTS line.
-node_pick   = $(if $(wildcard package.json),$(shell python3 -c 'import json,re,sys,datetime; r=re.sub(r"([<>=^~]+)\s+",r"\1",re.sub(r"(\S+)\s+-\s+(\S+)",r">=\1 <=\2",str(json.load(open("package.json")).get("engines",{}).get("node","")).strip())); s=json.load(open(sys.argv[1], encoding="utf-8"))["values"]; t=datetime.date.today().isoformat(); I=(1e9,0,0); P=lambda x:[int(n) for n in re.match(r"[v=]*([0-9.]*)",x).group(1).split(".") if n][:3]; pad=lambda p:tuple((p+[0,0,0])[:3]); up=lambda p:pad(p[:-1]+[p[-1]+1]) if p else I; C=lambda o,p:{"^":(pad(p),up(p[:1])),"~":(pad(p),up(p[:2])),">=":(pad(p),I),">":(up(p),I),"<":((0,0,0),pad(p)),"<=":((0,0,0),up(p))}.get(o,(pad(p),up(p))); ok=lambda M:any(all(max(lo,(M,0,0))<min(hi,(M+1,0,0)) for lo,hi in (C(m.group(1),P(m.group(2))) for m in (re.match(r"([<>]=?|[\^~]?)(.*)",c) for c in a.split()))) for a in r.split("||")); M=sorted((int(k) for k in s if s[k].get("start","")<=t),reverse=True); live=lambda m:s[str(m)].get("end","")>t; lts=lambda m:s[str(m)].get("lts","9")<=t; c=[m for m in M if ok(m) and live(m) and lts(m)] or [m for m in M if ok(m) and live(m)]; x=c[:1] or [m for m in M if ok(m)][:1]; print(" ".join([str(x[0])]+([] if c else ["eol"])) if r and x else "")' "$(call ncmake_data_file,node-schedule)" 2>/dev/null))
+node_pick   = $(if $(wildcard $(node_root)/package.json),$(shell python3 -c 'import json,re,sys,datetime; r=re.sub(r"([<>=^~]+)\s+",r"\1",re.sub(r"(\S+)\s+-\s+(\S+)",r">=\1 <=\2",str(json.load(open("$(node_root)/package.json")).get("engines",{}).get("node","")).strip())); s=json.load(open(sys.argv[1], encoding="utf-8"))["values"]; t=datetime.date.today().isoformat(); I=(1e9,0,0); P=lambda x:[int(n) for n in re.match(r"[v=]*([0-9.]*)",x).group(1).split(".") if n][:3]; pad=lambda p:tuple((p+[0,0,0])[:3]); up=lambda p:pad(p[:-1]+[p[-1]+1]) if p else I; C=lambda o,p:{"^":(pad(p),up(p[:1])),"~":(pad(p),up(p[:2])),">=":(pad(p),I),">":(up(p),I),"<":((0,0,0),pad(p)),"<=":((0,0,0),up(p))}.get(o,(pad(p),up(p))); ok=lambda M:any(all(max(lo,(M,0,0))<min(hi,(M+1,0,0)) for lo,hi in (C(m.group(1),P(m.group(2))) for m in (re.match(r"([<>]=?|[\^~]?)(.*)",c) for c in a.split()))) for a in r.split("||")); M=sorted((int(k) for k in s if s[k].get("start","")<=t),reverse=True); live=lambda m:s[str(m)].get("end","")>t; lts=lambda m:s[str(m)].get("lts","9")<=t; c=[m for m in M if ok(m) and live(m) and lts(m)] or [m for m in M if ok(m) and live(m)]; x=c[:1] or [m for m in M if ok(m)][:1]; print(" ".join([str(x[0])]+([] if c else ["eol"])) if r and x else "")' "$(call ncmake_data_file,node-schedule)" 2>/dev/null))
 node_major  = $(call node_major_of,$(node_pick))
 node_major_of = $(if $(filter eol,$(1)),$(warning engines.node in package.json allows only end-of-life Node lines - building on Node $(firstword $(1))))$(firstword $(1))
 php_base_image ?= docker.io/library/php:$(php_version)-cli-alpine
@@ -1808,12 +1825,14 @@ build: PHP := min
 build: check-app
 	@echo "==> Building via RUNTIME=$(RUNTIME)"
 	@if [ -n "$(php_build_cmd)" ]; then \
+		$(if $(composer_vendor_require),echo "composer: $(composer_vendor_require) requires vendor/autoload.php";) \
 		app="$(php_app)"; min="$(php_min)"; \
 		if [ "$$app" != "$$min" ]; then echo "composer: building on PHP $$min, the floor of Nextcloud $(nc_eol), the newest end-of-life major; the app's own floor is $${app:+PHP }$${app:-unknown}"; fi; \
 		echo "+ $(php_build_cmd)"; \
 		$(php_run) 'export COMPOSER_IGNORE_PLATFORM_REQ="$$($(php_ignored_ext))"; $(php_build_cmd)' || exit 1; \
 	else echo "(composer: nothing to build)"; fi
 	@if [ -n "$(node_build_cmd)" ]; then \
+		$(if $(node_cd),echo "npm: the frontend is in js/ (js/package.json) and builds there";) \
 		if [ -z "$(node_lock)" ]; then echo "npm: no lock file, so the dependencies are resolved anew and this build is not reproducible" >&2; fi; \
 		echo "+ $(node_build_cmd)"; $(node_run) '$(if $(filter npm,$(node_pm)),$(node_npm_setup))$(node_pm_setup)$(node_build_cmd)' || exit 1; \
 	else echo "(npm: nothing to build)"; fi
@@ -1844,8 +1863,8 @@ psalm: check-app
 
 npm: check-app
 	@test -n "$(ARGS)" || { echo >&2; echo "Usage: make npm ARGS=\"<npm arguments>\"" >&2; echo >&2; exit 1; }
-	@echo "==> npm $(ARGS) (RUNTIME=$(RUNTIME))"
-	@$(node_run) '$(node_npm_setup)npm $(ARGS)'
+	@echo "==> npm $(ARGS)$(if $(node_cd), in js/) (RUNTIME=$(RUNTIME))"
+	@$(node_run) '$(node_cd)$(node_npm_setup)npm $(ARGS)'
 
 # REUSE compliance check (https://reuse.software) with the official fsfe/reuse
 # container image; RUNTIME=bare expects the reuse tool on the host. ARGS is
@@ -1868,6 +1887,9 @@ reuse:
 check-build:
 	@if [ -n "$(need_npm)" ] && [ -n "$(js_ignored)" ] && { [ ! -d js ] || [ -z "$$(ls -A js 2>/dev/null)" ]; }; then \
 		echo >&2; echo "ERROR: js/ is missing or empty - run 'make build' first." >&2; echo >&2; exit 1; \
+	fi
+	@if [ -n "$(need_npm)" ] && [ -n "$(js_out_ignored)" ] && ! git ls-files -o -i --exclude-standard --directory -- js 2>/dev/null | grep -qv '^js/node_modules/'; then \
+		echo >&2; echo "ERROR: the build output of the frontend in js/ is missing - run 'make build' first." >&2; echo >&2; exit 1; \
 	fi
 	@if [ -n "$(need_composer)" ] && [ -n "$(vendor_ignored)" ] && [ ! -f vendor/autoload.php ]; then \
 		echo >&2; echo "ERROR: vendor/autoload.php is missing - run 'make build' first." >&2; echo >&2; exit 1; \
@@ -2469,11 +2491,14 @@ Builds the PHP dependencies and the frontend, each in a throwaway container, so
 the host needs neither PHP nor Node. What runs is detected from your files:
   composer install --no-dev    when composer.json declares runtime requirements
                                or the app has composer/autoload.php
-                               next to a composer.json
+                               next to a composer.json, or a shipped PHP
+                               file requires vendor/autoload.php
   npm ci && npm run build      when package.json has a build script; with
                                pnpm-lock.yaml or yarn.lock that package manager,
                                through corepack; without a lock file npm install,
                                and the build is not reproducible
+Without a package.json at the root, a frontend in js/ (js/package.json) builds
+in js/, from its own lock file; js/node_modules never ships.
 npm is the one the Node line ships, unless engines.npm in package.json does not
 allow it: then the newest npm release in that range that runs on the Node line.
 Composer ignores the PHP extensions the build image loads but neither
@@ -2536,11 +2561,12 @@ Runs any npm command in the throwaway Node container; no Node on the host. Node
 is the newest LTS line that engines.node in package.json allows and that is not
 end of life, the official build from nodejs.org. npm is the one that line ships,
 unless engines.npm does not allow it: then the newest npm release in that range
-that runs on the line.
+that runs on the line. A frontend in js/ (js/package.json, none at the root)
+runs it in js/.
 
 Examples:
   make npm ARGS=ci                   install from package-lock.json
-  make npm ARGS="run build"          build the frontend into js/
+  make npm ARGS="run build"          build the frontend
   make npm ARGS="run dev"            watch and rebuild during development
   make npm ARGS="run test"           run the frontend tests
   make npm ARGS="install -D vitest"  add a dev dependency
