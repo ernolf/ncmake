@@ -1379,6 +1379,155 @@ tag: check-app
 		echo "  git tag -s v$$ver -m \"Release $$ver\" && git push origin v$$ver"; \
 	fi
 
+# The entries of .github/dependabot.yml for a maintenance branch, for make stable-branch.
+# Without target-branch an entry checks the manifests of the default branch only, so add
+# copies each entry that has none right after it, and after the copies it already has, with
+# target-branch: <branch> and an ignore rule: patch updates only for composer, no major
+# updates for every other ecosystem, as on the stable branches of nextcloud/server and the
+# apps of the nextcloud organisation. github-actions is not copied, the workflows of a
+# maintenance branch stay as they were at its tag. An entry that already has a copy for the
+# branch, same ecosystem and directories, is skipped. remove drops every entry that targets
+# the branch. The file is edited as text, so its comments and line endings stay. Arguments:
+# add or remove, the branch, the file, and write to change it; without write it only
+# reports. Prints a bullet per entry; exit 0 on a change, 2 when the branch is already
+# covered or no entry targets it, 3 when no entry is to be copied.
+define dependabot_tool
+import re
+import sys
+
+action, branch, path = sys.argv[1:4]
+write = sys.argv[4:] == ['write']
+
+with open(path, encoding='utf-8', newline='') as f:
+    lines = f.read().splitlines(keepends=True)
+nl = '\r\n' if lines and lines[0].endswith('\r\n') else '\n'
+if lines and not lines[-1].endswith('\n'):
+    lines[-1] += nl
+
+
+def fail(msg):
+    print('%s: %s' % (path, msg), file=sys.stderr)
+    sys.exit(1)
+
+
+def indent(s):
+    return len(s) - len(s.lstrip(' '))
+
+
+def empty(s):
+    return not s.strip() or s.lstrip().startswith('#')
+
+
+start = next((i for i, s in enumerate(lines) if re.match(r'updates:\s*(#.*)?$$', s.rstrip())), None)
+if start is None:
+    fail('no block list under updates:')
+# Each entry spans from its "- " line to its last line that is neither blank nor only a
+# comment; what follows belongs to the gap before the next entry.
+entries, col = [], None
+for i in range(start + 1, len(lines)):
+    s = lines[i]
+    if empty(s):
+        continue
+    item = re.match(r'( *)-( |$$)', s.rstrip('\r\n'))
+    if col is None:
+        if not item:
+            fail('no block list under updates:')
+        col = len(item.group(1))
+    if indent(s) < col or (indent(s) == col and not item):
+        break
+    if indent(s) == col:
+        entries.append([i, i + 1])
+    else:
+        entries[-1][1] = i + 1
+
+
+def keys(block):
+    head = re.match(r' *- +', block[0])
+    kcol = len(head.group(0)) if head and block[0].strip() != '-' else indent(block[1])
+    found = {}
+    for n, s in enumerate(block):
+        t = ' ' * kcol + s[kcol:] if n == 0 else s
+        m = re.match(r' {%d}([A-Za-z][\w-]*):(.*)' % kcol, t.rstrip('\r\n'))
+        if m:
+            end = n + 1
+            while end < len(block) and (empty(block[end]) or indent(block[end]) > kcol):
+                end += 1
+            while end > n + 1 and empty(block[end - 1]):
+                end -= 1
+            value = re.sub(r'\s+#.*', '', m.group(2)).strip().strip('\'"')
+            found[m.group(1)] = (n, end, value)
+    return kcol, found
+
+
+def describe(block):
+    kcol, k = keys(block)
+    eco = k.get('package-ecosystem', (0, 0, ''))[2]
+    target = k.get('target-branch', (0, 0, ''))[2]
+    d = k.get('directory') or k.get('directories')
+    dirs = ''
+    if d:
+        dirs = ' '.join(re.sub(r'\s+#.*', '', s).strip().lstrip('-').strip().strip('\'"') for s in block[d[0] + 1:d[1]] if not empty(s))
+        dirs = (d[2] + ' ' + dirs).strip()
+    return kcol, k, eco, target, dirs
+
+
+info = [describe(lines[a:b]) for a, b in entries]
+blank_gap = any(not lines[i].strip() for (_, a), (b, _) in zip(entries, entries[1:]) for i in range(a, b))
+bullets, out = [], list(lines)
+
+if action == 'add':
+    todo = [n for n, e in enumerate(info) if not e[3] and e[2] != 'github-actions']
+    if not todo:
+        print('%s: no entry to copy for %s' % (path, branch), file=sys.stderr)
+        sys.exit(3)
+    # Insert from the bottom up, so the line numbers above stay valid.
+    for n in reversed(todo):
+        kcol, k, eco, target, dirs = info[n]
+        if any(e[3] == branch and e[2] == eco and e[4] == dirs for e in info):
+            continue
+        at = n
+        while at + 1 < len(info) and info[at + 1][3] and info[at + 1][2] == eco and info[at + 1][4] == dirs:
+            at += 1
+        block = lines[entries[n][0]:entries[n][1]]
+        copy = block[:1] + [' ' * kcol + 'target-branch: ' + branch + nl] + block[1:]
+        kcol, k = keys(copy)
+        types = '"version-update:semver-major", "version-update:semver-minor"' if eco == 'composer' else '"version-update:semver-major"'
+        if 'ignore' in k and k['ignore'][2]:
+            print('%s: the ignore list of the %s entry is written inline - the copy for %s takes it as it is.' % (path, eco, branch), file=sys.stderr)
+        elif 'ignore' in k:
+            a, b, _ = k['ignore']
+            first = next(s for s in copy[a + 1:b] if not empty(s))
+            ii = ' ' * indent(first)
+            copy[b:b] = [ii + '- dependency-name: "*"' + nl, ii + '  update-types: [' + types + ']' + nl]
+        else:
+            ii = ' ' * (kcol + 2)
+            copy += [' ' * kcol + 'ignore:' + nl, ii + '- dependency-name: "*"' + nl, ii + '  update-types: [' + types + ']' + nl]
+        end = entries[at][1]
+        out[end:end] = ([nl] if blank_gap else []) + copy
+        bullets.insert(0, '- Copy the %s entry for %s with target-branch: %s, %s' % (eco, dirs or 'its directory', branch,
+                       'patch updates only' if eco == 'composer' else 'no major updates'))
+elif action == 'remove':
+    for n in reversed(range(len(info))):
+        kcol, k, eco, target, dirs = info[n]
+        if target != branch:
+            continue
+        a, b = entries[n]
+        if a > 0 and not out[a - 1].strip():
+            a -= 1
+        del out[a:b]
+        bullets.insert(0, '- Remove the %s entry for %s that targets %s' % (eco, dirs or 'its directory', branch))
+else:
+    fail('unknown action %s' % action)
+
+if not bullets:
+    sys.exit(2)
+if write:
+    with open(path, 'w', encoding='utf-8', newline='') as f:
+        f.write(''.join(out))
+print('\n'.join(bullets))
+endef
+export dependabot_tool
+
 # Open a stable* maintenance branch from an older release line (maintainer only). Runs on main
 # with no uncommitted changes. Lists the release lines that exist as tags, each with the
 # stable* branches on origin whose newest tag is in it, prompts for one (empty = abort) and
@@ -1391,14 +1540,24 @@ tag: check-app
 # branch starts at the newest tag of the line, never at main. Before it is created, the
 # Nextcloud and PHP ranges at that tag are shown next to those of main, with a note when the
 # line still reaches into the Nextcloud versions main covers. After confirmation it creates and
-# pushes the branch and prints what comes next. For an app with .tx/config that includes the
-# Transifex sync, which reaches app release lines only through .tx/backport on main: after a
-# prompt of its own the new branch goes into that file, and .tx/backport into the REUSE.toml
-# annotation of .tx/config, through the branch flow and a pull request against main; the new
-# branch is checked out again afterwards. Its name is kept in stable and the tag it starts from
-# in from_tag, because the flow functions overwrite branch and base. Stale remote branches are
-# pruned in a fetch of their own: --prune together with --tags would also delete local tags that
-# origin does not have.
+# pushes the branch and prints what comes next. A branch that is on origin already is not
+# created again: only the steps on main are offered, and main stays checked out. For an app
+# with .tx/config that includes the Transifex sync, which reaches app release lines only
+# through .tx/backport on main: after a prompt of its own the new branch goes into that file,
+# and .tx/backport into the REUSE.toml annotation of .tx/config, through the branch flow and a
+# pull request against main; the new branch is checked out again afterwards. For an app with
+# .github/dependabot.yml the same holds for Dependabot, which checks the default branch only
+# unless an entry names a target-branch: after a prompt of its own dependabot_tool adds the
+# entries for the branch, through a pull request of its own. Its name is kept in stable and the
+# tag it starts from in from_tag, because the flow functions overwrite branch and base. Stale
+# remote branches are pruned in a fetch of their own: --prune together with --tags would also
+# delete local tags that origin does not have.
+# RETIRE=1 undoes the steps on main for a branch that is no longer maintained, through one pull
+# request: the branch leaves .tx/backport, which stays even when it is empty, because the bot
+# falls back to the server's stable* names only when the file is absent, and its entries leave
+# .github/dependabot.yml. Then it offers to delete the branch on origin, unless it has commits
+# after its newest tag; the tags and releases stay, and the branch can be opened again from
+# that tag.
 stable-branch: check-app
 	@cur=$$(git rev-parse --abbrev-ref HEAD 2>/dev/null); \
 	[ "$$cur" = main ] || { echo "make stable-branch must run on 'main' (you are on '$$cur')." >&2; exit 1; }; \
@@ -1406,9 +1565,69 @@ stable-branch: check-app
 		echo "ERROR: uncommitted changes would move to the new branch - commit or stash them first." >&2; \
 		git status --short --untracked-files=no >&2; exit 1; \
 	fi; \
+	mkdir -p "$(cache_dir)"; \
+	dep_tool() { python3 -c "$$dependabot_tool" "$$@"; }; \
+	dep_main() { git show main:.github/dependabot.yml > "$(cache_dir)/dependabot.yml" && dep_tool "$$1" "$$2" "$(cache_dir)/dependabot.yml"; }; \
+	$(net_retry); \
+	if [ -n "$(RETIRE)" ]; then \
+		echo "Maintainer target: retires a stable* branch that is no longer maintained."; \
+		echo "It takes the branch off .tx/backport and .github/dependabot.yml on main and,"; \
+		echo "on request, off origin."; \
+		{ net_retry git fetch --quiet --prune origin && net_retry git fetch --quiet --tags origin; } || { echo "ERROR: git fetch from origin failed (network?)" >&2; exit 1; }; \
+		echo "Maintenance branches on origin (newest tag):"; \
+		for b in $$(git for-each-ref --format='%(refname:lstrip=3)' 'refs/remotes/origin/stable*'); do \
+			printf '  %-12s %s\n' "$$b" "$$($(git_tags) --list 'v*' --merged "origin/$$b" --sort=-v:refname | head -1)"; \
+		done; \
+		printf 'Branch to retire (stable*, empty = abort): '; read stable; \
+		[ -z "$$stable" ] && { echo "Aborted."; exit 0; }; \
+		case "$$stable" in stable?*) ;; *) echo "$$stable does not start with stable: it is no maintenance branch." >&2; exit 1;; esac; \
+		todo=; bullets=; \
+		if git show main:.tx/backport 2>/dev/null | tr -s ' \t\r' '\n' | grep -qxF "$$stable"; then todo=.tx/backport; bullets="- Remove $$stable from .tx/backport"; fi; \
+		if git cat-file -e main:.github/dependabot.yml 2>/dev/null && dep_main remove "$$stable" >/dev/null; then todo="$${todo:+$$todo and }.github/dependabot.yml"; fi; \
+		if [ -z "$$todo" ]; then \
+			echo "main names $$stable neither in .tx/backport nor in .github/dependabot.yml."; \
+		else \
+			printf 'Remove %s from %s on main through a pull request? [y/N] ' "$$stable" "$$todo"; read yn; \
+			if [ "$$yn" = y ] || [ "$$yn" = Y ]; then \
+				eval "$$branch_flow"; \
+				if flow_branch_start "ncmake/chore/retire-$$stable"; then \
+					if [ -n "$$bullets" ]; then \
+						tr -s ' \t\r' '\n' < .tx/backport | grep -vxF "$$stable" | grep -v '^$$' > "$(cache_dir)/backport"; \
+						cat "$(cache_dir)/backport" > .tx/backport; git add .tx/backport; \
+					fi; \
+					if git cat-file -e main:.github/dependabot.yml 2>/dev/null && b=$$(dep_tool remove "$$stable" .github/dependabot.yml write); then \
+						git add .github/dependabot.yml; bullets=$$(printf '%s\n%s' "$$bullets" "$$b" | sed '/^$$/d'); \
+					fi; \
+					flow_branch_finish "$$branch" "chore: retire $$stable" "$$bullets" "$$stable is no longer maintained. Without it in .tx/backport the Nextcloud Transifex bot stops syncing it, and without its entries in .github/dependabot.yml Dependabot stops opening version updates against it." 1; \
+				fi; \
+				git switch --quiet main || exit 1; \
+			fi; \
+		fi; \
+		if git rev-parse --verify --quiet "refs/remotes/origin/$$stable" >/dev/null; then \
+			t=$$($(git_tags) --list 'v*' --merged "origin/$$stable" --sort=-v:refname | head -1); \
+			if [ -z "$$t" ]; then \
+				echo "$$stable holds no release tag, so it is not offered for deletion."; \
+			elif [ -n "$$(git rev-list "$$t..origin/$$stable")" ]; then \
+				echo "$$stable has commits after $$t that no tag holds, so it is not offered for deletion:"; \
+				git log --oneline "$$t..origin/$$stable" | sed 's/^/    /'; \
+			else \
+				printf 'Delete %s on origin? Its tags and releases stay, and make stable-branch opens it again from %s. [y/N] ' "$$stable" "$$t"; read yn; \
+				if [ "$$yn" = y ] || [ "$$yn" = Y ]; then \
+					net_retry git push origin --delete "$$stable" || exit 1; \
+					if git rev-parse --verify --quiet "refs/heads/$$stable" >/dev/null; then \
+						if [ -z "$$(git rev-list "$$t..refs/heads/$$stable")" ]; then git branch -D "$$stable" >/dev/null; \
+						else echo "Your local $$stable has commits after $$t and stays: git log $$t..$$stable"; fi; \
+					fi; \
+				fi; \
+			fi; \
+		else \
+			echo "$$stable is not on origin."; \
+		fi; \
+		exit 0; \
+	fi; \
 	echo "Maintainer target: opens a stable* branch for an older release line, which then"; \
 	echo "gets its own releases through make version, make changelog and make tag."; \
-	$(net_retry); { net_retry git fetch --quiet --prune origin && net_retry git fetch --quiet --tags origin; } || { echo "ERROR: git fetch from origin failed (network?)" >&2; exit 1; }; \
+	{ net_retry git fetch --quiet --prune origin && net_retry git fetch --quiet --tags origin; } || { echo "ERROR: git fetch from origin failed (network?)" >&2; exit 1; }; \
 	current=$$($(git_tags) --list 'v*' --merged HEAD --sort=-v:refname | head -1 | sed 's/^v//'); \
 	[ -n "$$current" ] || { echo "No release tag on main yet - there is no older line to maintain." >&2; exit 1; }; \
 	top=$$(printf '%s\n%s\n' "$$current" "$(version)" | $(version_sort) | tail -1); \
@@ -1440,29 +1659,35 @@ stable-branch: check-app
 	branch=$${branch:-stable$$line}; \
 	case "$$branch" in stable?*) ;; *) echo "$$branch does not start with stable: every target recognises a maintenance branch by that prefix." >&2; exit 1;; esac; \
 	git check-ref-format --branch "$$branch" >/dev/null 2>&1 || { echo "Not a valid branch name: $$branch" >&2; exit 1; }; \
-	git rev-parse --verify --quiet "refs/heads/$$branch" >/dev/null && { echo "Branch $$branch already exists locally: git switch $$branch" >&2; exit 1; }; \
 	remote=$$(net_retry git ls-remote --heads origin "$$branch") || { echo "ERROR: could not query origin for $$branch (network?)" >&2; exit 1; }; \
-	[ -z "$$remote" ] || { echo "Branch $$branch already exists on origin: git switch $$branch" >&2; exit 1; }; \
-	deps='import sys, xml.etree.ElementTree as E; d = E.parse(sys.stdin).getroot().find("dependencies"); g = lambda t, a: (d.find(t).get(a) if d is not None and d.find(t) is not None else None) or "-"; print(g("nextcloud", "min-version"), g("nextcloud", "max-version"), g("php", "min-version"), g("php", "max-version"))'; \
-	set -- $$(git show "$$from_tag:appinfo/info.xml" | python3 -c "$$deps" 2>/dev/null); lnmin=$${1:--}; lnmax=$${2:--}; lpmin=$${3:--}; lpmax=$${4:--}; \
-	set -- $$(git show "HEAD:appinfo/info.xml" | python3 -c "$$deps" 2>/dev/null); mnmin=$${1:--}; mnmax=$${2:--}; mpmin=$${3:--}; mpmax=$${4:--}; \
-	echo "==> $$branch starts at $$from_tag, the newest tag of the line (not at main)."; \
-	printf '    %-10s %-14s %s\n' "" "Nextcloud" "PHP" "$$from_tag" "$$lnmin - $$lnmax" "$$lpmin - $$lpmax" "main" "$$mnmin - $$mnmax" "$$mpmin - $$mpmax"; \
-	case "$$mnmin" in [0-9]*) \
-		cap=$$(( $${mnmin%%.*} - 1 )); \
-		case "$$lnmax" in [0-9]*) over=$$([ "$${lnmax%%.*}" -gt "$$cap" ] && echo 1);; *) over=1;; esac; \
-		if [ -n "$$over" ]; then \
-			echo "Note: main requires Nextcloud $${mnmin%%.*}, so $$branch usually ends at $$cap. Set max-version=\"$$cap\""; \
-			echo "      on <nextcloud> in appinfo/info.xml with the first PR against $$branch."; \
-		fi;; \
-	esac; \
-	printf 'Create %s from %s and push it to origin? [y/N] ' "$$branch" "$$from_tag"; read yn; \
-	if [ "$$yn" != y ] && [ "$$yn" != Y ]; then \
-		echo "Aborted. To do it manually:"; \
-		echo "  git switch -c $$branch $$from_tag && git push -u origin $$branch"; exit 0; \
+	exists=; \
+	if [ -n "$$remote" ]; then \
+		exists=1; \
+		echo "==> $$branch is on origin already: only the steps on main are offered, main stays checked out."; \
+	else \
+		git rev-parse --verify --quiet "refs/heads/$$branch" >/dev/null && { echo "Branch $$branch already exists locally: git switch $$branch" >&2; exit 1; }; \
+		deps='import sys, xml.etree.ElementTree as E; d = E.parse(sys.stdin).getroot().find("dependencies"); g = lambda t, a: (d.find(t).get(a) if d is not None and d.find(t) is not None else None) or "-"; print(g("nextcloud", "min-version"), g("nextcloud", "max-version"), g("php", "min-version"), g("php", "max-version"))'; \
+		set -- $$(git show "$$from_tag:appinfo/info.xml" | python3 -c "$$deps" 2>/dev/null); lnmin=$${1:--}; lnmax=$${2:--}; lpmin=$${3:--}; lpmax=$${4:--}; \
+		set -- $$(git show "HEAD:appinfo/info.xml" | python3 -c "$$deps" 2>/dev/null); mnmin=$${1:--}; mnmax=$${2:--}; mpmin=$${3:--}; mpmax=$${4:--}; \
+		echo "==> $$branch starts at $$from_tag, the newest tag of the line (not at main)."; \
+		printf '    %-10s %-14s %s\n' "" "Nextcloud" "PHP" "$$from_tag" "$$lnmin - $$lnmax" "$$lpmin - $$lpmax" "main" "$$mnmin - $$mnmax" "$$mpmin - $$mpmax"; \
+		case "$$mnmin" in [0-9]*) \
+			cap=$$(( $${mnmin%%.*} - 1 )); \
+			case "$$lnmax" in [0-9]*) over=$$([ "$${lnmax%%.*}" -gt "$$cap" ] && echo 1);; *) over=1;; esac; \
+			if [ -n "$$over" ]; then \
+				echo "Note: main requires Nextcloud $${mnmin%%.*}, so $$branch usually ends at $$cap. Set max-version=\"$$cap\""; \
+				echo "      on <nextcloud> in appinfo/info.xml with the first PR against $$branch."; \
+			fi;; \
+		esac; \
+		printf 'Create %s from %s and push it to origin? [y/N] ' "$$branch" "$$from_tag"; read yn; \
+		if [ "$$yn" != y ] && [ "$$yn" != Y ]; then \
+			echo "Aborted. To do it manually:"; \
+			echo "  git switch -c $$branch $$from_tag && git push -u origin $$branch"; exit 0; \
+		fi; \
+		git switch -c "$$branch" "$$from_tag" || exit 1; \
+		net_retry git push -u origin "$$branch" || exit 1; \
 	fi; \
-	git switch -c "$$branch" "$$from_tag" || exit 1; \
-	net_retry git push -u origin "$$branch" || exit 1; \
+	home=$$([ -n "$$exists" ] && echo main || echo "$$branch"); \
 	tx=; reuse_note=; \
 	if git cat-file -e main:.tx/config 2>/dev/null; then \
 		if git show main:.tx/backport 2>/dev/null | tr -s ' \t' '\n' | grep -qxF "$$branch"; then \
@@ -1492,23 +1717,53 @@ stable-branch: check-app
 					flow_branch_finish "$$branch" "chore(l10n): add $$stable to .tx/backport" "$$bullets" "The Nextcloud Transifex bot syncs only the branches .tx/backport lists. make stable-branch opened $$stable and adds it here." 1 && tx=opened; \
 				fi; \
 				branch=$$stable; \
-				git switch --quiet "$$branch" || exit 1; \
+				git switch --quiet "$$home" || exit 1; \
 			fi; \
 		fi; \
 	fi; \
-	echo "==> $$branch is on origin and checked out. Next:"; \
-	echo "    - Protect it like main: $(if $(gh_slug),https://github.com/$(gh_slug)/settings/rules,in the repository settings)"; \
-	echo "    - Changes reach $$branch through PRs against it. A backport:"; \
-	echo "        git switch -c <branch> $$branch && git cherry-pick -x <commit>"; \
-	echo "      -x records the original commit in the message."; \
-	echo "    - Release from it: on $$branch, make version, make changelog, make tag. Its"; \
-	echo "      versions lie above $$from_tag and below the next tag of a newer line, and make"; \
-	echo "      version shows that range. When you publish the GitHub release, untick"; \
-	echo "      'Set as the latest release'."; \
-	echo "    - The workflows on $$branch stay as they were at $$from_tag; comment and scheduled"; \
-	echo "      events run the workflows of the default branch. A workflow main gained later,"; \
-	echo "      for example one whose check your rules require, comes over on $$branch with:"; \
-	echo "        make workflows-install W=<name> PR=1"; \
+	dep=; \
+	if git cat-file -e main:.github/dependabot.yml 2>/dev/null; then \
+		stable=$$branch; dep_main add "$$stable" >/dev/null; \
+		case $$? in \
+		1) dep=unreadable;; \
+		2) dep=listed;; \
+		3) dep=none;; \
+		*) printf 'Add %s to .github/dependabot.yml on main through a pull request? [y/N] ' "$$stable"; read yn; \
+			dep=declined; \
+			if [ "$$yn" = y ] || [ "$$yn" = Y ]; then \
+				dep=failed; \
+				git switch --quiet main || exit 1; \
+				eval "$$branch_flow"; \
+				if flow_branch_start "ncmake/deps/dependabot-$$stable"; then \
+					if bullets=$$(dep_tool add "$$stable" .github/dependabot.yml write); then \
+						git add .github/dependabot.yml; \
+						flow_branch_finish "$$branch" "chore(deps): add $$stable to .github/dependabot.yml" "$$bullets" "Dependabot checks the default branch only, unless an entry names a target-branch. make stable-branch opened $$stable, and these copies of the entries check its manifests and open their pull requests against it: patch updates only for composer, no major updates otherwise, as on the stable branches of Nextcloud. Security updates always run on the default branch." 1 && dep=opened; \
+					else \
+						flow_branch_abort "$$branch"; \
+					fi; \
+				fi; \
+				branch=$$stable; \
+				git switch --quiet "$$home" || exit 1; \
+			fi;; \
+		esac; \
+	fi; \
+	if [ -z "$$exists" ]; then \
+		echo "==> $$branch is on origin and checked out. Next:"; \
+		echo "    - Protect it like main: $(if $(gh_slug),https://github.com/$(gh_slug)/settings/rules,in the repository settings)"; \
+		echo "    - Changes reach $$branch through PRs against it. A backport:"; \
+		echo "        git switch -c <branch> $$branch && git cherry-pick -x <commit>"; \
+		echo "      -x records the original commit in the message."; \
+		echo "    - Release from it: on $$branch, make version, make changelog, make tag. Its"; \
+		echo "      versions lie above $$from_tag and below the next tag of a newer line, and make"; \
+		echo "      version shows that range. When you publish the GitHub release, untick"; \
+		echo "      'Set as the latest release'."; \
+		echo "    - The workflows on $$branch stay as they were at $$from_tag; comment and scheduled"; \
+		echo "      events run the workflows of the default branch. A workflow main gained later,"; \
+		echo "      for example one whose check your rules require, comes over on $$branch with:"; \
+		echo "        make workflows-install W=<name> PR=1"; \
+	else \
+		echo "==> $$branch on main:"; \
+	fi; \
 	if git cat-file -e main:.tx/config 2>/dev/null; then \
 		echo "    - Transifex: the Nextcloud sync bot only reaches $$branch when .tx/backport on"; \
 		echo "      main lists it, and that list replaces the server's stable* names."; \
@@ -1526,6 +1781,18 @@ stable-branch: check-app
 		echo "    - The bot pushes its commits directly: add nextcloud-bot to the bypass list of"; \
 		echo "      the rule that protects $$branch, as on main. It needs write access as a"; \
 		echo "      collaborator first: $(if $(gh_slug),https://github.com/$(gh_slug)/settings/access,the repository settings)"; \
+	fi; \
+	if git cat-file -e main:.github/dependabot.yml 2>/dev/null; then \
+		echo "    - Dependabot checks the manifests of $$branch only through entries in"; \
+		echo "      .github/dependabot.yml on main that name it as target-branch."; \
+		case "$$dep" in \
+		listed) echo "      It has them for $$branch already.";; \
+		none) echo "      It has no entry to copy for $$branch.";; \
+		opened) echo "      The pull request above adds them; merge it.";; \
+		unreadable|failed) echo "      They were not added, see the messages above.";; \
+		*) echo "      To add them later, run make stable-branch again and name $$branch.";; \
+		esac; \
+		echo "      Security updates always run on main: they reach $$branch as backports."; \
 	fi
 
 # == Build ==
@@ -2464,7 +2731,7 @@ message; the integrity module installs its signature step there.
 endef
 
 define help_stable-branch
-make stable-branch    (maintainer, on main)
+make stable-branch [RETIRE=1]    (maintainer, on main)
 
 Opens a stable* maintenance branch from an older release line, e.g. stable0.7
 while main is at 0.8. Lists the release lines from the tags, with the stable*
@@ -2473,7 +2740,8 @@ without a tag, the current line of main, and a newer one. Then it prompts for
 the branch name, stableX.Y by default. Any name with the stable prefix fits:
 stable0.8 from v0.7.3 for a new minor next to main at 0.9, or stable32 for the
 servers of Nextcloud 32. make version keeps the versions of the branches apart
-(see make help-version). A name that exists locally or on origin is refused. The
+(see make help-version). A name that exists only locally is refused; for one on
+origin nothing is created, only the steps on main below are offered. The
 branch starts at the newest tag of the line, not at main. Before it is created,
 the Nextcloud and PHP ranges at that tag are shown next to those of main, with a
 note when the line still reaches into the Nextcloud versions main covers. After
@@ -2490,6 +2758,29 @@ ncmake/l10n/tx-backport-<branch> off main, opens the pull request against
 main through gh and checks the new branch out again. The bot also needs write
 access plus a bypass on the rule that protects the branch, because it pushes
 its commits directly; the next steps name both.
+
+For an app with .github/dependabot.yml it then offers the same for Dependabot,
+which checks the default branch only unless an entry names a target-branch. On
+yes every entry without one gets a copy for the branch, on
+ncmake/deps/dependabot-<branch> off main and through a pull request against
+main: same schedule, groups and options, plus an ignore rule for patch updates
+only for composer and no major updates for the other ecosystems, as on the
+stable branches of Nextcloud. github-actions is not copied, and an entry that
+has a copy for the branch already is skipped. Security updates always run on
+main and reach the branch as backports.
+
+RETIRE=1 retires a branch that is no longer maintained. It prompts for the
+branch and removes it from .tx/backport and its entries from
+.github/dependabot.yml on main, through one pull request from
+ncmake/chore/retire-<branch>. .tx/backport stays even when it is empty: only an
+absent file makes the bot sync the server's stable* names. Then it offers to
+delete the branch on origin, unless the branch has commits after its newest
+tag. Its tags and releases stay, and make stable-branch opens it again from that
+tag.
+
+Examples:
+  make stable-branch              open a branch, or the steps on main for one
+  make stable-branch RETIRE=1     retire one
 endef
 
 define help_dev-init
