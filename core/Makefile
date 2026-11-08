@@ -1548,7 +1548,9 @@ export dependabot_tool
 # pull request against main; the new branch is checked out again afterwards. For an app with
 # .github/dependabot.yml the same holds for Dependabot, which checks the default branch only
 # unless an entry names a target-branch: after a prompt of its own dependabot_tool adds the
-# entries for the branch, through a pull request of its own. Its name is kept in stable and the
+# entries for the branch, through a pull request of its own. Once the pull request of such a
+# step is open, its local branch is deleted, since origin keeps it and git switch fetches it
+# again for a change. The name of the new branch is kept in stable and the
 # tag it starts from in from_tag, because the flow functions overwrite branch and base. Stale
 # remote branches are pruned in a fetch of their own: --prune together with --tags would also
 # delete local tags that origin does not have.
@@ -1557,7 +1559,7 @@ export dependabot_tool
 # falls back to the server's stable* names only when the file is absent, and its entries leave
 # .github/dependabot.yml. Then it offers to delete the branch on origin, unless it has commits
 # after its newest tag; the tags and releases stay, and the branch can be opened again from
-# that tag.
+# that tag. The local branch of its pull request is deleted like the others.
 stable-branch: check-app
 	@cur=$$(git rev-parse --abbrev-ref HEAD 2>/dev/null); \
 	[ "$$cur" = main ] || { echo "make stable-branch must run on 'main' (you are on '$$cur')." >&2; exit 1; }; \
@@ -1568,6 +1570,7 @@ stable-branch: check-app
 	mkdir -p "$(cache_dir)"; \
 	dep_tool() { python3 -c "$$dependabot_tool" "$$@"; }; \
 	dep_main() { git show main:.github/dependabot.yml > "$(cache_dir)/dependabot.yml" && dep_tool "$$1" "$$2" "$(cache_dir)/dependabot.yml"; }; \
+	pr_drop() { git branch -D "$$1" >/dev/null 2>&1 && { echo "==> Deleted the local branch $$1;"; echo "    origin keeps it for the pull request. To change the pull request:"; echo "      git switch $$1"; }; }; \
 	$(net_retry); \
 	if [ -n "$(RETIRE)" ]; then \
 		echo "Maintainer target: retires a stable* branch that is no longer maintained."; \
@@ -1581,7 +1584,7 @@ stable-branch: check-app
 		printf 'Branch to retire (stable*, empty = abort): '; read stable; \
 		[ -z "$$stable" ] && { echo "Aborted."; exit 0; }; \
 		case "$$stable" in stable?*) ;; *) echo "$$stable does not start with stable: it is no maintenance branch." >&2; exit 1;; esac; \
-		todo=; bullets=; \
+		todo=; bullets=; retired=; \
 		if git show main:.tx/backport 2>/dev/null | tr -s ' \t\r' '\n' | grep -qxF "$$stable"; then todo=.tx/backport; bullets="- Remove $$stable from .tx/backport"; fi; \
 		if git cat-file -e main:.github/dependabot.yml 2>/dev/null && dep_main remove "$$stable" >/dev/null; then todo="$${todo:+$$todo and }.github/dependabot.yml"; fi; \
 		if [ -z "$$todo" ]; then \
@@ -1598,9 +1601,10 @@ stable-branch: check-app
 					if git cat-file -e main:.github/dependabot.yml 2>/dev/null && b=$$(dep_tool remove "$$stable" .github/dependabot.yml write); then \
 						git add .github/dependabot.yml; bullets=$$(printf '%s\n%s' "$$bullets" "$$b" | sed '/^$$/d'); \
 					fi; \
-					flow_branch_finish "$$branch" "chore: retire $$stable" "$$bullets" "$$stable is no longer maintained. Without it in .tx/backport the Nextcloud Transifex bot stops syncing it, and without its entries in .github/dependabot.yml Dependabot stops opening version updates against it." 1; \
+					flow_branch_finish "$$branch" "chore: retire $$stable" "$$bullets" "$$stable is no longer maintained. Without it in .tx/backport the Nextcloud Transifex bot stops syncing it, and without its entries in .github/dependabot.yml Dependabot stops opening version updates against it." 1 && retired=1; \
 				fi; \
 				git switch --quiet main || exit 1; \
+				[ -z "$$retired" ] || pr_drop "ncmake/chore/retire-$$stable"; \
 			fi; \
 		fi; \
 		if git rev-parse --verify --quiet "refs/remotes/origin/$$stable" >/dev/null; then \
@@ -1718,6 +1722,7 @@ stable-branch: check-app
 				fi; \
 				branch=$$stable; \
 				git switch --quiet "$$home" || exit 1; \
+				[ "$$tx" != opened ] || pr_drop "ncmake/l10n/tx-backport-$$stable"; \
 			fi; \
 		fi; \
 	fi; \
@@ -1744,6 +1749,7 @@ stable-branch: check-app
 				fi; \
 				branch=$$stable; \
 				git switch --quiet "$$home" || exit 1; \
+				[ "$$dep" != opened ] || pr_drop "ncmake/deps/dependabot-$$stable"; \
 			fi;; \
 		esac; \
 	fi; \
@@ -2777,6 +2783,10 @@ absent file makes the bot sync the server's stable* names. Then it offers to
 delete the branch on origin, unless the branch has commits after its newest
 tag. Its tags and releases stay, and make stable-branch opens it again from that
 tag.
+
+Once one of the pull requests above is open, its local branch is deleted:
+origin keeps it, and git switch <its name> fetches it again for a change. After
+the merge, git pull on main is all that is left.
 
 Examples:
   make stable-branch              open a branch, or the steps on main for one
