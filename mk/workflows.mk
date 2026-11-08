@@ -392,8 +392,8 @@ wf_run = mkdir -p "$(cache_dir)" && printf '%s\n' "$$wf_tool" > "$(cache_dir)/nc
 # what the workflow updater relies on, so it stays flag-free. COMMIT=1 puts the
 # refresh on its own branch and commits it (like 'make version') without pushing;
 # PR=1 additionally pushes and opens the pull request via gh, and implies COMMIT=1.
-# Both run on main or on a stable* maintenance branch: a line keeps the workflows
-# of the tag it started from, and the updater only ever runs on the default branch.
+# Both run on main or on a stable* maintenance branch: a line keeps the set of
+# workflows of the tag it started from, and the updater refreshes them there too.
 # COMMIT, PR, BODY and the branch flow they use are defined in the core.
 
 # Pull-request body (the commit itself stays lean: title + bullets): the bullets, a
@@ -551,10 +551,10 @@ commits the result on branch ncmake/ci/workflow-update (on stableX.Y:
 ncmake/ci/workflow-update-stableX.Y, one bullet per updated workflow) and prints
 the push command without pushing. PR=1 implies COMMIT=1 and additionally pushes
 and opens the pull request via gh, against the branch it started from - the same
-thing the updater does for you on the default branch. A stable* branch is never
-reached by the updater, so run it there by hand. The pull request body is built
-as for workflows-install, BODY=<path> included. See
-https://github.com/ernolf/ncmake/wiki/Workflows.
+thing the updater does for you on the default branch and on every stable* branch
+whose workflows ncmake manages, there from ncmake/ci/workflow-update-<branch>.
+The pull request body is built as for workflows-install, BODY=<path> included.
+See https://github.com/ernolf/ncmake/wiki/Workflows.
 
   make workflows-update COMMIT=1
   make workflows-update PR=1
