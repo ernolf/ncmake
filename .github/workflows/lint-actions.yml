@@ -8,12 +8,25 @@
 # folder an app keeps its own workflows in, or next to a <name>.properties.json:
 # the layout of a workflow source, such as ernolf/ncmake-workflows or
 # nextcloud/.github, whose templates run in other repositories and are checked
-# where they are written. actionlint lints the run: scripts with shellcheck,
-# which the runner image ships, and reads .github/actionlint.yaml when the
-# repository has one.
+# where they are written.
 #
-# A repository without workflows passes instead of failing, so the workflow
-# can be installed anywhere without becoming a permanent red cross.
+# The job runs make lint-actions of the ncmake lint module, the same target a
+# maintainer runs locally, so both give the same result: the files it collects,
+# the actionlint and shellcheck versions and the rule that fails live in that
+# module only. actionlint reads .github/actionlint.yaml when the repository has
+# one; without one the target declares the self-hosted runners of Nextcloud,
+# ubuntu-latest and ubuntu-latest, as known runner labels, as
+# data/github-runners.json of ncmake names them. The disable= and enable= of the
+# repository's .shellcheckrc are handed on to the shellcheck actionlint runs over
+# the run: scripts. The ncmake bootstrap is fetched into the runner's temp
+# directory, so the repository needs none of its own. Only the step that fetches
+# the ncmake modules sees a token.
+#
+# Every error of actionlint fails the job, and so does a shellcheck finding of
+# severity error or warning in a run: script; one of severity info or style is
+# shown and passes. A repository without workflows passes instead of failing, so
+# the workflow can be installed anywhere without becoming a permanent red cross.
+# The report goes to the job summary.
 
 name: Lint actions
 
@@ -30,7 +43,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  ACTIONLINT_VERSION: 1.7.12
+  NCMAKE_BOOTSTRAP: https://raw.githubusercontent.com/ernolf/ncmake/main/bootstrap/GNUmakefile
 
 jobs:
   actionlint:
@@ -42,39 +55,30 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Collect workflows
-        id: collect
+      - name: Fetch ncmake
+        env:
+          # make dev-init lists the ncmake modules through the GitHub API, which
+          # answers an anonymous call from a shared hosted runner with 403 every
+          # so often.
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
-          list="$RUNNER_TEMP/workflow-files"
-          : > "$list"
-          # Tracked files only: a checkout carries nothing else worth linting,
-          # and git handles names with spaces through the NUL separator.
-          while IFS= read -r -d '' f; do
-            test -f "$f" || continue
-            case "$f" in
-              .github/workflows/* | .ncmake/workflows/*)
-                printf '%s\n' "$f" >> "$list"
-                continue
-                ;;
-            esac
-            if test -f "${f%.*}.properties.json"; then
-              printf '%s\n' "$f" >> "$list"
-            fi
-          done < <(git ls-files -z -- '*.yml' '*.yaml')
-          count="$(wc -l < "$list")"
-          echo "count=$count" >> "$GITHUB_OUTPUT"
-          echo "Workflows found: $count"
-          cat "$list"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/ncmake-bootstrap.mk" "$NCMAKE_BOOTSTRAP"
+          make -f "$RUNNER_TEMP/ncmake-bootstrap.mk" --no-print-directory dev-init
 
-      - name: Install actionlint
-        if: steps.collect.outputs.count != '0'
-        run: go install "github.com/rhysd/actionlint/cmd/actionlint@v$ACTIONLINT_VERSION"
-
-      - name: Run actionlint
-        if: steps.collect.outputs.count != '0'
+      - name: Run make lint-actions
         run: |
-          xargs -r -d '\n' -a "$RUNNER_TEMP/workflow-files" "$(go env GOPATH)/bin/actionlint" -color
-
-      - name: Nothing to check
-        if: steps.collect.outputs.count == '0'
-        run: echo "No workflows in this repository; nothing to check."
+          out="$RUNNER_TEMP/lint-actions.txt"
+          rc=0
+          make -f "$RUNNER_TEMP/ncmake-bootstrap.mk" --no-print-directory lint-actions > "$out" || rc=$?
+          cat "$out"
+          {
+            echo '## lint-actions'
+            echo
+            echo '```text'
+            cat "$out"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if test "$rc" != 0; then
+            echo "::error::make lint-actions failed: an error of actionlint or a shellcheck finding of severity error or warning, or a run that could not be carried out."
+            exit 1
+          fi
