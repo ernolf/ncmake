@@ -15,8 +15,8 @@
     "source": "ncmake"
   },
   "lint-actions.yml": {
-    "hash": "9152b486f175cf5f3e19891cfa3a5254912d31656d220b83c79480c81c040b75",
-    "sha": "eda5467654da5e1f292561afb7c07a0b280e58d2",
+    "hash": "b5032df8fe11d52603439b8632cdaa11f3198a61ebc7d35153ba8162afa070d6",
+    "sha": "35a6f6a2b3e3e5abba959dba34e50a06066ae893",
     "source": "ncmake"
   },
   "lint-markdown.yml": {
@@ -45,8 +45,8 @@
     "source": "nextcloud"
   },
   "workflow-updater.yml": {
-    "hash": "48a7857aa06325d538b7fe62932e26b49fd0e6d9ba649a6951899b1072129363",
-    "sha": "e419581452bca16e3b0004e563f2817406f80984",
+    "hash": "8e7c059695dac9e804c58392566f2078749055f11c5d7eb740532691701febaa",
+    "sha": "f8195a3ea54c3e967c18a903da86931734f99451",
     "source": "ncmake"
   }
 }
