@@ -183,7 +183,8 @@ php_ignored_ext = php -r "\$$r = []; foreach ([\"composer.json\", \"composer.loc
 # --frozen-lockfile.
 node_lock      = $(notdir $(firstword $(wildcard $(addprefix $(node_root)/,npm-shrinkwrap.json package-lock.json pnpm-lock.yaml yarn.lock))))
 node_pm        = $(if $(filter pnpm-lock.yaml,$(node_lock)),pnpm,$(if $(filter yarn.lock,$(node_lock)),yarn,npm))
-yarn_frozen    = $(if $(shell grep -q '^__metadata:' $(node_root)/yarn.lock 2>/dev/null && echo 1),--immutable,--frozen-lockfile)
+yarn_berry     = $(if $(filter yarn,$(node_pm)),$(shell grep -q '^__metadata:' $(node_root)/yarn.lock 2>/dev/null && echo 1))
+yarn_frozen    = $(if $(yarn_berry),--immutable,--frozen-lockfile)
 node_install   = $(if $(filter pnpm,$(node_pm)),pnpm install --frozen-lockfile,$(if $(filter yarn,$(node_pm)),yarn install $(yarn_frozen),$(if $(node_lock),npm ci,npm install)))
 node_build_cmd ?= $(if $(need_npm),$(node_cd)$(node_install) && $(node_pm) run build)
 # engines.npm in package.json names the npm the app builds with, as engines.node
@@ -207,8 +208,12 @@ node_npm_pick  = r="$(node_npm_range)" s=$$(npm root -g)/npm/node_modules/semver
 # that calls pnpm or yarn itself finds them too; corepack enable does not create
 # that directory, and where the image ships corepack nothing else does. AUTO_PIN=0
 # keeps corepack from writing a packageManager field into the app's package.json.
+# Yarn 2 and later read YARN_CACHE_FOLDER, the Yarn 1 cache of node_cache_opts, as
+# their cacheFolder: Yarn 2 and 3 would move the project cache out of the checkout
+# and point .pnp.cjs there. For them it is unset; they download to the global
+# folder.
 node_pm_prefix = /tmp/.node-pm
-node_pm_setup  = $(if $(filter pnpm yarn,$(node_pm)),export PATH=$(node_pm_prefix)/bin:$$PATH COREPACK_ENABLE_AUTO_PIN=0 COREPACK_ENABLE_DOWNLOAD_PROMPT=0; mkdir -p $(node_pm_prefix)/bin && { command -v corepack >/dev/null || npm install --global --prefix $(node_pm_prefix) corepack; } && corepack enable --install-directory $(node_pm_prefix)/bin $(node_pm) && )
+node_pm_setup  = $(if $(filter pnpm yarn,$(node_pm)),export PATH=$(node_pm_prefix)/bin:$$PATH COREPACK_ENABLE_AUTO_PIN=0 COREPACK_ENABLE_DOWNLOAD_PROMPT=0; $(if $(yarn_berry),unset YARN_CACHE_FOLDER; )mkdir -p $(node_pm_prefix)/bin && { command -v corepack >/dev/null || npm install --global --prefix $(node_pm_prefix) corepack; } && corepack enable --install-directory $(node_pm_prefix)/bin $(node_pm) && )
 
 # == Container runtime (used by 'make version' and 'make build') ==
 # composer/npm run in throwaway containers, so the host needs no PHP/Node toolchain.
@@ -646,19 +651,26 @@ node_fetch = sh -c ' \
 node_tool_pick = { ncmake_ti='$(node_tool_image)'; $(call container_prep,$(node_tool_image)); \
 	$(container_cli) image inspect "$$ncmake_ti" >/dev/null 2>&1 || { echo "==> $(node_tool_image) is not available; running on $(node_tool_fallback) instead, which carries no Yarn 1" >&2; \
 	ncmake_ti='$(node_tool_fallback)'; $(call container_prep,$(node_tool_fallback)); }; }
-# npm and corepack keep what they download below the ncmake cache, which every Node
-# container mounts read-write: the tarballs of a lockfile and the package managers
-# corepack fetches are downloaded once per host instead of once per run, and make
-# build, build-verify and the next app share them. The cache holds downloads, not
-# node_modules, and npm ci checks every tarball against the integrity the lockfile
-# records, from the cache as from the registry. The directories are created before
-# the mount, so they belong to the caller and not to a runtime that creates a
-# missing one as root. npm never prunes its cache; make cache-clean removes it.
-node_cache_dirs = "$(ncmake_cache)/npm" "$(ncmake_cache)/corepack"
+# npm, corepack and yarn keep what they download below the ncmake cache, which every
+# Node container mounts read-write: the tarballs of a lockfile and the package
+# managers corepack fetches are downloaded once per host instead of once per run,
+# and make build, build-verify and the next app share them. The cache holds
+# downloads, not node_modules, and npm ci and yarn check every tarball against the
+# integrity the lockfile records, from the cache as from the registry. Yarn 1, from
+# corepack or the one the image carries for a script that calls yarn, otherwise
+# writes its cache into the writable layer of the container, which --rm discards.
+# YARN_GLOBAL_FOLDER is read by Yarn 2 and later alone, for their global cache;
+# node_pm_setup keeps them from YARN_CACHE_FOLDER. The directories are created
+# before the mount, so they belong to the caller and not to a runtime that creates
+# a missing one as root. Neither npm nor Yarn 1 prunes its cache; make cache-clean
+# removes it.
+node_cache_dirs = "$(ncmake_cache)/npm" "$(ncmake_cache)/corepack" "$(ncmake_cache)/yarn"
 node_cache_opts = -v "$(ncmake_cache)/npm":/ncmake-cache/npm -v "$(ncmake_cache)/corepack":/ncmake-cache/corepack \
-	-e npm_config_cache=/ncmake-cache/npm -e COREPACK_HOME=/ncmake-cache/corepack
+	-v "$(ncmake_cache)/yarn":/ncmake-cache/yarn \
+	-e npm_config_cache=/ncmake-cache/npm -e COREPACK_HOME=/ncmake-cache/corepack \
+	-e YARN_CACHE_FOLDER=/ncmake-cache/yarn -e YARN_GLOBAL_FOLDER=/ncmake-cache/yarn/berry
 # $(call node_in,<image>,<line>,<run options>) starts a container of the image, with
-# the npm and corepack cache mounted; one of node_tool_image with the Node line
+# the npm, corepack and yarn cache mounted; one of node_tool_image with the Node line
 # mounted at /usr/local.
 node_in = mkdir -p $(node_cache_dirs) && $(if $(filter $(node_tool_image),$(1)),ncmake_nl=$$($(node_fetch) '$(2)' '$(node_dir)') && $(node_tool_pick) && $(container) -v "$$ncmake_nl":/usr/local:ro $(node_cache_opts) $(3) "$$ncmake_ti",$(call container_run,$(1),$(node_cache_opts) $(3)))
 
@@ -2362,7 +2374,7 @@ cache-clean:
 		php-Containerfile) add ncmake "$$f" "the Containerfile of the PHP build image, from ncmake-images" "$$f" $$(etag "$$f") ;; \
 		lib-*) add ncmake "$$f/" "the analyser libraries of ref $${f#lib-}" "$$f" ;; \
 		*.mjs) add leftover "$$f" "an analyser library where an older ncmake kept it" "$$f" $$(etag "$$f") ;; \
-		npm|corepack) add ncmake "$$f/" "the download cache of $$f" "$$f" ;; \
+		npm|corepack|yarn) add ncmake "$$f/" "the download cache of $$f" "$$f" ;; \
 		last-run) if [ -n "$$ids" ]; then st="in use"; else st=ncmake; fi; add "$$st" "$$f" "the last container run, read by the idle removal of the images" "$$f" ;; \
 		node|tools) [ -d "$$f" ] || add foreign "$$f" "" "$$f" ;; \
 		*) add foreign "$$f" "" "$$f" ;; \
@@ -2869,8 +2881,8 @@ Lists what the per-machine ncmake cache holds ($(ncmake_cache)),
 numbered, with the size, the last change and the status of each entry:
   ncmake    the core, the developer modules, the analyser libraries and the
             registry list of a ref, a Node.js line, the release index of
-            nodejs.org, the download caches npm/ and corepack/, a tool the
-            lint module or secrets-audit fetched into tools/, last-run
+            nodejs.org, the download caches npm/, corepack/ and yarn/, a tool
+            the lint module or secrets-audit fetched into tools/, last-run
   leftover  what an interrupted download left, or a file where an older
             ncmake kept it
   in use    mounted by a running ncmake container; last-run while one runs
@@ -3042,7 +3054,7 @@ endif
 ncmake_lib_need = for f in $(1); do $(ncmake_lib_src); test -s "$(ncmake_lib_dir)/$$f" || { echo "ERROR: could not fetch $(ncmake_raw)/$$s - network?" >&2; exit 1; }; done
 
 # The library directory is mounted at /ncmake, read-only, alongside the app at
-# /app, and gets the npm and corepack cache every other npm call here gets: an
+# /app, and gets the npm, corepack and yarn cache every other npm call here gets: an
 # analyser that builds runs npm, and the container user has no home of its own.
 # Every analyser runs on lib_node_image with the newest LTS line, so an old
 # engines.node cannot keep it from loading. One that builds the app (ncmake_lib_run)
