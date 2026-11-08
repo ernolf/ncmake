@@ -7,10 +7,10 @@
 # finds against each other: the version in appinfo/info.xml against the ones in
 # package.json and composer.json, the PHP floor in info.xml against composer.json,
 # the Node version in package.json against .nvmrc and against the installed
-# workflows. To that it adds what a release needs and a checkout can be missing -
-# the link from a published version back to its source, a server range that names
-# a server that exists, a lockfile, a linter that a script calls but no
-# configuration backs.
+# workflows, the scripts of package.json against the workflows that run them. To
+# that it adds what a release needs and a checkout can be missing - the link from
+# a published version back to its source, a server range that names a server that
+# exists, a lockfile, a linter that a script calls but no configuration backs.
 # Metadata only: it builds nothing and installs nothing. From the network make reads
 # the server majors and the Node schedule, and the analyser asks whether the links
 # of info.xml answer, which NO_NETWORK=1 leaves out.
@@ -83,7 +83,7 @@
 # What each analyser needs next to it. bundler-config.mjs reads the bundler and its
 # config, report-text.mjs prints; the analyser itself decides what is worth saying.
 # data.mjs reads the generated data of the ncmake repo, the data/ entries.
-consistency_libs = consistency-audit.mjs bundler-config.mjs data.mjs lockfile.mjs report-text.mjs data/appstore.json data/nextcloud-server.json data/node-schedule.json data/tool-configs.json data/spdx-licenses.json
+consistency_libs = consistency-audit.mjs bundler-config.mjs data.mjs lockfile.mjs report-text.mjs data/appstore.json data/nextcloud-server.json data/node-schedule.json data/tool-configs.json data/spdx-licenses.json data/workflow-scripts.json
 verify_libs      = build-verify.mjs bundler-config.mjs lockfile.mjs report-text.mjs scratch-build.mjs
 changelog_libs   = changelog-lint.mjs data.mjs report-text.mjs data/appstore.json
 compat_libs      = php-compat.mjs report-text.mjs
@@ -480,6 +480,17 @@ linter that a script calls while no configuration for it is in the tree; a
 directory the code reads at run time, through __DIR__ in PHP or linkTo in the
 frontend, that the shipped file set leaves out. Each of those is reported once,
 with the reason it matters, and never as a score.
+
+The scripts of package.json are held against the workflows under
+.github/workflows/. A workflow that runs a script package.json does not declare
+fails on every run, and one that installs with another package manager than the
+one of the lockfile does not run on the tree the lockfile pins; both are [!]. A
+script that a workflow template of make workflows-install runs, while no
+installed workflow does, is named [i] with the template and the command that
+installs it; which template runs which script is data/workflow-scripts.json of
+ncmake. A script that rebuilds on every change or makes a development build
+under another name than watch or dev, the names of the Developer Manual, is
+named [i] as well.
 
 The links of the App Store listing in info.xml, <website>, <bugs>,
 <repository>, the <documentation> links, <screenshot> and <donation>, are asked
