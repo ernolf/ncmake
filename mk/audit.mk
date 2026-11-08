@@ -37,7 +37,9 @@
 # dependency resolved on the floor can require a PHP below the ceiling, and code
 # that parses on one PHP can fail on the next; neither shows before a server runs
 # it. The runs use the core's build image, one make per minor, and leave their
-# output under build/php-compat, which the analyser then reads.
+# output under build/php-compat, which the analyser then reads. It also resolves
+# every require and include with a fixed path against the files that ship: one
+# that names a file outside them fails on every server.
 #
 # deps-audit asks the package managers' own audits whether a dependency that
 # ships has a published vulnerability: composer audit over composer.lock in the
@@ -170,6 +172,10 @@ compat_php   = php -n -d error_reporting=-1 -d display_errors=stderr -d log_erro
 compat_lint  = many=$$(php -n -r "echo PHP_VERSION_ID >= 80300 ? 1 : 0;"); find appinfo lib templates vendor -type f -name "*.php" -print0 2>/dev/null | LINT_MANY=$$many xargs -0 -n 64 -P "$$(nproc)" sh -c "if [ \"\$$LINT_MANY\" = 1 ]; then $(compat_php) -l \"\$$@\"; else for f; do $(compat_php) -l \"\$$f\"; done; fi 2>&1; exit 0" php-lint | { grep -v "^No syntax errors detected in " || :; }
 # The version is read without the ini files too: the CLI prints the startup warning
 # of an extension that does not load to stdout, which would end up in the file.
+# The files a release ships, as make stage takes them from the checkout, listed
+# on the host by a dry run of the same rsync: the analyser resolves the includes
+# against them.
+compat_shipped = rsync -an --relative --out-format='%n' $(stage_excludes) $(addprefix ./,$(keep_existing)) "$(compat_dir)/stage/" >$(compat_dir)/shipped
 compat_run   = out=$(compat_dir)/$(php_version); php -n -r "echo PHP_VERSION;" >"$$out/version"; if [ -f vendor/composer/installed.json ] || [ -f composer.lock ]; then composer check-platform-reqs --no-dev --format=json >"$$out/platform.json" 2>"$$out/platform.err"; echo $$? >"$$out/platform.rc"; fi; $(compat_lint) >"$$out/lint.txt"
 
 # deps-audit runs composer audit where make build resolves the dependencies, in
@@ -388,6 +394,7 @@ php-compat: check-app
 	echo "==> php-compat on PHP" $$minors "(RUNTIME=$(RUNTIME))" >&2; \
 	rm -rf $(compat_dir) && mkdir -p $(compat_dir) || exit 1; \
 	printf 'floor=%s\nceiling=%s\nserver=%s\ndeclared=%s\nmaster=%s\nnextcloud=%s\n' "$$floor" "$$ceiling" "$$server" "$$declared" "$$master" '$(nc_max)' >$(compat_dir)/range; \
+	$(compat_shipped) || exit 1; \
 	for m in $$minors; do \
 		echo "==> PHP $$m" >&2; mkdir -p $(compat_dir)/$$m; \
 		$(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory php-compat-run php_version=$$m php_image=$(compat_image):$$m PHP=min || echo "$$?" >$(compat_dir)/$$m/failed; \
@@ -546,14 +553,20 @@ with the extensions a Nextcloud server offers, and does two things there:
       whether every PHP file that ships parses on this PHP, and what it reports
       as deprecated there. The lint loads no extension, since a parse calls
       none, and from PHP 8.3 on lints 64 files per process.
+Beside the runs, every require and include of a shipped PHP file whose path
+starts at __DIR__ or dirname(__FILE__) has to name a file that ships, as make
+stage takes the files from the checkout. A path that leaves the app, or one
+built at run time, is counted, not checked.
 Findings are marked [!] worth changing, [i] worth knowing, [ok] nothing found:
 [!] for a package that refuses one of the PHP versions, a file that does not
-parse, a <php max-version> below the server's ceiling, which keeps the app
+parse, a require or include of a file that does not ship, a
+<php max-version> below the server's ceiling, which keeps the app
 off servers that run a newer PHP, and a <php max-version> above the ceiling of
 master, a PHP no server runs yet: once one allows it, the server enables the
 app on it although nobody has checked the app there; [i] for a deprecation,
-an extension the build image lacks, and a file of a dev package, which make
-build does not ship.
+an extension the build image lacks, a file of a dev package, which make build
+does not ship, an include after a check that the file exists, one inside a
+dependency, and one of vendor/ before make build installed it.
 
 The check reads what is installed: run make build first, so vendor/ holds what
 ships. Without vendor/, composer reads composer.lock and only the app's own files
