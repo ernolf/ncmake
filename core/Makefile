@@ -1544,16 +1544,17 @@ export dependabot_tool
 # created again: only the steps on main are offered, and main stays checked out. For an app
 # with .tx/config that includes the Transifex sync, which reaches app release lines only
 # through .tx/backport on main: after a prompt of its own the new branch goes into that file,
-# and .tx/backport into the REUSE.toml annotation of .tx/config, through the branch flow and a
-# pull request against main; the new branch is checked out again afterwards. For an app with
+# and .tx/backport into the REUSE.toml annotation of .tx/config. For an app with
 # .github/dependabot.yml the same holds for Dependabot, which checks the default branch only
 # unless an entry names a target-branch: after a prompt of its own dependabot_tool adds the
-# entries for the branch, through a pull request of its own. Once the pull request of such a
-# step is open, its local branch is deleted, since origin keeps it and git switch fetches it
-# again for a change. The name of the new branch is kept in stable and the
-# tag it starts from in from_tag, because the flow functions overwrite branch and base. Stale
-# remote branches are pruned in a fetch of their own: --prune together with --tags would also
-# delete local tags that origin does not have.
+# entries for the branch. The steps answered with yes go into one commit on
+# ncmake/chore/add-<branch> and one pull request against main, so a rule that requires an
+# up-to-date branch does not hold back a second one; the new branch is checked out again
+# afterwards. Once the pull request is open, its local branch is deleted, since origin keeps it
+# and git switch fetches it again for a change. The name of the new branch is kept in stable
+# and the tag it starts from in from_tag, because the flow functions overwrite branch and base.
+# Stale remote branches are pruned in a fetch of their own: --prune together with --tags would
+# also delete local tags that origin does not have.
 # RETIRE=1 undoes the steps on main for a branch that is no longer maintained, through one pull
 # request: the branch leaves .tx/backport, which stays even when it is empty, because the bot
 # falls back to the server's stable* names only when the file is absent, and its entries leave
@@ -1692,66 +1693,63 @@ stable-branch: check-app
 		net_retry git push -u origin "$$branch" || exit 1; \
 	fi; \
 	home=$$([ -n "$$exists" ] && echo main || echo "$$branch"); \
-	tx=; reuse_note=; \
+	stable=$$branch; tx=; dep=; reuse_note=; \
 	if git cat-file -e main:.tx/config 2>/dev/null; then \
-		if git show main:.tx/backport 2>/dev/null | tr -s ' \t' '\n' | grep -qxF "$$branch"; then \
+		if git show main:.tx/backport 2>/dev/null | tr -s ' \t\r' '\n' | grep -qxF "$$stable"; then \
 			tx=listed; \
 		else \
-			printf 'Add %s to .tx/backport on main through a pull request? [y/N] ' "$$branch"; read yn; \
-			tx=declined; \
-			if [ "$$yn" = y ] || [ "$$yn" = Y ]; then \
-				stable=$$branch; tx=failed; \
-				git switch --quiet main || exit 1; \
-				eval "$$branch_flow"; \
-				if flow_branch_start "ncmake/l10n/tx-backport-$$stable"; then \
-					mkdir -p .tx "$(cache_dir)"; \
-					if [ -s .tx/backport ] && [ -n "$$(tail -c 1 .tx/backport)" ]; then echo >> .tx/backport; fi; \
-					echo "$$stable" >> .tx/backport; \
-					git add .tx/backport; \
-					bullets="- Add $$stable to .tx/backport"; \
-					if [ -f REUSE.toml ] && ! grep -qF '.tx/backport' REUSE.toml; then \
-						if grep -qF '".tx/config"' REUSE.toml; then \
-							awk 'done || /^[ \t]*#/ || !/"\.tx\/config"/ { print; next } /^[ \t]*path[ \t]*=[ \t]*"\.tx\/config"/ { sub(/"\.tx\/config"/, "[\".tx/backport\", \".tx/config\"]"); print; done = 1; next } { sub(/"\.tx\/config"/, "\".tx/backport\", \".tx/config\""); print; done = 1 }' \
-								REUSE.toml > "$(cache_dir)/REUSE.toml" && mv "$(cache_dir)/REUSE.toml" REUSE.toml && git add REUSE.toml; \
-							bullets=$$(printf '%s\n%s' "$$bullets" "- Cover .tx/backport in REUSE.toml together with .tx/config"); \
-						else \
-							reuse_note=1; \
-						fi; \
-					fi; \
-					flow_branch_finish "$$branch" "chore(l10n): add $$stable to .tx/backport" "$$bullets" "The Nextcloud Transifex bot syncs only the branches .tx/backport lists. make stable-branch opened $$stable and adds it here." 1 && tx=opened; \
-				fi; \
-				branch=$$stable; \
-				git switch --quiet "$$home" || exit 1; \
-				[ "$$tx" != opened ] || pr_drop "ncmake/l10n/tx-backport-$$stable"; \
-			fi; \
+			printf 'Add %s to .tx/backport on main through a pull request? [y/N] ' "$$stable"; read yn; \
+			tx=declined; if [ "$$yn" = y ] || [ "$$yn" = Y ]; then tx=failed; fi; \
 		fi; \
 	fi; \
-	dep=; \
 	if git cat-file -e main:.github/dependabot.yml 2>/dev/null; then \
-		stable=$$branch; dep_main add "$$stable" >/dev/null; \
+		dep_main add "$$stable" >/dev/null; \
 		case $$? in \
 		1) dep=unreadable;; \
 		2) dep=listed;; \
 		3) dep=none;; \
 		*) printf 'Add %s to .github/dependabot.yml on main through a pull request? [y/N] ' "$$stable"; read yn; \
-			dep=declined; \
-			if [ "$$yn" = y ] || [ "$$yn" = Y ]; then \
-				dep=failed; \
-				git switch --quiet main || exit 1; \
-				eval "$$branch_flow"; \
-				if flow_branch_start "ncmake/deps/dependabot-$$stable"; then \
-					if bullets=$$(dep_tool add "$$stable" .github/dependabot.yml write); then \
-						git add .github/dependabot.yml; \
-						flow_branch_finish "$$branch" "chore(deps): add $$stable to .github/dependabot.yml" "$$bullets" "Dependabot checks the default branch only, unless an entry names a target-branch. make stable-branch opened $$stable, and these copies of the entries check its manifests and open their pull requests against it: patch updates only for composer, no major updates otherwise, as on the stable branches of Nextcloud. Security updates always run on the default branch." 1 && dep=opened; \
+			dep=declined; if [ "$$yn" = y ] || [ "$$yn" = Y ]; then dep=failed; fi;; \
+		esac; \
+	fi; \
+	if [ "$$tx" = failed ] || [ "$$dep" = failed ]; then \
+		git switch --quiet main || exit 1; \
+		eval "$$branch_flow"; \
+		opened=; \
+		if flow_branch_start "ncmake/chore/add-$$stable"; then \
+			todo=; bullets=; tx_in=; dep_in=; text="make stable-branch opened $$stable."; \
+			if [ "$$tx" = failed ]; then \
+				mkdir -p .tx "$(cache_dir)"; \
+				if [ -s .tx/backport ] && [ -n "$$(tail -c 1 .tx/backport)" ]; then echo >> .tx/backport; fi; \
+				echo "$$stable" >> .tx/backport; \
+				git add .tx/backport; \
+				bullets="- Add $$stable to .tx/backport"; \
+				if [ -f REUSE.toml ] && ! grep -qF '.tx/backport' REUSE.toml; then \
+					if grep -qF '".tx/config"' REUSE.toml; then \
+						awk 'done || /^[ \t]*#/ || !/"\.tx\/config"/ { print; next } /^[ \t]*path[ \t]*=[ \t]*"\.tx\/config"/ { sub(/"\.tx\/config"/, "[\".tx/backport\", \".tx/config\"]"); print; done = 1; next } { sub(/"\.tx\/config"/, "\".tx/backport\", \".tx/config\""); print; done = 1 }' \
+							REUSE.toml > "$(cache_dir)/REUSE.toml" && mv "$(cache_dir)/REUSE.toml" REUSE.toml && git add REUSE.toml; \
+						bullets=$$(printf '%s\n%s' "$$bullets" "- Cover .tx/backport in REUSE.toml together with .tx/config"); \
 					else \
-						flow_branch_abort "$$branch"; \
+						reuse_note=1; \
 					fi; \
 				fi; \
-				branch=$$stable; \
-				git switch --quiet "$$home" || exit 1; \
-				[ "$$dep" != opened ] || pr_drop "ncmake/deps/dependabot-$$stable"; \
-			fi;; \
-		esac; \
+				todo=.tx/backport; tx_in=1; \
+				text="$$text The Nextcloud Transifex bot syncs only the branches .tx/backport lists."; \
+			fi; \
+			if [ "$$dep" = failed ] && b=$$(dep_tool add "$$stable" .github/dependabot.yml write); then \
+				git add .github/dependabot.yml; bullets=$$(printf '%s\n%s' "$$bullets" "$$b" | sed '/^$$/d'); \
+				todo="$${todo:+$$todo and }.github/dependabot.yml"; dep_in=1; \
+				text="$$text Dependabot checks the default branch only, unless an entry names a target-branch: these copies of the entries check the manifests of $$stable and open their pull requests against it, with patch updates only for composer and no major updates otherwise, as on the stable branches of Nextcloud. Security updates always run on the default branch."; \
+			fi; \
+			if [ -z "$$todo" ]; then \
+				flow_branch_abort "$$branch"; \
+			elif flow_branch_finish "$$branch" "chore: add $$stable to $$todo" "$$bullets" "$$text" 1; then \
+				opened=1; [ -z "$$tx_in" ] || tx=opened; [ -z "$$dep_in" ] || dep=opened; \
+			fi; \
+		fi; \
+		branch=$$stable; \
+		git switch --quiet "$$home" || exit 1; \
+		[ -z "$$opened" ] || pr_drop "ncmake/chore/add-$$stable"; \
 	fi; \
 	if [ -z "$$exists" ]; then \
 		echo "==> $$branch is on origin and checked out. Next:"; \
@@ -2759,21 +2757,23 @@ workflows-install on the branch).
 For an app with .tx/config it then offers the Transifex sync: the Nextcloud
 bot syncs only the branches .tx/backport on main lists (one per line, replacing
 the server's stable* names). On yes it adds the branch to that file, and
-.tx/backport to the REUSE.toml annotation of .tx/config, on the branch
-ncmake/l10n/tx-backport-<branch> off main, opens the pull request against
-main through gh and checks the new branch out again. The bot also needs write
-access plus a bypass on the rule that protects the branch, because it pushes
-its commits directly; the next steps name both.
+.tx/backport to the REUSE.toml annotation of .tx/config. The bot also needs
+write access plus a bypass on the rule that protects the branch, because it
+pushes its commits directly; the next steps name both.
 
 For an app with .github/dependabot.yml it then offers the same for Dependabot,
 which checks the default branch only unless an entry names a target-branch. On
-yes every entry without one gets a copy for the branch, on
-ncmake/deps/dependabot-<branch> off main and through a pull request against
-main: same schedule, groups and options, plus an ignore rule for patch updates
-only for composer and no major updates for the other ecosystems, as on the
-stable branches of Nextcloud. github-actions is not copied, and an entry that
-has a copy for the branch already is skipped. Security updates always run on
-main and reach the branch as backports.
+yes every entry without one gets a copy for the branch: same schedule, groups
+and options, plus an ignore rule for patch updates only for composer and no
+major updates for the other ecosystems, as on the stable branches of Nextcloud.
+github-actions is not copied, and an entry that has a copy for the branch
+already is skipped. Security updates always run on main and reach the branch
+as backports.
+
+The steps answered with yes go into one commit on ncmake/chore/add-<branch> off
+main and one pull request against main, opened through gh, so a rule that
+requires an up-to-date branch does not hold back a second one. The new branch
+is checked out again afterwards.
 
 RETIRE=1 retires a branch that is no longer maintained. It prompts for the
 branch and removes it from .tx/backport and its entries from
