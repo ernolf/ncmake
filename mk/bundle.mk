@@ -138,7 +138,8 @@ with your own numbers instead of a general claim about bundlers.
 
 What it names is kept to what the app itself can change: which toolchain the
 checkout is built with, read from the config files and the declared packages
-rather than from anyone's opinion of them; whether the build emits source maps,
+and the versions the lock file resolves them to, rather than from anyone's
+opinion of them; whether the build emits source maps,
 without which nobody can say what the bundle consists of; a page that arrives as
 one chunk, which only a dynamic import in the source splits, counted with webpack
 and rspack together with what the page's runtime loads later; every package the
