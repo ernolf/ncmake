@@ -30,7 +30,7 @@ The stub also works in a repository that is no Nextcloud app. Without `appinfo/i
 
 Follow these before proposing any command. They are the mistakes that cost the most time.
 
-1. **`make build` is the complete build.** It already runs `composer install --no-dev --prefer-dist --no-progress`, with the app's own `post-install-cmd`, when `composer.json` declares real runtime requirements (anything besides `php`, `ext-*` and `bamarni/composer-bin-plugin`) or the app has `composer/autoload.php` next to a `composer.json`, and `npm ci && npm run build` when `package.json` has a `scripts.build` (with `pnpm-lock.yaml` or `yarn.lock` the same through pnpm or yarn via corepack; without any lock file `npm install`, and the build says it is not reproducible). Never propose `make npm ARGS=ci` or `make npm ARGS="run build"` as a build step, and never propose them as a preparation for `make build`.
+1. **`make build` is the complete build.** It already runs `composer install --no-dev --prefer-dist --no-progress`, with the app's own `post-install-cmd`, when `composer.json` declares real runtime requirements (anything besides `php`, `ext-*` and `bamarni/composer-bin-plugin`) or the app has `composer/autoload.php` next to a `composer.json`, or a shipped PHP file requires `vendor/autoload.php`, and `npm ci && npm run build` when `package.json` has a `scripts.build` (with `pnpm-lock.yaml` or `yarn.lock` the same through pnpm or yarn via corepack; without any lock file `npm install`, and the build says it is not reproducible). Without a `package.json` at the root, a frontend in `js/` with `js/package.json` builds in `js/`, from its own lock file. Never propose `make npm ARGS=ci` or `make npm ARGS="run build"` as a build step, and never propose them as a preparation for `make build`.
 2. **`make help-<target>` is the authoritative reference.** Every target has extended help with its exact options and examples. Run it instead of guessing an option name.
 3. **Do not add build configuration.** No wrapper scripts, no extra make targets, no CI build steps that duplicate `make build`. A genuine deviation belongs in `ncmake.mk` (plain make syntax, one variable per line).
 4. **Never edit the version by hand** in `info.xml`, `composer.json` or `package.json`. `make version` does the bump, the validation and the lockfile sync.
@@ -47,9 +47,9 @@ Follow these before proposing any command. They are the mistakes that cost the m
 | Source | What it decides |
 | --- | --- |
 | `appinfo/info.xml` | `<id>` (app id, tarball and stage directory name), `<version>`, `<dependencies><php min-version>` (the build image, never below the PHP floor of the newest end-of-life Nextcloud major) |
-| `composer.json` | a composer step is needed when `require` holds anything besides `php` and `ext-*`, or when `composer/autoload.php` exists; the version is bumped here too when the key exists |
-| `package.json` | an npm step is needed when `scripts.build` exists; the lock file picks npm, pnpm or yarn; `engines.node` picks the Node line, the newest LTS line it allows that is not end of life; `engines.npm` picks npm where the one that line ships is outside it, the newest release in the range that runs on the line; the version is bumped here too |
-| `.gitignore` | classifies `js/` and `vendor/`: ignored means build output that must be built before shipping, committed means a fresh checkout is already dist ready |
+| `composer.json` | a composer step is needed when `require` holds anything besides `php` and `ext-*`, when `composer/autoload.php` exists, or when a shipped PHP file requires `vendor/autoload.php`; the version is bumped here too when the key exists |
+| `package.json` | the root one, or `js/package.json` when the root has none (a frontend in `js/`, whose npm steps and analysers all run there); an npm step is needed when `scripts.build` exists; the lock file picks npm, pnpm or yarn; `engines.node` picks the Node line, the newest LTS line it allows that is not end of life; `engines.npm` picks npm where the one that line ships is outside it, the newest release in the range that runs on the line; the version is bumped here too |
+| `.gitignore` | classifies `js/` and `vendor/`: ignored means build output that must be built before shipping, committed means a fresh checkout is already dist ready; for a frontend in `js/`, an ignore rule under `js/` other than `node_modules` names its build output |
 | `.nextcloudignore` | optional, rsync exclude syntax, filters within the shipped file set |
 | `.ncmake/certificate.crt` | optional, the committed public certificate that marks the app as signed and pins every verification against it |
 | `ncmake.mk` | optional, overrides single variables (`keep_extra`, `php_build_cmd`, `node_build_cmd`, `web_user`, image names, `gh_key_fprs`, `integrity_certificate`, ...) |
@@ -140,9 +140,9 @@ A release ships an allowlist, never an exclude list, so a stray development file
 * files `CHANGELOG.md CHANGELOG.*.md AUTHORS AUTHORS.md REUSE.toml COPYING COPYING.md LICENSE LICENSE.md`, each with its REUSE sidecar `<file>.license` when it has one
 * plus whatever `keep_extra` in `ncmake.mk` adds (for example `resources`)
 
-Only paths that actually exist are staged. `.nextcloudignore` filters within that set. The result is materialized into `build/stage/<app_id>/` and packed into `build/artifacts/dist/<app_id>-<version>.tar.gz`. `rsync` and `cp` deploy that very same tree, so a test deployment is byte for byte what a release ships.
+Only paths that actually exist are staged. `js/node_modules/` never ships. `.nextcloudignore` filters within that set. The result is materialized into `build/stage/<app_id>/` and packed into `build/artifacts/dist/<app_id>-<version>.tar.gz`. `rsync` and `cp` deploy that very same tree, so a test deployment is byte for byte what a release ships.
 
-`check-build` demands the build outputs only when they are git-ignored. An app that commits its built `js/` stays dist ready straight from a fresh checkout.
+`check-build` demands the build outputs only when they are git-ignored. An app that commits its built `js/` stays dist ready straight from a fresh checkout. For a frontend in `js/`, it demands the ignored build output inside `js/`.
 
 ## Release lifecycle
 

@@ -24,7 +24,7 @@
 # What each analyser needs next to it. built-assets.mjs measures, bundler-config.mjs
 # reads the bundler and its config, report-text.mjs prints; the analyser itself
 # decides what is worth saying.
-report_libs = bundle-report.mjs built-assets.mjs bundler-config.mjs report-text.mjs
+report_libs = bundle-report.mjs built-assets.mjs bundler-config.mjs lockfile.mjs report-text.mjs
 audit_libs  = build-audit.mjs build-defects.json built-assets.mjs bundler-config.mjs lockfile.mjs report-text.mjs scratch-build.mjs
 
 # What the goals on this command line need, handed to the core's analyser library

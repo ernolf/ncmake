@@ -558,8 +558,8 @@ without one the workflow's default applies: ESLint's recommended rules with
 the browser globals, in an app (appinfo/info.xml present) also the globals of
 the Nextcloud server as @nextcloud/eslint-config declares them,
 stylelint-config-standard, html-validate's recommended preset. A repository
-with a package.json lints through its own scripts and passes here, as it
-passes the workflow.
+with a package.json, or with its frontend in js/ and js/package.json there,
+lints through its own scripts and passes here, as it passes the workflow.
 
 The packages, $(call lint_npm_shown,$(lint_web_pkgs)), come from npm, checked against the integrity
 npm records, and are kept in tools/ of the ncmake cache. A configuration of the
