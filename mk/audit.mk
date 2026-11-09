@@ -5,9 +5,10 @@
 #
 # consistency-audit reads the metadata of a checkout and holds the statements it
 # finds against each other: the version in appinfo/info.xml against the ones in
-# package.json and composer.json, the PHP floor in info.xml against composer.json,
-# the Node version in package.json against .nvmrc and against the installed
-# workflows, the scripts of package.json against the workflows that run them. To
+# package.json, package-lock.json and composer.json, the PHP floor in info.xml
+# against composer.json, the Node version in package.json against .nvmrc and
+# against the installed workflows, the scripts of package.json against the
+# workflows that run them. To
 # that it adds what a release needs and a checkout can be missing - the link from
 # a published version back to its source, a server range that names a server that
 # exists, a lockfile, a linter that a script calls but no configuration backs.
@@ -464,11 +465,12 @@ define help_consistency-audit
 make consistency-audit [ARGS="<audit arguments>"] [JSON=<file>] [NO_NETWORK=1]
 
 Checks whether the checkout agrees with itself. An app states the same fact in
-several files, and each file is valid on its own: appinfo/info.xml, package.json
-and composer.json each carry a version, info.xml and composer.json both bound the
-PHP version, package.json, .nvmrc and the installed workflows each name a Node
-version. A linter checks one file against a rule and cannot see any of that; this
-holds the files against each other and reports where they disagree.
+several files, and each file is valid on its own: appinfo/info.xml,
+package.json, package-lock.json and composer.json each carry a version, info.xml
+and composer.json both bound the PHP version, package.json, .nvmrc and the
+installed workflows each name a Node version. A linter checks one file against a
+rule and cannot see any of that; this holds the files against each other and
+reports where they disagree.
 
 The second half is what a release needs and a checkout can be missing: the
 <repository> and <bugs> links, which are the only way from a published release
