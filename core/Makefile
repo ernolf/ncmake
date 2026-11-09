@@ -1949,6 +1949,7 @@ integrity_untar = $(cache_dir)/integrity-tarball
 # at run time - the same pattern the workflow manager uses for its own tool.
 define integrity_tool
 import base64
+import fnmatch
 import hashlib
 import json
 import os
@@ -2064,7 +2065,63 @@ def sign(root, app_id, key, certificate):
     print('Signed %d files -> %s' % (len(hashes), target))
 
 
-def check(root, app_id, pinned=None, trusted=None, report=None):
+# Paths shown per group on the console; the JSON lists them all.
+GROUP_SHOWN = 10
+# What a group of paths of one file class has in common.
+GROUP_TEXT = {
+    'EXTRA_FILE': 'are not in signature.json',
+    'FILE_MISSING': 'are in signature.json but not in the tree',
+    'INVALID_HASH': 'differ from their hash in signature.json',
+}
+
+
+def shipped(path, keep):
+    # Whether a path lies inside the keep model: below a kept directory or a kept file.
+    head = path.split('/', 1)[0]
+    return any(fnmatch.fnmatchcase(head, pattern) for pattern in keep)
+
+
+def group(problems, keep):
+    # The problems of one file class below one top-level directory, or at the root,
+    # are one cause seen many times: a signature made over another tree than the one
+    # checked lists thousands of files that are not there. Each group becomes one
+    # finding with its paths as the lines after the text, a single path stays one of
+    # its own.
+    groups, order = {}, []
+    for kind, detail in problems:
+        if kind not in GROUP_TEXT:
+            order.append((kind, None, [detail]))
+            continue
+        key = (kind, detail.split('/', 1)[0] + '/' if '/' in detail else '')
+        if key not in groups:
+            groups[key] = []
+            order.append((kind, key[1], groups[key]))
+        groups[key].append(detail)
+    findings = []
+    for kind, where, details in order:
+        if where is None:
+            findings.append({'level': 'warn', 'id': kind, 'file': None,
+                             'lines': ['no location  %s' % kind, details[0]]})
+        elif len(details) == 1:
+            findings.append({'level': 'warn', 'id': kind, 'file': details[0],
+                             'lines': ['%s  %s' % (details[0], kind)]})
+        else:
+            text = ['%d files %s %s.' % (len(details), 'below %s' % where if where else 'in the app root',
+                                         GROUP_TEXT[kind])]
+            # Signed paths outside the keep model say how the signature was made: over
+            # a tree that held them, such as a checkout with its build dependencies.
+            outside = sum(not shipped(d, keep) for d in details) if kind == 'FILE_MISSING' and keep else 0
+            if outside:
+                text.append('%s outside what ncmake ships, so the signature was made over another'
+                            ' tree than the one a release ships, such as a checkout with its build'
+                            ' dependencies; make integrity-sign signs the staged tree.' % (
+                                'All of them lie' if outside == len(details) else '%d of them lie' % outside))
+            findings.append({'level': 'warn', 'id': kind, 'file': where or None, 'count': len(details),
+                             'lines': ['%s  %s' % (where or './', kind)] + text + details})
+    return findings
+
+
+def check(root, app_id, pinned=None, trusted=None, report=None, keep=None):
     outcome = {'root': root, 'app': app_id, 'state': 'unsigned', 'certificate': None, 'pinned': pinned,
               'rootCert': trusted, 'files': None, 'findings': []}
     if trusted and not os.path.isfile(trusted):
@@ -2125,18 +2182,23 @@ def check(root, app_id, pinned=None, trusted=None, report=None):
     outcome['state'] = 'invalid' if problems else 'valid'
     outcome['certificate'] = name
     outcome['files'] = {'signed': len(expected), 'found': len(actual)}
-    # One [!] finding per problem, shaped as the analysers shape theirs: a file class
-    # names the path, the others a detail.
-    for kind, detail in problems:
-        place = detail if kind in ('EXTRA_FILE', 'FILE_MISSING', 'INVALID_HASH') else None
-        outcome['findings'].append({'level': 'warn', 'id': kind, 'file': place,
-                                   'lines': ['%s  %s' % (place or 'no location', kind)] + ([] if place else [detail])})
+    # One [!] finding per cause, shaped as the analysers shape theirs: a file class
+    # names the path or the directory of its group, the others a detail.
+    findings = group(problems, keep)
+    outcome['findings'] = findings
     if report:
         write_json(report, outcome)
 
     print('%s: %d files in signature.json, %d in %s' % (app_id, len(expected), len(actual), root))
-    for kind, detail in problems:
-        print('  %-21s %s' % (kind, detail))
+    for f in findings:
+        if 'count' not in f:
+            print('  %-21s %s' % (f['id'], f['file'] or f['lines'][1]))
+            continue
+        print('  %-21s %s' % (f['id'], ' '.join(f['lines'][1:-f['count']])))
+        for path in f['lines'][-f['count']:][:GROUP_SHOWN]:
+            print('  %-21s   %s' % ('', path))
+        if f['count'] > GROUP_SHOWN:
+            print('  %-21s   and %d more%s' % ('', f['count'] - GROUP_SHOWN, '' if report else '; JSON=<file> lists them all'))
     if not problems:
         print('  no errors found, signature valid for CN=%s' % name)
     # The root is the server's resources/codesigning/root.crt, which ncmake does not
@@ -2151,14 +2213,15 @@ def check(root, app_id, pinned=None, trusted=None, report=None):
 
 if len(sys.argv) < 4:
     sys.exit('usage: ncmake_integrity.py sign <root> <app id> <key> <certificate>\n'
-             '       ncmake_integrity.py check [--root-cert=<file>] [--json-file=<file>] <root> <app id> [<pinned certificate>]')
+             '       ncmake_integrity.py check [--root-cert=<file>] [--json-file=<file>] [--keep=<names>] <root> <app id> [<pinned certificate>]')
 if sys.argv[1] == 'sign':
     sign(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5])
 elif sys.argv[1] == 'check':
     options = dict(a[2:].split('=', 1) for a in sys.argv[2:] if a.startswith('--') and '=' in a)
     positional = [a for a in sys.argv[2:] if not a.startswith('--')]
     check(positional[0], positional[1], positional[2] if len(positional) > 2 else None,
-          options.get('root-cert') or None, options.get('json-file') or None)
+          options.get('root-cert') or None, options.get('json-file') or None,
+          options.get('keep', '').split() or None)
 else:
     sys.exit('unknown command: %s' % sys.argv[1])
 endef
@@ -2176,6 +2239,7 @@ integrity-check: check-app $(if $(or $(DIR),$(TARBALL)),,stage)
 		root="$(integrity_dir)"; \
 	fi; \
 	$(integrity_run) check $(if $(ROOT_CERT),--root-cert="$(ROOT_CERT)") $(if $(JSON),--json-file="$(JSON)") \
+		--keep="$(keep_dirs) $(keep_files) $(keep_extra) $(addsuffix .license,$(keep_files) $(keep_extra))" \
 		"$$root" "$(app_id)" $(wildcard $(integrity_certificate))
 
 # == Local deploy ==
@@ -2627,6 +2691,13 @@ the file carries. Differences are reported in the classes Checker::verify uses -
 EXTRA_FILE, FILE_MISSING, INVALID_HASH - plus a CN that is neither the app id
 nor core and a signature that does not match. Any of them exits non-zero.
 
+The files of one class below one top-level directory, or in the app root, are
+one finding: it names the class, the directory and what the files have in
+common, and the console lists the first 10 paths. FILE_MISSING says when the
+signed paths lie outside what ncmake ships: the signature was then made over
+another tree, such as a checkout with its build dependencies. A class with a
+single file below a directory names that file.
+
 While $(integrity_certificate) is committed, the certificate in the file is
 also held against it (CERTIFICATE_MISMATCH): hashes and signature agree with each
 other in any self-signed file, so only that pin says the key was the app's own.
@@ -2649,8 +2720,9 @@ the last line says that the issuer was not checked.
   make integrity-check DIR=/var/www/nextcloud/apps/$(app_id) ROOT_CERT=/var/www/nextcloud/resources/codesigning/root.crt
 
 JSON=<file> writes the result to <file> as well: the state - valid, invalid, or
-unsigned for a tree without signature.json - and one [!] finding per problem,
-with its class and its path or detail. The exit code is the same as without it.
+unsigned for a tree without signature.json - and one [!] finding per problem or
+group, with its class and its path, directory or detail; a group lists every
+path. The exit code is the same as without it.
 endef
 
 define help_rsync
