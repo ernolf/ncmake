@@ -140,7 +140,7 @@ A release ships an allowlist, never an exclude list, so a stray development file
 * files `CHANGELOG.md CHANGELOG.*.md AUTHORS AUTHORS.md REUSE.toml COPYING COPYING.md LICENSE LICENSE.md`, each with its REUSE sidecar `<file>.license` when it has one
 * plus whatever `keep_extra` in `ncmake.mk` adds (for example `resources`)
 
-Only paths that actually exist are staged. `js/node_modules/` never ships. `.nextcloudignore` filters within that set. The result is materialized into `build/stage/<app_id>/` and packed into `build/artifacts/dist/<app_id>-<version>.tar.gz`. `rsync` and `cp` deploy that very same tree, so a test deployment is byte for byte what a release ships.
+Only paths that actually exist are staged. `js/node_modules/` never ships. `.nextcloudignore` filters within that set, and a directory left empty, such as the submodule placeholder of a vendor package, is not staged. The result is materialized into `build/stage/<app_id>/` and packed into `build/artifacts/dist/<app_id>-<version>.tar.gz`. `rsync` and `cp` deploy that very same tree, so a test deployment is byte for byte what a release ships.
 
 `check-build` demands the build outputs only when they are git-ignored. An app that commits its built `js/` stays dist ready straight from a fresh checkout. For a frontend in `js/`, it demands the ignored build output inside `js/`.
 

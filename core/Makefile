@@ -1910,10 +1910,13 @@ check-build:
 # Materialize the shipped runtime file set once, under the APP ID (the checkout
 # directory name may differ). dist tars this staging tree, rsync deploys it - one
 # mechanism, one source of truth.
+# --prune-empty-dirs: git tracks no empty directory and krankerl packs files
+# only, so no store tarball carries one. An empty directory here is the submodule
+# placeholder of a vendor package or one whose files .nextcloudignore removed.
 stage: check-app check-build
 	@rm -rf "$(stage_dir)"
 	@mkdir -p "$(stage_dir)/$(app_id)"
-	rsync -a --relative $(stage_excludes) $(addprefix ./,$(keep_existing)) "$(stage_dir)/$(app_id)/"
+	rsync -a --relative --prune-empty-dirs $(stage_excludes) $(addprefix ./,$(keep_existing)) "$(stage_dir)/$(app_id)/"
 
 # Build the distribution tarball from the staged file set, once ship_check passed
 # on it.
@@ -2607,7 +2610,8 @@ Materializes the shipped file set (keep model + .nextcloudignore) into
 build/stage/<app_id>/ and packs build/artifacts/dist/<app_id>-<version>.tar.gz.
 The same staged tree is what make rsync and make cp deploy, so a test deploy is
 byte-for-byte what a release ships. Run make build first if the app has build
-outputs (vendor/, js/).
+outputs (vendor/, js/). An empty directory is left out, as the App Store
+tarballs of krankerl leave it out.
 
 With the audit module (make dev-init), the staged tree is checked for secrets
 before it is packed, by make secrets-audit SCOPE=shipped, and a key or a token
