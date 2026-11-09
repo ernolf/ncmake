@@ -15,6 +15,11 @@
 # from its pull request. Once that pull request is merged the cleanup job deletes
 # its branch.
 #
+# A comment of "@ncmake-updater rebase" on that pull request re-runs the update
+# job, as the same command does for the workflow updater: create-pull-request
+# rebuilds the branch on the current default branch through the API, so the
+# commit stays verified. The workflow updater leaves the comment to this one.
+#
 # Authentication is the GitHub App of the workflow updater, minted per run as a
 # short-lived token: the commits it pushes through the API are verified, and a
 # pull request it opens runs the checks, which one opened with the default
@@ -33,6 +38,10 @@ on:
   # ncmake/data/update.
   pull_request:
     types: [closed]
+  # "@ncmake-updater rebase" in a pull request comment. This fires for every
+  # comment; the command job filters down to the command on ncmake/data/update.
+  issue_comment: # zizmor: ignore[dangerous-triggers] commands only from OWNER/MEMBER/COLLABORATOR, no comment text in run:, the default branch checked out, never the pull request head
+    types: [created]
 
 permissions:
   contents: read
@@ -42,9 +51,68 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  update:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+  command:
+    # Who may ask is what matters, and that is the author association --
+    # without it any passer-by could force-push the branch.
+    if: >-
+      github.event_name == 'issue_comment'
+      && github.event.issue.pull_request
+      && contains(github.event.comment.body, '@ncmake-updater rebase')
+      && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+        github.event.comment.author_association)
     runs-on: ubuntu-latest
+    # A reaction on a comment of a pull request needs Pull requests: write;
+    # Issues: write alone is answered with 403.
+    permissions:
+      issues: write
+      pull-requests: write
+    outputs:
+      ours: ${{ steps.pick.outputs.ours }}
+    steps:
+      - name: Pick the pull request
+        id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.issue.number }}
+        run: |
+          # Only the pull request of this workflow, pushed to this repository;
+          # the command on any other one belongs to another workflow.
+          read -r head head_repo < <(gh api "repos/$REPO/pulls/$PR" \
+            --jq '"\(.head.ref) \(.head.repo.full_name)"')
+          ours=false
+          if [ "$head" = ncmake/data/update ] && [ "$head_repo" = "$REPO" ]; then
+            ours=true
+          fi
+          echo "ours=$ours" >> "$GITHUB_OUTPUT"
+
+      - name: Acknowledge the command
+        if: steps.pick.outputs.ours == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method POST \
+            "repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions" \
+            -f content=eyes
+
+  update:
+    needs: command
+    # The command job is skipped on a schedule and on workflow_dispatch, which
+    # would skip this job too without !cancelled().
+    if: >-
+      !cancelled()
+      && (
+        github.event_name == 'schedule'
+        || github.event_name == 'workflow_dispatch'
+        || needs.command.outputs.ours == 'true'
+      )
+    runs-on: ubuntu-latest
+    # Reacting to the comment is the only thing the default token is used for
+    # here; everything that touches the repository runs on the app token.
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
     steps:
       - name: Create app token
         id: app-token
@@ -85,6 +153,22 @@ jobs:
             `make data-update` regenerated data/ from the sources each file
             names, and a value changed. The diff shows which, and the sources
             of the file name the reading it comes from. Review and merge.
+
+            ---
+
+            Commands, written as a comment on this pull request:
+
+            - `@ncmake-updater rebase` rebuilds this branch on top of the
+              current base
+
+      - name: Report the command as done
+        if: github.event_name == 'issue_comment'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method POST \
+            "repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions" \
+            -f content=rocket
 
   cleanup:
     if: >-
