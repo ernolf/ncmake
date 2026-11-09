@@ -352,11 +352,11 @@ The shipped `workflow-updater.yml` keeps the managed workflows current on its ow
 @ncmake-updater rebase
 ```
 
-The workflow re-runs the update against the current base of that pull request, the default branch or the line, so `create-pull-request` rebuilds the branch from scratch. It reacts with 👀 when it picks the comment up and with 🚀 when it is finished, both through the default `github.token` with `issues: write`.
+The workflow re-runs the update against the current base of that pull request, the default branch or the line, so `create-pull-request` rebuilds the branch from scratch. It reacts with 👀 when it picks the comment up and with 🚀 when it is finished, both through the default `github.token` with `issues: write` and `pull-requests: write`; a reaction on a comment of a pull request needs the latter.
 
 Two things about it are worth knowing:
 
-* The trigger is gated. Only a comment on a **pull request**, whose author association is `OWNER`, `MEMBER` or `COLLABORATOR`, starts the job. A comment on an issue, or from anyone else, does nothing.
+* The trigger is gated. Only a comment on a **pull request of the updater**, whose author association is `OWNER`, `MEMBER` or `COLLABORATOR`, starts the job. A comment on an issue or on any other pull request, or from anyone else, does nothing, so another workflow that opens pull requests through the same app can answer the command on its own pull request.
 * Use it instead of GitHub's "Update with rebase" button. That button, like a `git rebase` in the runner, pushes commits that carry no signature, so the pull request loses its verified status. Going through the API keeps every commit verified.
 
 **The backport comment command.** The template `backport.yml` (`make workflows-install W=backport`, same GitHub App and secrets) carries a merged change to a maintenance line. Comment on the pull request, one line per target branch:
