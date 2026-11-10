@@ -38,6 +38,8 @@ ALLOWED = {
         'the licence table of deps-audit names the SPDX id each value of the App Store stands for, which no source states',
     ('lib/consistency-audit.mjs', 'appstore', 'deprecated'):
         'APPSTORE_NAME_IDS names the SPDX id each name of the App Store stands for, which no source states',
+    ('lib/actions-security-audits.json', 'zizmor-audits', 'audits'):
+        'the audit table of lint-actions-security sorts each audit into attack or hardening, which no source states; its self-test holds it against data/zizmor-audits.json',
 }
 
 TOKEN = re.compile(r'[\w.@/+-]+')

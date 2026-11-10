@@ -169,7 +169,7 @@ zizmor_version = $(call ncmake_data,tools,zizmor version)
 lint_zizmor    = $(call lint_bin,zizmor) zizmor
 
 # Its analyser has a report of its own and needs no lint-common.mjs.
-security_libs = lint-actions-security.mjs report-text.mjs data.mjs data/tool-configs.json
+security_libs = lint-actions-security.mjs actions-security-audits.json report-text.mjs data.mjs data/tool-configs.json
 ncmake_libs += $(if $(filter lint-actions-security,$(MAKECMDGOALS)),$(security_libs))
 
 security_cmdline = make lint-actions-security ARGS=\"%s\"
@@ -371,6 +371,12 @@ without workflows passes.
 Findings of medium and high severity are [!] and exit 1; low and informational
 ones are [i]. Each names the file and line, the zizmor audit and its page, which
 says how to fix the finding or ignore it.
+
+Each finding also says whether its audit describes an attack or hardening, as
+lib/actions-security-audits.json of ncmake sorts them. Only an attack is marked
+as security in the JSON; a hardening finding, such as an action not pinned to a
+commit, keeps its level and still fails the check. An audit the table does not
+know yet counts as an attack.
 
 The zizmor binary is the one of its GitHub release, checked against its digest
 and kept in tools/ of the ncmake cache. It runs in the throwaway Node container
