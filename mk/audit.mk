@@ -88,7 +88,7 @@ consistency_libs = consistency-audit.mjs bundler-config.mjs data.mjs lockfile.mj
 verify_libs      = build-verify.mjs bundler-config.mjs lockfile.mjs report-text.mjs scratch-build.mjs
 changelog_libs   = changelog-lint.mjs data.mjs report-text.mjs data/appstore.json
 compat_libs      = php-compat.mjs report-text.mjs
-deps_libs        = deps-audit.mjs data.mjs deps-audit.php licences.json lockfile.mjs report-text.mjs scratch-build.mjs data/spdx-licenses.json
+deps_libs        = deps-audit.mjs built-assets.mjs bundler-config.mjs data.mjs deps-audit.php licences.json lockfile.mjs report-text.mjs scratch-build.mjs data/spdx-licenses.json
 secrets_libs     = secrets-audit.mjs data.mjs secrets-placeholders.json report-text.mjs data/composer-auth.json data/gitleaks-rules.json
 
 # What the goals on this command line need, handed to the core's analyser library
@@ -644,10 +644,18 @@ version decides between the two findings:
                                     declares it
 composer decides that itself, with composer why-not. For npm the ranges come
 from package-lock.json or yarn.lock; pnpm-lock.yaml records only those of
-package.json, so for a package further down the finding says so. [i] marks an
+package.json, so for a package further down the finding says so.
+Not every production package of the npm lock file reaches the bundle. Where
+the build output, after make build or committed, carries source maps or the
+.license files beside its chunks, a vulnerable npm package that neither names,
+and that no package they name requires in the lock file, is reported as
+  [i] vulnerable-dependency-not-bundled  in the lock file, not in the bundle
+with the same advisories and fix; both sources can miss a package, so it may
+ship all the same. Without a build output every package counts as shipped.
+composer is not affected: vendor/ ships whole. [i] marks an
 abandoned package with its suggested replacement, an advisory source that did
 not answer, in which case nothing of that lock file was checked, and a
-dependency without a lock file to audit. Both vulnerability findings carry
+dependency without a lock file to audit. Every vulnerability finding carries
 "security": true in the JSON.
 
 NO_ADVISORIES=1 (or ARGS=--no-advisories) leaves the vulnerabilities out, for
