@@ -22,14 +22,15 @@
       "id": "R2",
       "weight": "must",
       "source": "guidelines",
-      "note": "three dots are the Unicode ellipsis, with a non-breaking space (U+00A0) before it",
-      "match": "[ \\u00a0]?\\.\\.\\.(?!\\.)",
+      "note": "three dots after a word are the Unicode ellipsis, with a non-breaking space (U+00A0) before it",
+      "match": "(?<=[\\p{L})}])[ \\u00a0]?\\.\\.\\.(?!\\.)",
       "replace": "\u00a0…",
       "examples": [
         { "bad": "Loading...", "good": "Loading\u00a0…" },
-        { "bad": "Loading ...", "good": "Loading\u00a0…" }
+        { "bad": "Loading ...", "good": "Loading\u00a0…" },
+        { "bad": "Show {count} more...", "good": "Show {count} more\u00a0…" }
       ],
-      "ok": ["Loading\u00a0…"]
+      "ok": ["Loading\u00a0…", "...", "... that match", "https://...", "e.g. a1b2c3...", "rvx_..."]
     },
     {
       "id": "R3",
@@ -49,6 +50,8 @@
       "source": "guidelines",
       "note": "the spelled out form is easier to understand and to translate",
       "patterns": [
+        { "match": "\\bDon't(?= \\p{Lu})", "replace": "Do Not" },
+        { "match": "\\bWon't(?= \\p{Lu})", "replace": "Will Not" },
         { "match": "\\bDon't\\b", "replace": "Do not" },
         { "match": "\\bdon't\\b", "replace": "do not" },
         { "match": "\\bWon't\\b", "replace": "Will not" },
@@ -56,7 +59,8 @@
       ],
       "examples": [
         { "bad": "Don't save", "good": "Do not save" },
-        { "bad": "This won't work", "good": "This will not work" }
+        { "bad": "This won't work", "good": "This will not work" },
+        { "bad": "Don't Get Greedy", "good": "Do Not Get Greedy" }
       ],
       "ok": ["Do not save"]
     },
@@ -77,26 +81,26 @@
       "id": "R6",
       "weight": "must",
       "source": "guidelines",
-      "note": "ID, the short form of identifier, is written in uppercase; a placeholder like {id} stays",
-      "match": "(?<!\\{)\\b[Ii]d(s?)\\b(?!\\})",
+      "note": "ID, the short form of identifier, is written in uppercase; a placeholder like {id} stays, and so does id in a URL, a path or a hyphenated name",
+      "match": "(?<![{/?&#=._-])\\b[Ii]d(s?)\\b(?![}=/_-])",
       "replace": "ID$1",
       "examples": [
         { "bad": "Token id", "good": "Token ID" },
         { "bad": "Copy the ids", "good": "Copy the IDs" }
       ],
-      "ok": ["Token ID", "Token {id}", "Invalid code", "Hidden"]
+      "ok": ["Token ID", "Token {id}", "Invalid code", "Hidden", "https://example.com/details?id=app", "a JSON pointer such as /id.", "block-id: %d", "#id"]
     },
     {
       "id": "R7",
       "weight": "must",
       "source": "guidelines",
       "note": "a leading or trailing space mostly means a concatenated string; put the whole sentence into one string, with placeholders",
-      "match": "^\\s|\\s$",
+      "match": "^[^\\S\\r\\n]|[^\\S\\r\\n]$",
       "examples": [
         { "bad": " Leading space" },
         { "bad": "Trailing space " }
       ],
-      "ok": ["No leading space"]
+      "ok": ["No leading space", "Line break at the end\n"]
     },
     {
       "id": "R8",
@@ -104,24 +108,50 @@
       "source": "plurals",
       "note": "a number that varies needs the plural form: n() with %n",
       "calls": ["t"],
-      "match": "%(?:\\d+\\$)?d|%n|\\{(?:n|count|number|num|total|amount|seconds|minutes|hours|days)\\}",
+      "match": "(?:%(?:\\d+\\$)?d|%n|\\{(?:n|count|number|num|total|amount|seconds|minutes|hours|days)\\})\\}?(?! ?(?:of|on|in|at|to|from|and|or|by|for)\\b) ?\\p{L}",
       "examples": [
         { "bad": "Vault will be locked in %1$d seconds" },
-        { "bad": "Hides in {seconds}s" }
+        { "bad": "Hides in {seconds}s" },
+        { "bad": "{n} of {total} votes" },
+        { "bad": "Parsed {{num}} credentials" }
       ],
-      "ok": ["Hide {name}", "Import calendars"]
+      "ok": ["Hide {name}", "Import calendars", "Room {number}", "Week {number} of {year}", "Replies ({count})", "Pieces: {count}", "{n}% of the users", "Buy {amount}."]
     },
     {
       "id": "R9",
       "weight": "must",
       "source": "plurals",
-      "note": "a plural carries %n; without a number, use t() with an undefined plural",
+      "note": "a plural carries its number; without a number, use t() with an undefined plural",
       "calls": ["n"],
-      "require": "%n",
+      "require": "%n|%(?:\\d+\\$)?[ds]|\\{[^{}\\s]+\\}",
       "examples": [
         { "bad": "Import calendars" }
       ],
-      "ok": ["Import %n calendars"]
+      "ok": ["Import %n calendars", "Import {count} calendars"]
+    },
+    {
+      "id": "R10",
+      "weight": "should",
+      "source": "plurals",
+      "note": "the guidelines name %n as the number of a plural; this one carries another placeholder instead",
+      "calls": ["n"],
+      "match": "^(?![\\s\\S]*%n)[\\s\\S]*(?:%(?:\\d+\\$)?[ds]|\\{[^{}\\s]+\\})",
+      "examples": [
+        { "bad": "Import {count} calendars" }
+      ],
+      "ok": ["Import %n calendars", "Import calendars"]
+    },
+    {
+      "id": "R11",
+      "weight": "should",
+      "source": "guidelines",
+      "note": "a line break at the start or the end can mean a concatenated string as well; a mail text or a block of text may carry it on purpose",
+      "match": "^[\\r\\n]|[\\r\\n]$",
+      "examples": [
+        { "bad": "\nGenre: {genre}" },
+        { "bad": "Best regards\n" }
+      ],
+      "ok": ["One line", "Two\nlines"]
     }
   ]
 }
