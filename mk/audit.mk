@@ -727,20 +727,42 @@ design are never reported: the certificate of the integrity signature,
 checksums appinfo/checksum.json an older app carried, wherever the repository
 keeps them. The two .json files only where they hold what that file holds, in
 the history as of each commit; a file of that name with anything else in it
-is checked like any other.
+is checked like any other. A signature.json that is no valid JSON cannot be
+told from a signature by its content: only the matches of generic-api-key and
+sourcegraph-access-token are left out in it, and signature-invalid names it.
+A private key block without a key in it, no base64 run of 64 characters, is
+the template of a library that writes keys, and no match.
 
 Generated files are full of strings gitleaks takes for a key: hashes, minified
 names, digests and embedded data. A source map (*.map), a minified file
 (*.min.js, *.min.css), a chunk of a bundle (*.chunk.js, *.chunk.mjs), the cache
-of a tool (.php-cs-fixer.cache, .phpunit.result.cache, .eslintcache) and every
-file below a directory .gitignore takes for build output, as js/ and vendor/
-for make, count as generated. There, a match of generic-api-key, or of
-sourcegraph-access-token on a line without an sgp_ token, is [i] and not a
-secret: both rules take any string of high entropy. Every other rule, a
-private key or the token of a provider, stays [!] there as well.
+of a tool (.php-cs-fixer.cache, .phpunit.result.cache, .eslintcache), a page of
+built documentation (assets/js/<name>.<8 hex digits>.js) and every file below a
+directory .gitignore takes for build output, as js/ and vendor/ for make, count
+as generated. There, a match of generic-api-key, or of sourcegraph-access-token
+on a line without an sgp_ token, is [i] and not a secret: both rules take any
+string of high entropy. In a page of built documentation so is a match of
+curl-auth-user and curl-auth-header, which copies the curl lines of its source;
+the source is scanned itself. Every other rule, a private key or the token of a
+provider, stays [!] there as well.
+
+Some values are no secret by their form, their key or their file: the name of
+a constant, a run of the alphabet, a property access in code, a hash under a
+key that says so (hash, sha256, integrity, fingerprint, ...), the checksum of a
+file under the file's name, the nonce of a WebSocket handshake, the text of an
+HTML element after an attribute that holds the word, a Stripe test key and a
+match in a translation below l10n/. Their matches are [i].
+
+Test data, the report of a test run and example code carry keys and tokens
+made up for them: files below test/, tests/, fixtures/, __fixtures__/,
+testdata/ or a source set src/<name>Test/, *.test.*, *.spec.*, *.golden.*,
+*.mock.*, *Test.php and *_test.go, below newman/ or a Postman collection, and
+files below example/, examples/, example-<name>/ or the demo/ of a vendor
+package. Their matches are [i], but those of a private key and of a GitHub
+token: a real one ends up in a test as easily as anywhere else.
 
 Docs, examples and test scripts are full of credentials that only stand for
-one: admin:admin, "$USER:$PASS" or <password> in a curl line. A match whose
+one: admin:admin, "$USER:$PASS", app-password or <password> in a curl line. A match whose
 value is such a placeholder is [i] and not a secret. The placeholders are a
 data file, lib/secrets-placeholders.json of ncmake, one regular expression per
 entry, tested against the value gitleaks matched and for a user:password pair
@@ -752,10 +774,17 @@ Findings are marked [!] worth changing, [i] worth knowing, [ok] nothing found:
                          has to be revoked, removing it does not make it secret
                          again
   [i] public-files       the matches left out in each public file, by scope
+  [i] signature-invalid  each signature.json that is no valid JSON, by scope
   [i] generated-files    the matches without a format in each generated file,
                          by scope; the ten with the most, all with --details
+  [i] not-secrets        the matches that are no secret by their form, their
+                         key or their file, by scope; the ten with the most,
+                         all with --details
   [i] placeholders       the matches that are placeholders in each file, by
                          scope; the ten with the most, all with --details
+  [i] samples            the matches in test data, test reports and example
+                         code, by scope; the ten with the most, all with
+                         --details
 Each finding gives the rule, the file, the line and the commit, and never the
 secret: gitleaks runs with --redact. ARGS=--reveal shows the line of each
 finding on the terminal, for the maintainer who has to find it; it never
@@ -782,8 +811,8 @@ The exit code is 1 when a finding is marked [!]. ARGS is passed to the analyser:
   make secrets-audit TARBALL=<file>     a tarball, e.g. the one make dist packs
   make secrets-audit SCOPE=history COMMITS=main..HEAD  the commits of a branch
   make secrets-audit ARGS=--details     every commit that changed a file found
-                                        by its name, every generated file and
-                                        every file with placeholders
+                                        by its name, and every file whose
+                                        matches are set aside
   make secrets-audit ARGS=--reveal      the line of each finding, on the
                                         terminal only
   make secrets-audit ARGS=--json > secrets.json  machine-readable, nothing else
