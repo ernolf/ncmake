@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
 # SPDX-License-Identifier: MIT
 #
-# ncmake developer module: six checks on a checkout.
+# ncmake developer module: seven checks on a checkout.
 #
 # consistency-audit reads the metadata of a checkout and holds the statements it
 # finds against each other: the version in appinfo/info.xml against the ones in
@@ -42,6 +42,14 @@
 # every require and include with a fixed path against the files that ship: one
 # that names a file outside them fails on every server.
 #
+# install-test asks what no reading of the checkout answers: does the packaged app
+# install and run on a server. It starts an installed Nextcloud server per major,
+# the image ncmake-server of the ncmake-images repository, copies the staged app
+# into it, enables it, sends a few requests, runs cron.php and reads the log of
+# the server afterwards. An app that ships without a file it requires enables
+# without a word and fails on every request; only the log says so. The runs
+# leave their output under build/install-test, which the analyser then reads.
+#
 # deps-audit asks the package managers' own audits whether a dependency that
 # ships has a published vulnerability: composer audit over composer.lock in the
 # build image of the PHP floor, and the audit of npm, pnpm or yarn over the npm
@@ -70,7 +78,7 @@
 # separate file costs nothing beyond its own header: fetching the analysers is the
 # core's, under "Analyser libraries" there.
 #
-# The same discovery rule is why build-verify, changelog-lint, php-compat, deps-audit and secrets-audit are
+# The same discovery rule is why build-verify, changelog-lint, php-compat, install-test, deps-audit and secrets-audit are
 # targets in this file and not modules of their own: a new module file reaches a machine only on the
 # next dev-init, while a target added to a file the cache already holds arrives with
 # the next refresh.
@@ -88,12 +96,14 @@ consistency_libs = consistency-audit.mjs bundler-config.mjs data.mjs lockfile.mj
 verify_libs      = build-verify.mjs bundler-config.mjs lockfile.mjs report-text.mjs scratch-build.mjs
 changelog_libs   = changelog-lint.mjs data.mjs report-text.mjs data/appstore.json
 compat_libs      = php-compat.mjs report-text.mjs
+install_libs     = install-test.mjs install-test.sh report-text.mjs
 deps_libs        = deps-audit.mjs built-assets.mjs bundler-config.mjs data.mjs deps-audit.php licences.json lockfile.mjs report-text.mjs scratch-build.mjs data/spdx-licenses.json
 secrets_libs     = secrets-audit.mjs data.mjs secrets-placeholders.json report-text.mjs data/composer-auth.json data/gitleaks-rules.json
 
 # What the goals on this command line need, handed to the core's analyser library
 # section: appended, never set, because every analyser module adds its own.
 ncmake_libs += $(if $(filter consistency-audit,$(MAKECMDGOALS)),$(consistency_libs)) $(if $(filter build-verify,$(MAKECMDGOALS)),$(verify_libs)) $(if $(filter changelog-lint,$(MAKECMDGOALS)),$(changelog_libs)) $(if $(filter php-compat,$(MAKECMDGOALS)),$(compat_libs)) $(if $(filter deps-audit,$(MAKECMDGOALS)),$(deps_libs)) $(if $(filter secrets-audit,$(MAKECMDGOALS)),$(secrets_libs))
+ncmake_libs += $(if $(filter install-test,$(MAKECMDGOALS)),$(install_libs))
 
 # The app is mounted at /app inside the container, so the mount point cannot tell
 # the analyser what the app directory is called - the one thing it needs the host
@@ -117,6 +127,7 @@ consistency_keep = $(keep_dirs) $(keep_files) $(keep_extra)
 verify_cmdline = make build-verify ARGS=\"%s\"
 changelog_cmdline = make changelog-lint ARGS=\"%s\"
 compat_cmdline    = make php-compat ARGS=\"%s\"
+install_cmdline   = make install-test ARGS=\"%s\"
 deps_cmdline      = make deps-audit ARGS=\"%s\"
 secrets_cmdline   = make secrets-audit ARGS=\"%s\"
 
@@ -178,6 +189,22 @@ compat_lint  = many=$$(php -n -r "echo PHP_VERSION_ID >= 80300 ? 1 : 0;"); find 
 # against them.
 compat_shipped = rsync -an --relative --out-format='%n' $(stage_excludes) $(addprefix ./,$(keep_existing)) "$(compat_dir)/stage/" >$(compat_dir)/shipped
 compat_run   = out=$(compat_dir)/$(php_version); php -n -r "echo PHP_VERSION;" >"$$out/version"; if [ -f vendor/composer/installed.json ] || [ -f composer.lock ]; then composer check-platform-reqs --no-dev --format=json >"$$out/platform.json" 2>"$$out/platform.err"; echo $$? >"$$out/platform.rc"; fi; $(compat_lint) >"$$out/lint.txt"
+
+# == install-test ==
+# The server image of each Nextcloud major, ghcr.io/ernolf/ncmake-server:<major>
+# and :master, as the ncmake-images repository publishes them: the release
+# tarball of the major, or the daily one of master, installed on SQLite, on the
+# newest PHP the major runs on. An image exists for every maintained major, the
+# ones above the newest end-of-life major, and for master.
+install_image ?= ghcr.io/ernolf/ncmake-server
+install_dir    = build/install-test
+# The server half, lib/install-test.sh, runs as root in the container: it writes
+# into the server and starts its web server. Under docker that is the run without
+# --user; the script hands its output to the owner of the checkout. Each tag runs
+# in a make of its own, because image_prep takes the image as make expands it.
+# The container publishes no port: the requests come from inside it.
+install_container = $(or $(container_root),$(container))
+install_core = $(if $(filter bare none,$(RUNTIME)),echo "ERROR: install-test starts a server image and needs podman or docker (RUNTIME=$(RUNTIME))" >&2; exit 1,$(if $(value container_prep),:,echo "ERROR: install-test needs a newer ncmake core - run 'make self-update'" >&2; exit 1))
 
 # deps-audit runs composer audit where make build resolves the dependencies, in
 # the build image of the PHP floor, in a make of its own as php-compat does. The
@@ -359,7 +386,7 @@ export secrets_ignore_body
 # Appends what the tool returned, after a newline where the file lacks one at its end.
 secrets_ignore_append = f=.gitleaksignore; if [ -s "$$f" ] && [ -n "$$(tail -c1 "$$f")" ]; then echo >> "$$f"; fi; cat "$(secrets_ignore_add)" >> "$$f"
 
-.PHONY: consistency-audit build-verify changelog-lint php-compat php-compat-run deps-audit deps-audit-composer secrets-audit secrets-ignore
+.PHONY: consistency-audit build-verify changelog-lint php-compat php-compat-run install-test install-test-run deps-audit deps-audit-composer secrets-audit secrets-ignore
 
 consistency-audit:
 	@$(audit_core)
@@ -412,6 +439,35 @@ php-compat: check-app
 
 php-compat-run:
 	@$(php_run) '$(compat_run)'
+
+# The majors run are the lowest and the highest the app declares that a server
+# image exists for; NC=all adds the ones in between, NC="<tag> ..." names them.
+install-test: stage
+	@$(audit_core)
+	@$(install_core)
+	@$(call ncmake_lib_need,$(install_libs))
+	@eol='$(nc_eol)'; master='$(nc_master)'; min='$(nc_min)'; max='$(nc_max)'; \
+	[ -n "$$eol" ] && [ -n "$$master" ] || { echo "ERROR: no Nextcloud majors - $(ncmake_raw)/data/nextcloud-server.json could not be fetched - network?" >&2; exit 1; }; \
+	first=$$((eol + 1)); lo=$${min:-$$first}; [ "$$lo" -ge "$$first" ] || lo=$$first; hi=$${max:-$$master}; [ "$$hi" -le "$$master" ] || hi=$$master; \
+	case '$(NC)' in \
+		'') tags=; [ "$$lo" -gt "$$hi" ] || tags=$$(printf '%s\n' "$$lo" "$$hi" | sort -un) ;; \
+		all) tags=; [ "$$lo" -gt "$$hi" ] || tags=$$(seq "$$lo" "$$hi") ;; \
+		*[!0-9a-z\ ]*) echo "ERROR: NC names server majors or master, separated by spaces: '$(NC)'" >&2; exit 1 ;; \
+		*) tags='$(NC)' ;; \
+	esac; \
+	tags=$$(for t in $$tags; do if [ "$$t" = "$$master" ]; then echo master; else echo "$$t"; fi; done | sort -u | sort -V | tr '\n' ' '); tags=$${tags% }; \
+	echo "==> install-test on Nextcloud $${tags:-none} (RUNTIME=$(RUNTIME))" >&2; \
+	rm -rf $(install_dir) && mkdir -p $(install_dir) || exit 1; \
+	printf 'min=%s\nmax=%s\nfirst=%s\nmaster=%s\ntags=%s\n' "$$min" "$$max" "$$first" "$$master" "$$tags" >$(install_dir)/range; \
+	cp "$(ncmake_lib_dir)/install-test.sh" $(install_dir)/ || exit 1; \
+	for t in $$tags; do \
+		echo "==> Nextcloud $$t" >&2; mkdir -p $(install_dir)/$$t; \
+		$(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory install-test-run install_tag=$$t || echo "$$?" >$(install_dir)/$$t/failed; \
+	done; \
+	$(ncmake_lib_read_run) '$(call ncmake_lib_guard,install-test) INSTALL_TEST_CMDLINE="$(install_cmdline)" node $(ncmake_lib_path)/install-test.mjs $(ARGS) $(ncmake_json_arg)'
+
+install-test-run:
+	@$(call container_prep,$(install_image):$(install_tag)) && $(install_container) $(install_image):$(install_tag) sh $(install_dir)/install-test.sh '$(app_id)' $(install_dir)/$(install_tag)
 
 deps-audit: check-app
 	@$(audit_core)
@@ -614,6 +670,55 @@ It needs the network for the images, and on the first run for
 data/nextcloud-server.json of ncmake, which holds what versioncheck.php says. With RUNTIME=bare it
 runs on the PHP of the host, once per minor, and says so; the PHP ahead of
 master, which only its image carries, is left out there.
+endef
+
+define help_install-test
+make install-test [NC=all|"<major> ..."] [ARGS="<analyser arguments>"] [JSON=<file>]
+
+Installs the staged app, what make dist packs, on a real Nextcloud server and
+checks whether it runs there. Run make build first.
+
+Two servers are started: the lowest and the highest Nextcloud major of
+<nextcloud min-version> and max-version in appinfo/info.xml that a server
+image exists for. Images exist for the maintained majors and for master,
+$(install_image):<major> and :master: the release tarball of the major, or
+the daily one of master, installed on SQLite, on the newest PHP the major runs
+on. NC=all starts every major in between as well, NC="34 master" the ones it
+names.
+
+On each server the app is copied into custom_apps and enabled with
+occ app:enable. Then the server answers requests to the login page, the
+dashboard, the files app, the user and admin settings, the page of the app,
+the OCS capabilities and WebDAV, and cron.php runs once.
+  [!] occ app:enable fails, or the app is not enabled afterwards
+  [!] a request is answered with a server error (5xx)
+  [!] cron.php fails
+  [!] nextcloud.log has an entry of level 3 (error) or higher that names the
+      app: logged for the app, or with a path in custom_apps/<app id>/
+  [i] an entry of that level that does not name the app
+  [i] the app declares majors below the lowest image, which are not installed
+
+The container publishes no port and is removed after the run. What each run
+left stays in build/install-test/<tag>: the output of occ and cron.php, the
+status of each request, nextcloud.log and the output of the web server.
+
+Examples:
+  make build && make install-test       the lowest and the highest major
+  make install-test NC=all              every major in between too
+  make install-test NC=master           only master
+  make install-test ARGS=--details      every log entry behind the findings
+  make install-test ARGS=--json > install.json  machine-readable, nothing else
+  make install-test JSON=install.json   the report, and the JSON in install.json
+  make install-test ARGS=--help         the analyser's own option list
+
+The exit code is 0 when nothing is worth changing, 1 when at least one finding
+is, and 2 when the run itself could not be carried out.
+
+JSON=<file> writes the JSON of ARGS=--json to <file> as well, from the same run,
+and the report is printed as without it. The file can lie outside the app; it is
+replaced once the run is complete, and a run that stops on an error writes none.
+
+It needs podman or docker and the network for the images, about 1.6 GB each.
 endef
 
 define help_deps-audit
@@ -1007,6 +1112,8 @@ help::
 	@echo "    $(cd)optional $(cv)ARGS=\"--nightly\"$(cd), see $(cv)make help-changelog-lint$(c0)"
 	@echo "  $(ct)php-compat$(c0)           Whether the app runs on the PHP floor and ceiling of its servers"
 	@echo "    $(cd)optional $(cv)PHP=all$(cd), see $(cv)make help-php-compat$(c0)"
+	@echo "  $(ct)install-test$(c0)         Whether the packaged app installs and runs on the servers it declares"
+	@echo "    $(cd)optional $(cv)NC=all$(cd), see $(cv)make help-install-test$(c0)"
 	@echo "  $(ct)deps-audit$(c0)           Whether a dependency that ships has a published vulnerability or a licence the app cannot ship"
 	@echo "    $(cd)optional $(cv)ARGS=\"--details\"$(cd), $(cv)NO_ADVISORIES=1$(cd), see $(cv)make help-deps-audit$(c0)"
 	@echo "  $(ct)secrets-audit$(c0)        Whether a key or a token is in what ships, or in the history"
