@@ -35,9 +35,10 @@ def _retry(what, call):
             time.sleep(DELAY)
 
 
-def fetch(url, missing_ok=False):
-    """The body of url as text. With missing_ok, a 404 returns None: the path
-    does not exist at that ref, which is an answer, not a failure."""
+def fetch(url, missing_ok=False, binary=False):
+    """The body of url as text, or as bytes with binary. With missing_ok, a 404
+    returns None: the path does not exist at that ref, which is an answer, not a
+    failure."""
     def call():
         req = urllib.request.Request(url, headers={'User-Agent': 'ncmake-data-update'})
         token = os.environ.get('GITHUB_TOKEN')
@@ -45,7 +46,8 @@ def fetch(url, missing_ok=False):
             req.add_header('Authorization', 'Bearer ' + token)
         try:
             with urllib.request.urlopen(req, timeout=60) as r:
-                return r.read().decode('utf-8')
+                body = r.read()
+                return body if binary else body.decode('utf-8')
         except urllib.error.HTTPError as e:
             if missing_ok and e.code == 404:
                 return None

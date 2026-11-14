@@ -2457,6 +2457,7 @@ cache-clean:
 	if [ -d tools ]; then for f in tools/* tools/.[!.]* tools/..?*; do [ -e "$$f" ] || continue; case "$${f#tools/}" in \
 		zizmor-*|actionlint-*|shellcheck-*|hadolint-*|yamllint-*) t=$${f#tools/}; add ncmake "$$f/" "$${t%%-*} $${t#*-}, fetched by the lint module" "$$f" ;; \
 		gitleaks-*) t=$${f#tools/}; add ncmake "$$f/" "gitleaks $${t#*-}, fetched for secrets-audit" "$$f" ;; \
+		php-parser-*) t=$${f#tools/}; add ncmake "$$f/" "nikic/php-parser $${t##*-}, fetched for php-audit" "$$f" ;; \
 		markdown-*|web-*) t=$${f#tools/}; add ncmake "$$f/" "the npm packages of lint-$${t%%-*}, fetched by the lint module" "$$f" ;; \
 		.fetch.*) add leftover "$$f" "left by an interrupted download" "$$f" ;; \
 		*) add foreign "$$f" "" "$$f" ;; \
@@ -2958,7 +2959,8 @@ numbered, with the size, the last change and the status of each entry:
   ncmake    the core, the developer modules, the analyser libraries and the
             registry list of a ref, a Node.js line, the release index of
             nodejs.org, the download caches npm/, corepack/ and yarn/, a tool
-            the lint module or secrets-audit fetched into tools/, last-run
+            the lint module, secrets-audit or php-audit fetched into tools/,
+            last-run
   leftover  what an interrupted download left, or a file where an older
             ncmake kept it
   in use    mounted by a running ncmake container; last-run while one runs

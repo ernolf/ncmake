@@ -61,6 +61,17 @@
 # report to build/reports and exits 0 with findings: the gates are workflows of
 # ernolf/ncmake-workflows.
 #
+# php-audit asks what the PHP source of the app has and whether the server can
+# load and run it the way the developer manual describes. lib/php-audit.php
+# parses appinfo/, lib/ and templates/ with nikic/php-parser in the build image
+# of the PHP floor and states what the source says; the analyser holds that
+# against info.xml, the Composer setup and the public API of the server over the
+# majors the app declares, which data/nextcloud-ocp.json and
+# data/nextcloud-3rdparty.json have. The parser is the release data/tools.json
+# names, the tarball of its commit, kept in tools/ of the ncmake cache and
+# mounted into the container: nothing is installed into the app. It exits 0
+# with findings, like deps-audit.
+#
 # secrets-audit asks gitleaks whether a key or a token is in what the release
 # ships, or anywhere in the history of the checkout, and names a key, a key store,
 # an .env file, the auth.json of composer and an .npmrc with a credential by their
@@ -78,7 +89,7 @@
 # separate file costs nothing beyond its own header: fetching the analysers is the
 # core's, under "Analyser libraries" there.
 #
-# The same discovery rule is why build-verify, changelog-lint, php-compat, install-test, deps-audit and secrets-audit are
+# The same discovery rule is why build-verify, changelog-lint, php-compat, install-test, deps-audit, php-audit and secrets-audit are
 # targets in this file and not modules of their own: a new module file reaches a machine only on the
 # next dev-init, while a target added to a file the cache already holds arrives with
 # the next refresh.
@@ -98,12 +109,14 @@ changelog_libs   = changelog-lint.mjs data.mjs report-text.mjs data/appstore.jso
 compat_libs      = php-compat.mjs report-text.mjs
 install_libs     = install-test.mjs install-test.sh report-text.mjs
 deps_libs        = deps-audit.mjs built-assets.mjs bundler-config.mjs data.mjs deps-audit.php licences.json lockfile.mjs report-text.mjs scratch-build.mjs data/spdx-licenses.json
+php_audit_libs   = php-audit.mjs php-audit.php data.mjs report-text.mjs data/nextcloud-3rdparty.json data/nextcloud-ocp.json
 secrets_libs     = secrets-audit.mjs data.mjs secrets-placeholders.json report-text.mjs data/composer-auth.json data/gitleaks-rules.json
 
 # What the goals on this command line need, handed to the core's analyser library
 # section: appended, never set, because every analyser module adds its own.
 ncmake_libs += $(if $(filter consistency-audit,$(MAKECMDGOALS)),$(consistency_libs)) $(if $(filter build-verify,$(MAKECMDGOALS)),$(verify_libs)) $(if $(filter changelog-lint,$(MAKECMDGOALS)),$(changelog_libs)) $(if $(filter php-compat,$(MAKECMDGOALS)),$(compat_libs)) $(if $(filter deps-audit,$(MAKECMDGOALS)),$(deps_libs)) $(if $(filter secrets-audit,$(MAKECMDGOALS)),$(secrets_libs))
 ncmake_libs += $(if $(filter install-test,$(MAKECMDGOALS)),$(install_libs))
+ncmake_libs += $(if $(filter php-audit,$(MAKECMDGOALS)),$(php_audit_libs))
 
 # The app is mounted at /app inside the container, so the mount point cannot tell
 # the analyser what the app directory is called - the one thing it needs the host
@@ -129,6 +142,7 @@ changelog_cmdline = make changelog-lint ARGS=\"%s\"
 compat_cmdline    = make php-compat ARGS=\"%s\"
 install_cmdline   = make install-test ARGS=\"%s\"
 deps_cmdline      = make deps-audit ARGS=\"%s\"
+php_audit_cmdline = make php-audit ARGS=\"%s\"
 secrets_cmdline   = make secrets-audit ARGS=\"%s\"
 
 # In a container the scratch tree is in the container's own /tmp and goes with it,
@@ -215,6 +229,41 @@ deps_dir = build/deps-audit
 # NO_ADVISORIES=1, or --no-advisories in ARGS, reaches both halves, so the
 # composer half drops the advisories before they are written to build/deps-audit.
 deps_no_advisories = $(if $(or $(filter 1,$(NO_ADVISORIES)),$(filter --no-advisories,$(ARGS))),1)
+
+# == php-audit ==
+# nikic/php-parser has no dependency, so its lib/ is all the PHP half loads: no
+# Composer run, and nothing of it in the app. data/tools.json names the release
+# with the commit Packagist records for it and the tarball of that commit, which
+# is what Composer itself would install. $(php_audit_fetch) <version> <url>
+# prints the directory that holds it; an older release goes once no ncmake
+# container runs that could have it mounted.
+php_audit_dir     = build/php-audit
+php_audit_version = $(call ncmake_data,tools,php-parser version)
+php_audit_url     = $(call ncmake_data,tools,php-parser url)
+php_audit_tools   = $(ncmake_cache)/tools
+php_audit_idle    = ! { for c in $(image_engines); do "$$c" ps -q --filter label=ncmake 2>/dev/null; done | grep -q .; }
+php_audit_fetch = sh -c ' \
+	ver=$$1 url=$$2 dir=$(php_audit_tools)/php-parser-$$1; \
+	[ -n "$$ver" ] && [ -n "$$url" ] || { echo "ERROR: no php-parser release - $(ncmake_raw)/data/tools.json could not be fetched - network?" >&2; exit 1; }; \
+	if [ ! -e "$$dir/.complete" ]; then \
+		mkdir -p "$(php_audit_tools)" && t=$$(mktemp -d "$(php_audit_tools)/.fetch.XXXXXX") || exit 1; \
+		echo "==> Fetching nikic/php-parser $$ver from GitHub" >&2; \
+		if curl -fsSL $(curl_retry) "$$url" -o "$$t/src.tar.gz" && mkdir "$$t/x" \
+			&& tar -xzf "$$t/src.tar.gz" -C "$$t/x" --strip-components=1 --no-same-owner \
+			&& [ -f "$$t/x/lib/PhpParser/ParserFactory.php" ] && : >"$$t/x/.complete"; then \
+			[ -e "$$dir" ] || mv "$$t/x" "$$dir"; \
+		else echo "==> Fetching nikic/php-parser $$ver failed, or the download is not its source" >&2; fi; \
+		rm -rf "$$t"; \
+		if [ -e "$$dir/.complete" ] && $(php_audit_idle); then \
+			for d in "$(php_audit_tools)"/php-parser-*; do [ "$$d" = "$$dir" ] || [ ! -d "$$d" ] || rm -rf "$$d"; done; \
+		fi; \
+	fi; \
+	[ -e "$$dir/.complete" ] || { echo "ERROR: no nikic/php-parser $$ver on this host, and GitHub could not provide it" >&2; exit 1; }; \
+	echo "$$dir"' php-audit-fetch
+# The PHP half sees the parser at a mount point of its own; with RUNTIME=bare it
+# is the directory in the cache.
+php_audit_bare   = $(filter bare none,$(RUNTIME))
+php_audit_mount  = /ncmake-php-parser
 
 # == secrets-audit ==
 # gitleaks runs as the Linux binary of its GitHub release, checked against the
@@ -386,7 +435,7 @@ export secrets_ignore_body
 # Appends what the tool returned, after a newline where the file lacks one at its end.
 secrets_ignore_append = f=.gitleaksignore; if [ -s "$$f" ] && [ -n "$$(tail -c1 "$$f")" ]; then echo >> "$$f"; fi; cat "$(secrets_ignore_add)" >> "$$f"
 
-.PHONY: consistency-audit build-verify changelog-lint php-compat php-compat-run install-test install-test-run deps-audit deps-audit-composer secrets-audit secrets-ignore
+.PHONY: consistency-audit build-verify changelog-lint php-compat php-compat-run install-test install-test-run deps-audit deps-audit-composer php-audit php-audit-run secrets-audit secrets-ignore
 
 consistency-audit:
 	@$(audit_core)
@@ -483,6 +532,21 @@ deps-audit: check-app
 
 deps-audit-composer:
 	@$(php_run) 'DEPS_AUDIT_NO_ADVISORIES="$(deps_no_advisories)" php $(deps_dir)/deps-audit.php >$(deps_dir)/composer.json 2>$(deps_dir)/composer.err'
+
+php-audit: check-app
+	@$(audit_core)
+	@$(call ncmake_lib_need,$(php_audit_libs))
+	@echo "==> php-audit$(if $(strip $(ARGS)), $(ARGS)) (nikic/php-parser $(php_audit_version) on PHP $(php_min), RUNTIME=$(RUNTIME))" >&2
+	@pdir=$$($(php_audit_fetch) '$(php_audit_version)' '$(php_audit_url)') || exit 1; \
+	rm -rf $(php_audit_dir) && mkdir -p $(php_audit_dir) && cp "$(ncmake_lib_dir)/php-audit.php" $(php_audit_dir)/ || exit 1; \
+	$(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory php-audit-run PHP=min php_audit_parser="$$pdir" || :; \
+	$(ncmake_lib_read_run) '$(call ncmake_lib_guard,php-audit) PHP_AUDIT_CMDLINE="$(php_audit_cmdline)" PHP_AUDIT_PARSER_VERSION="$(php_audit_version)" node $(ncmake_lib_path)/php-audit.mjs $(ARGS) $(ncmake_json_arg)'
+
+# A failed run leaves no facts.json the analyser can read, and it says so with
+# what the PHP half wrote to facts.err.
+php-audit-run: php_env += $(if $(php_audit_bare),,-v "$(php_audit_parser)":$(php_audit_mount):ro)
+php-audit-run:
+	@$(php_run) 'PHP_AUDIT_PARSER="$(if $(php_audit_bare),$(php_audit_parser),$(php_audit_mount))" php $(php_audit_dir)/php-audit.php appinfo lib templates >$(php_audit_dir)/facts.json 2>$(php_audit_dir)/facts.err'
 
 secrets-audit:
 	@$(audit_core)
@@ -811,6 +875,73 @@ licences the lock file does not record. With
 RUNTIME=bare composer, npm and corepack run on the host.
 endef
 
+define help_php-audit
+make php-audit [ARGS="<audit arguments>"] [JSON=<file>]
+
+What the PHP source of the app has, and whether the server can load and run
+it the way the developer manual describes. Every PHP file in appinfo/, lib/
+and templates/ is parsed with nikic/php-parser; nothing of the app is run.
+
+It reports an inventory: the classes, what Application::register() registers,
+what info.xml names and the background jobs with their kind, interval and
+time sensitivity. And it reports findings:
+
+  class loading    no composer/autoload.php, an autoloader without a class
+                   map or beyond level 1, one that does not map the app
+                   namespace or requires a vendor/ no build writes, a class
+                   in lib/ off its PSR-4 path, psr-0
+  dependencies     a package in vendor/ that the server ships as well, and
+                   development tools in require-dev of the root
+  public API       OC\ and OC_ classes and OC::$$server, a class that
+                   implements what the API marks Consumable, the logging
+                   methods of ILogger
+  registrations    a class info.xml names that is missing or is not what the
+                   server expects there, the same for a setup check, an
+                   expensive repair step outside post-migration, a job that
+                   overrides execute(), appinfo/install.php and update.php
+  performance      a DAV plugin on propFind without preloadCollection, a
+                   user loaded for its display name, transactions by hand,
+                   a timed job without time sensitivity, a listener or a
+                   service query in boot()
+  platform         time() and new DateTime() in lib/, app config without a
+                   lexicon, HTTP requests past IClientService
+
+What the server has in which major is not written into ncmake: it is the
+package nextcloud/ocp and composer.lock of nextcloud/3rdparty per major, kept
+in data/ of ncmake. A finding that depends on a major is held against the
+range info.xml declares, so "the last major that has it" is read, not known.
+A class is judged by what it extends only where all of that is a class of the
+app, of the public API or of PHP.
+
+The finding on HTTP requests carries "security": true in the JSON: a report
+published about the apps of others leaves such a finding out, and the
+maintainer sees it here in full.
+
+The parser is the release data/tools.json names, fetched once as the tarball
+of its commit into tools/ of the ncmake cache and mounted read-only into the
+build image of the PHP floor. Nothing is installed into the app, and no
+composer.json or composer.lock changes.
+
+Examples:
+  make php-audit                        the inventory and the findings
+  make php-audit ARGS=--details         every place of a finding
+  make php-audit ARGS=--json > php.json  machine-readable, nothing else
+  make php-audit JSON=php.json          the report, and the JSON in php.json
+  make php-audit ARGS=--help            the analyser's own option list
+
+The report is written to build/reports/php-audit.txt and
+build/reports/php-audit.json, and the exit code is 0 with or without findings:
+it is 2 when the run itself could not be carried out. What the PHP half read
+stays in build/php-audit.
+
+JSON=<file> writes the JSON of ARGS=--json to <file> as well, from the same run,
+and the report is printed as without it. The file can lie outside the app; it is
+replaced once the run is complete, and a run that stops on an error writes none.
+
+It needs the network once, for the parser. With RUNTIME=bare php runs on the
+host.
+endef
+
 define help_secrets-audit
 make secrets-audit [SCOPE=shipped|history|all] [TARBALL=<file>]
                    [COMMITS=<range>] [ARGS="<audit arguments>"] [JSON=<file>]
@@ -1116,6 +1247,8 @@ help::
 	@echo "    $(cd)optional $(cv)NC=all$(cd), see $(cv)make help-install-test$(c0)"
 	@echo "  $(ct)deps-audit$(c0)           Whether a dependency that ships has a published vulnerability or a licence the app cannot ship"
 	@echo "    $(cd)optional $(cv)ARGS=\"--details\"$(cd), $(cv)NO_ADVISORIES=1$(cd), see $(cv)make help-deps-audit$(c0)"
+	@echo "  $(ct)php-audit$(c0)            What the PHP source has, and whether the server can load and run it as the manual describes"
+	@echo "    $(cd)optional $(cv)ARGS=\"--details\"$(cd), see $(cv)make help-php-audit$(c0)"
 	@echo "  $(ct)secrets-audit$(c0)        Whether a key or a token is in what ships, or in the history"
 	@echo "    $(cd)optional $(cv)SCOPE=shipped|history$(cd), $(cv)ARGS=\"--reveal\"$(cd), see $(cv)make help-secrets-audit$(c0)"
 	@echo "  $(ct)secrets-ignore$(c0)       Add the findings of secrets-audit that are false positives to .gitleaksignore  $(cm)[m]$(c0)"
