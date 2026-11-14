@@ -50,6 +50,14 @@
 # without a word and fails on every request; only the log says so. The runs
 # leave their output under build/install-test, which the analyser then reads.
 #
+# runtime-audit goes further on the same server: it uses what make php-audit
+# lists in its inventory. Every route is requested without credentials and as a
+# user or the admin, every command of the app runs with --help, every background
+# job of the app once, then come the setup checks, the settings pages, the
+# capabilities, WebDAV, and disabling and enabling the app again, all at log
+# level 0. Each step marks the lines of the log it wrote, so the analyser can
+# tell which request, command or job logged what. It exits 0 with findings.
+#
 # deps-audit asks the package managers' own audits whether a dependency that
 # ships has a published vulnerability: composer audit over composer.lock in the
 # build image of the PHP floor, and the audit of npm, pnpm or yarn over the npm
@@ -89,7 +97,7 @@
 # separate file costs nothing beyond its own header: fetching the analysers is the
 # core's, under "Analyser libraries" there.
 #
-# The same discovery rule is why build-verify, changelog-lint, php-compat, install-test, deps-audit, php-audit and secrets-audit are
+# The same discovery rule is why build-verify, changelog-lint, php-compat, install-test, runtime-audit, deps-audit, php-audit and secrets-audit are
 # targets in this file and not modules of their own: a new module file reaches a machine only on the
 # next dev-init, while a target added to a file the cache already holds arrives with
 # the next refresh.
@@ -108,6 +116,7 @@ verify_libs      = build-verify.mjs bundler-config.mjs lockfile.mjs report-text.
 changelog_libs   = changelog-lint.mjs data.mjs report-text.mjs data/appstore.json
 compat_libs      = php-compat.mjs report-text.mjs
 install_libs     = install-test.mjs install-test.sh report-text.mjs
+runtime_libs     = runtime-audit.mjs runtime-audit.sh runtime-audit.php report-text.mjs
 deps_libs        = deps-audit.mjs built-assets.mjs bundler-config.mjs data.mjs deps-audit.php licences.json lockfile.mjs report-text.mjs scratch-build.mjs data/spdx-licenses.json
 php_audit_libs   = php-audit.mjs php-audit.php data.mjs report-text.mjs data/nextcloud-3rdparty.json data/nextcloud-ocp.json data/nextcloud-server.json
 secrets_libs     = secrets-audit.mjs data.mjs secrets-placeholders.json report-text.mjs data/composer-auth.json data/gitleaks-rules.json
@@ -116,6 +125,7 @@ secrets_libs     = secrets-audit.mjs data.mjs secrets-placeholders.json report-t
 # section: appended, never set, because every analyser module adds its own.
 ncmake_libs += $(if $(filter consistency-audit,$(MAKECMDGOALS)),$(consistency_libs)) $(if $(filter build-verify,$(MAKECMDGOALS)),$(verify_libs)) $(if $(filter changelog-lint,$(MAKECMDGOALS)),$(changelog_libs)) $(if $(filter php-compat,$(MAKECMDGOALS)),$(compat_libs)) $(if $(filter deps-audit,$(MAKECMDGOALS)),$(deps_libs)) $(if $(filter secrets-audit,$(MAKECMDGOALS)),$(secrets_libs))
 ncmake_libs += $(if $(filter install-test,$(MAKECMDGOALS)),$(install_libs))
+ncmake_libs += $(if $(filter runtime-audit,$(MAKECMDGOALS)),$(runtime_libs))
 ncmake_libs += $(if $(filter php-audit,$(MAKECMDGOALS)),$(php_audit_libs))
 
 # The app is mounted at /app inside the container, so the mount point cannot tell
@@ -141,6 +151,7 @@ verify_cmdline = make build-verify ARGS=\"%s\"
 changelog_cmdline = make changelog-lint ARGS=\"%s\"
 compat_cmdline    = make php-compat ARGS=\"%s\"
 install_cmdline   = make install-test ARGS=\"%s\"
+runtime_cmdline   = make runtime-audit ARGS=\"%s\"
 deps_cmdline      = make deps-audit ARGS=\"%s\"
 php_audit_cmdline = make php-audit ARGS=\"%s\"
 secrets_cmdline   = make secrets-audit ARGS=\"%s\"
@@ -218,7 +229,30 @@ install_dir    = build/install-test
 # in a make of its own, because image_prep takes the image as make expands it.
 # The container publishes no port: the requests come from inside it.
 install_container = $(or $(container_root),$(container))
-install_core = $(if $(filter bare none,$(RUNTIME)),echo "ERROR: install-test starts a server image and needs podman or docker (RUNTIME=$(RUNTIME))" >&2; exit 1,$(if $(value container_prep),:,echo "ERROR: install-test needs a newer ncmake core - run 'make self-update'" >&2; exit 1))
+server_core = $(if $(filter bare none,$(RUNTIME)),echo "ERROR: $(1) starts a server image and needs podman or docker (RUNTIME=$(RUNTIME))" >&2; exit 1,$(if $(value container_prep),:,echo "ERROR: $(1) needs a newer ncmake core - run 'make self-update'" >&2; exit 1))
+# The majors a server target runs on, as shell for the start of its recipe: the
+# lowest and the highest the app declares that a server image exists for; NC=all
+# adds the ones in between, NC="<tag> ..." names them. It sets min, max, first,
+# master and tags.
+server_tags = eol='$(nc_eol)'; master='$(nc_master)'; min='$(nc_min)'; max='$(nc_max)'; \
+	[ -n "$$eol" ] && [ -n "$$master" ] || { echo "ERROR: no Nextcloud majors - $(ncmake_raw)/data/nextcloud-server.json could not be fetched - network?" >&2; exit 1; }; \
+	first=$$((eol + 1)); lo=$${min:-$$first}; [ "$$lo" -ge "$$first" ] || lo=$$first; hi=$${max:-$$master}; [ "$$hi" -le "$$master" ] || hi=$$master; \
+	case '$(NC)' in \
+		'') tags=; [ "$$lo" -gt "$$hi" ] || tags=$$(printf '%s\n' "$$lo" "$$hi" | sort -un) ;; \
+		all) tags=; [ "$$lo" -gt "$$hi" ] || tags=$$(seq "$$lo" "$$hi") ;; \
+		*[!0-9a-z\ ]*) echo "ERROR: NC names server majors or master, separated by spaces: '$(NC)'" >&2; exit 1 ;; \
+		*) tags='$(NC)' ;; \
+	esac; \
+	tags=$$(for t in $$tags; do if [ "$$t" = "$$master" ]; then echo master; else echo "$$t"; fi; done | sort -u | sort -V | tr '\n' ' '); tags=$${tags% };
+
+# == runtime-audit ==
+# The same server images. The plan, the server half and its settings helper are
+# copied into build/runtime-audit, where the container sees them; each tag runs
+# in a make of its own, as install-test does. runtime_params in ncmake.mk names
+# values for route parameters, "<name>=<value> ...": a route whose path has a
+# parameter with neither a default nor a value there is not requested.
+runtime_dir     = build/runtime-audit
+runtime_params ?=
 
 # deps-audit runs composer audit where make build resolves the dependencies, in
 # the build image of the PHP floor, in a make of its own as php-compat does. The
@@ -435,7 +469,7 @@ export secrets_ignore_body
 # Appends what the tool returned, after a newline where the file lacks one at its end.
 secrets_ignore_append = f=.gitleaksignore; if [ -s "$$f" ] && [ -n "$$(tail -c1 "$$f")" ]; then echo >> "$$f"; fi; cat "$(secrets_ignore_add)" >> "$$f"
 
-.PHONY: consistency-audit build-verify changelog-lint php-compat php-compat-run install-test install-test-run deps-audit deps-audit-composer php-audit php-audit-run secrets-audit secrets-ignore
+.PHONY: consistency-audit build-verify changelog-lint php-compat php-compat-run install-test install-test-run runtime-audit runtime-audit-run deps-audit deps-audit-composer php-audit php-audit-run secrets-audit secrets-ignore
 
 consistency-audit:
 	@$(audit_core)
@@ -489,22 +523,14 @@ php-compat: check-app
 php-compat-run:
 	@$(php_run) '$(compat_run)'
 
-# The majors run are the lowest and the highest the app declares that a server
-# image exists for; NC=all adds the ones in between, NC="<tag> ..." names them.
-install-test: stage
+# The staging runs first, its output on stderr, so ARGS=--json prints the JSON
+# and nothing else.
+install-test: check-app
+	@$(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory stage >&2
 	@$(audit_core)
-	@$(install_core)
+	@$(call server_core,install-test)
 	@$(call ncmake_lib_need,$(install_libs))
-	@eol='$(nc_eol)'; master='$(nc_master)'; min='$(nc_min)'; max='$(nc_max)'; \
-	[ -n "$$eol" ] && [ -n "$$master" ] || { echo "ERROR: no Nextcloud majors - $(ncmake_raw)/data/nextcloud-server.json could not be fetched - network?" >&2; exit 1; }; \
-	first=$$((eol + 1)); lo=$${min:-$$first}; [ "$$lo" -ge "$$first" ] || lo=$$first; hi=$${max:-$$master}; [ "$$hi" -le "$$master" ] || hi=$$master; \
-	case '$(NC)' in \
-		'') tags=; [ "$$lo" -gt "$$hi" ] || tags=$$(printf '%s\n' "$$lo" "$$hi" | sort -un) ;; \
-		all) tags=; [ "$$lo" -gt "$$hi" ] || tags=$$(seq "$$lo" "$$hi") ;; \
-		*[!0-9a-z\ ]*) echo "ERROR: NC names server majors or master, separated by spaces: '$(NC)'" >&2; exit 1 ;; \
-		*) tags='$(NC)' ;; \
-	esac; \
-	tags=$$(for t in $$tags; do if [ "$$t" = "$$master" ]; then echo master; else echo "$$t"; fi; done | sort -u | sort -V | tr '\n' ' '); tags=$${tags% }; \
+	@$(server_tags) \
 	echo "==> install-test on Nextcloud $${tags:-none} (RUNTIME=$(RUNTIME))" >&2; \
 	rm -rf $(install_dir) && mkdir -p $(install_dir) || exit 1; \
 	printf 'min=%s\nmax=%s\nfirst=%s\nmaster=%s\ntags=%s\n' "$$min" "$$max" "$$first" "$$master" "$$tags" >$(install_dir)/range; \
@@ -517,6 +543,30 @@ install-test: stage
 
 install-test-run:
 	@$(call container_prep,$(install_image):$(install_tag)) && $(install_container) $(install_image):$(install_tag) sh $(install_dir)/install-test.sh '$(app_id)' $(install_dir)/$(install_tag)
+
+# php-audit runs first: its inventory, build/reports/php-audit.json, is what the
+# plan and the analyser read. Its own report is not printed here, and the
+# staging prints on stderr, as for install-test.
+runtime-audit: check-app
+	@$(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory stage >&2
+	@$(audit_core)
+	@$(call server_core,runtime-audit)
+	@$(call ncmake_lib_need,$(runtime_libs))
+	@$(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory php-audit ARGS= JSON= >/dev/null || exit 1
+	@$(server_tags) \
+	echo "==> runtime-audit on Nextcloud $${tags:-none} (RUNTIME=$(RUNTIME))" >&2; \
+	rm -rf $(runtime_dir) && mkdir -p $(runtime_dir) || exit 1; \
+	printf 'min=%s\nmax=%s\nfirst=%s\nmaster=%s\ntags=%s\n' "$$min" "$$max" "$$first" "$$master" "$$tags" >$(runtime_dir)/range; \
+	cp "$(ncmake_lib_dir)/runtime-audit.sh" "$(ncmake_lib_dir)/runtime-audit.php" $(runtime_dir)/ || exit 1; \
+	$(ncmake_lib_read_run) '$(call ncmake_lib_guard,runtime-audit) RUNTIME_AUDIT_PARAMS="$(runtime_params)" node $(ncmake_lib_path)/runtime-audit.mjs --plan' || exit 1; \
+	for t in $$tags; do \
+		echo "==> Nextcloud $$t" >&2; mkdir -p $(runtime_dir)/$$t; \
+		$(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory runtime-audit-run install_tag=$$t || echo "$$?" >$(runtime_dir)/$$t/failed; \
+	done; \
+	$(ncmake_lib_read_run) '$(call ncmake_lib_guard,runtime-audit) RUNTIME_AUDIT_CMDLINE="$(runtime_cmdline)" RUNTIME_AUDIT_PARAMS="$(runtime_params)" node $(ncmake_lib_path)/runtime-audit.mjs $(ARGS) $(ncmake_json_arg)'
+
+runtime-audit-run:
+	@$(call container_prep,$(install_image):$(install_tag)) && $(install_container) $(install_image):$(install_tag) sh $(runtime_dir)/runtime-audit.sh '$(app_id)' $(runtime_dir)/$(install_tag)
 
 deps-audit: check-app
 	@$(audit_core)
@@ -734,6 +784,67 @@ It needs the network for the images, and on the first run for
 data/nextcloud-server.json of ncmake, which holds what versioncheck.php says. With RUNTIME=bare it
 runs on the PHP of the host, once per minor, and says so; the PHP ahead of
 master, which only its image carries, is left out there.
+endef
+
+define help_runtime-audit
+make runtime-audit [NC=all|"<major> ..."] [ARGS="<analyser arguments>"] [JSON=<file>]
+
+Uses what the app registers on a real Nextcloud server and reads the log of
+the server for each step. Run make build first.
+
+It runs make php-audit first, whose inventory lists the routes, commands,
+background jobs, setup checks, settings and capabilities of the app, then
+starts the same servers as make install-test: the lowest and the highest
+major the app declares that an image exists for, NC=all every major in
+between as well, each from $(install_image).
+On each the staged app is enabled at log level 0, with occ upgrade where
+a newer release of an app the server ships asks for it, and then:
+  every route is requested once without credentials and once as a user, or
+  as the admin where the route declares neither NoAdminRequired nor
+  PublicPage; a route parameter is filled from the defaults of the route or
+  from runtime_params in ncmake.mk ("<name>=<value> ..."), and a route with
+  a parameter left over is not requested
+  every command of the app runs with --help, every background job in the
+  namespace of the app once with occ background-job:execute --force-execute
+  occ setupchecks, the settings pages of the app as the admin, the
+  capabilities, a PROPFIND with Depth: 1, and disabling and enabling the app
+  again
+
+  [!] occ app:enable fails, or the occ upgrade it asks for
+  [!] a route of the inventory is not in occ router:list
+  [!] a route answers with a server error, or the server cannot build its
+      controller
+  [!] a route without PublicPage answers 2xx without credentials
+  [!] a command of info.xml is missing, or --help fails
+  [!] a job of info.xml is not listed, or it fails
+  [!] a setup check of the app is not listed, or it throws
+  [!] a settings form of info.xml is not loaded, or its page is no 200
+  [!] the capabilities, WebDAV, or disabling and enabling again fail
+  [!] the log has an error, "dirty table reads", a transaction longer than
+      1s or a deadlock that reaches the app: logged for the app, or with a
+      file or a class of the app in its trace
+  [i] a PHP deprecation that reaches the app
+  [i] routes not requested for want of a parameter value
+  [i] the app registers a capability, and no new key appears
+
+The route that answers without credentials carries "security": true in the
+JSON: a report published about the apps of others leaves it out, and the
+maintainer sees it here in full.
+
+The container publishes no port and is removed after the run. What each run
+left stays in build/runtime-audit/<tag>: the steps with their status, the
+output of occ, and nextcloud.log.
+
+Examples:
+  make build && make runtime-audit      the lowest and the highest major
+  make runtime-audit NC=master          only master
+  make runtime-audit ARGS=--details     every entry behind the findings
+  make runtime-audit JSON=runtime.json  the report, and the JSON in runtime.json
+  make runtime-audit ARGS=--help        the analyser's own option list
+
+The report is written to build/reports/runtime-audit.txt and
+build/reports/runtime-audit.json, and the exit code is 0 with or without
+findings.
 endef
 
 define help_install-test
@@ -1261,6 +1372,8 @@ help::
 	@echo "    $(cd)optional $(cv)PHP=all$(cd), see $(cv)make help-php-compat$(c0)"
 	@echo "  $(ct)install-test$(c0)         Whether the packaged app installs and runs on the servers it declares"
 	@echo "    $(cd)optional $(cv)NC=all$(cd), see $(cv)make help-install-test$(c0)"
+	@echo "  $(ct)runtime-audit$(c0)        Whether the routes, commands, jobs and settings of the app work on a real server"
+	@echo "    $(cd)optional $(cv)NC=all$(cd), $(cv)ARGS=\"--details\"$(cd), see $(cv)make help-runtime-audit$(c0)"
 	@echo "  $(ct)deps-audit$(c0)           Whether a dependency that ships has a published vulnerability or a licence the app cannot ship"
 	@echo "    $(cd)optional $(cv)ARGS=\"--details\"$(cd), $(cv)NO_ADVISORIES=1$(cd), see $(cv)make help-deps-audit$(c0)"
 	@echo "  $(ct)php-audit$(c0)            What the PHP source has, and whether the server can load and run it as the manual describes"
