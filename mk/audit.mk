@@ -109,7 +109,7 @@ changelog_libs   = changelog-lint.mjs data.mjs report-text.mjs data/appstore.jso
 compat_libs      = php-compat.mjs report-text.mjs
 install_libs     = install-test.mjs install-test.sh report-text.mjs
 deps_libs        = deps-audit.mjs built-assets.mjs bundler-config.mjs data.mjs deps-audit.php licences.json lockfile.mjs report-text.mjs scratch-build.mjs data/spdx-licenses.json
-php_audit_libs   = php-audit.mjs php-audit.php data.mjs report-text.mjs data/nextcloud-3rdparty.json data/nextcloud-ocp.json
+php_audit_libs   = php-audit.mjs php-audit.php data.mjs report-text.mjs data/nextcloud-3rdparty.json data/nextcloud-ocp.json data/nextcloud-server.json
 secrets_libs     = secrets-audit.mjs data.mjs secrets-placeholders.json report-text.mjs data/composer-auth.json data/gitleaks-rules.json
 
 # What the goals on this command line need, handed to the core's analyser library
@@ -884,7 +884,10 @@ and templates/ is parsed with nikic/php-parser; nothing of the app is run.
 
 It reports an inventory: the classes, what Application::register() registers,
 what info.xml names and the background jobs with their kind, interval and
-time sensitivity. And it reports findings:
+time sensitivity. And every endpoint the app adds to a server: the routes of
+appinfo/routes.php and of the route attributes with verb, path, controller
+method, access attributes and OpenAPI scope, the DAV plugins and the
+capabilities. And it reports findings:
 
   class loading    no composer/autoload.php, an autoloader without a class
                    map or beyond level 1, one that does not map the app
@@ -905,17 +908,30 @@ time sensitivity. And it reports findings:
                    service query in boot()
   platform         time() and new DateTime() in lib/, app config without a
                    lexicon, HTTP requests past IClientService
+  endpoints        a route whose controller class or method is missing, a
+                   route declared twice, one nothing in the app calls, a URL
+                   of the frontend no route matches, a public controller
+                   method no route reaches, CSRF switched off on a route
+                   that changes state, a public page without rate limit,
+                   access declared by annotation only, an OpenAPI
+                   specification that differs from the OCS routes or is
+                   missing
 
 What the server has in which major is not written into ncmake: it is the
 package nextcloud/ocp and composer.lock of nextcloud/3rdparty per major, kept
-in data/ of ncmake. A finding that depends on a major is held against the
+in data/ of ncmake, and so is the list of apps whose routes may state their
+root, from the route parser of nextcloud/server. A finding that depends on a major is held against the
 range info.xml declares, so "the last major that has it" is read, not known.
 A class is judged by what it extends only where all of that is a class of the
 app, of the public API or of PHP.
 
-The finding on HTTP requests carries "security": true in the JSON: a report
-published about the apps of others leaves such a finding out, and the
-maintainer sees it here in full.
+The finding on HTTP requests and the three on access (CSRF, rate limit,
+annotations) carry "security": true in the JSON: a report published about the
+apps of others leaves such a finding out, and the maintainer sees it here in
+full.
+
+The routes are read, not requested: a route that is no constant in the source
+is named as unread, and what needs the full list of routes is then left out.
 
 The parser is the release data/tools.json names, fetched once as the tarball
 of its commit into tools/ of the ncmake cache and mounted read-only into the
