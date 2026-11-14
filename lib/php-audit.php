@@ -12,7 +12,8 @@
 //     error      why the file could not be parsed, and nothing else
 //     classes    name, kind, line, abstract, extends, implements, traits,
 //                attributes and, per method, line, visibility, static, abstract,
-//                attributes and the annotations of its doc comment
+//                attributes and the annotations of its doc comment; attrs has
+//                each attribute once more with its line and its arguments
 //     refs       per class name the file uses, the first line that does
 //     news       [line, class, arguments] of every new <class>
 //     funcs      [line, function, arguments] of every call of a named function
@@ -22,9 +23,17 @@
 //                method it stands in, the type of what it is called on where
 //                the file states it, and for a call on the result of another
 //                call the name and the receiver of that one
+//     returns    in appinfo/ only: what the file returns, the way appinfo/routes.php
+//                returns its routes
+//     registered [line, routes] of every call of registerRoutes()
 // An argument is written where it is a constant: c:<class> for <class>::class,
 // k:<class>::<NAME> for a class constant, n:<class> for new <class>, s:<text>,
+// p:<text> for a text that goes on with something that is no constant,
 // i:<number>, b:true, b:false, b:null; anything else is null.
+// The arguments of an attribute, what a file returns and the routes of
+// registerRoutes() are written as values: a scalar, an array of values,
+// {"$const": "<class>::<NAME>"} for a class constant and {"$unknown": true}
+// for what is no constant.
 //
 // This states what the source says and judges nothing: which of it is worth a
 // finding depends on the majors the app declares, and that is the analyser's.
@@ -63,6 +72,8 @@ spl_autoload_register(static function (string $class) use ($parserDir): void {
 
 const MAX_ARGS = 4;
 const MAX_TEXT = 200;
+const MAX_DEPTH = 8;
+const UNKNOWN = ['$unknown' => true];
 
 final class Facts extends NodeVisitorAbstract
 {
@@ -72,6 +83,7 @@ final class Facts extends NodeVisitorAbstract
 	public array $funcs = [];
 	public array $ocserver = [];
 	public array $calls = [];
+	public array $registered = [];
 
 	/** @var list<array{name: ?string, parent: ?string, props: array<string, string>, record: ?int}> */
 	private array $classStack = [];
@@ -175,12 +187,100 @@ final class Facts extends NodeVisitorAbstract
 		try {
 			$value = $this->evaluator->evaluateSilently($e);
 		} catch (\Throwable $ex) {
+			// A text that goes on with a variable still says how it starts.
+			$lead = $e;
+			while ($lead instanceof Expr\BinaryOp\Concat) {
+				$lead = $lead->left;
+			}
+			if ($lead instanceof Node\Scalar\InterpolatedString) {
+				$lead = $lead->parts[0] ?? null;
+			}
+			if ($lead !== $e && ($lead instanceof Node\Scalar\String_ || $lead instanceof Node\InterpolatedStringPart)) {
+				return 'p:' . substr($lead->value, 0, MAX_TEXT);
+			}
 			return null;
 		}
 		if (is_int($value)) {
 			return 'i:' . $value;
 		}
 		return is_string($value) ? 's:' . substr($value, 0, MAX_TEXT) : null;
+	}
+
+	/**
+	 * What an expression is worth where it is a constant: a scalar, an array
+	 * of values, ['$const' => <class>::<NAME>] for a class constant, whose
+	 * value another file has, and UNKNOWN for anything else. One element that
+	 * is no constant leaves the rest of its array readable.
+	 *
+	 * @return mixed
+	 */
+	public function value(Node $e, int $depth = 0)
+	{
+		if ($e instanceof Expr\Array_) {
+			if ($depth >= MAX_DEPTH) {
+				return UNKNOWN;
+			}
+			$out = [];
+			foreach ($e->items as $item) {
+				if ($item === null || $item->unpack) {
+					$out[] = UNKNOWN;
+					continue;
+				}
+				$value = $this->value($item->value, $depth + 1);
+				if ($item->key === null) {
+					$out[] = $value;
+					continue;
+				}
+				$key = $this->value($item->key, $depth + 1);
+				if (is_string($key) || is_int($key)) {
+					$out[$key] = $value;
+				} else {
+					$out[] = UNKNOWN;
+				}
+			}
+			return $out;
+		}
+		if ($e instanceof Expr\ClassConstFetch) {
+			if (!($e->class instanceof Name) || !($e->name instanceof Node\Identifier)) {
+				return UNKNOWN;
+			}
+			$class = $this->className($e->class);
+			if ($class === null) {
+				return UNKNOWN;
+			}
+			return $e->name->name === 'class' ? $class : ['$const' => $class . '::' . $e->name->name];
+		}
+		if ($e instanceof Expr\ConstFetch) {
+			$name = $e->name->toLowerString();
+			return $name === 'true' ? true : ($name === 'false' ? false : ($name === 'null' ? null : UNKNOWN));
+		}
+		try {
+			$value = $this->evaluator->evaluateSilently($e);
+		} catch (\Throwable $ex) {
+			return UNKNOWN;
+		}
+		return is_scalar($value) || $value === null ? $value : UNKNOWN;
+	}
+
+	/**
+	 * Every attribute with its line and its arguments: a named argument under
+	 * its name, any other under its position.
+	 *
+	 * @param Node\AttributeGroup[] $groups
+	 */
+	private function attrs(array $groups): array
+	{
+		$out = [];
+		foreach ($groups as $group) {
+			foreach ($group->attrs as $attr) {
+				$args = [];
+				foreach ($attr->args as $i => $arg) {
+					$args[$arg->name !== null ? $arg->name->name : $i] = $this->value($arg->value);
+				}
+				$out[] = ['name' => $attr->name->toString(), 'line' => $attr->getStartLine(), 'args' => $args === [] ? new stdClass() : $args];
+			}
+		}
+		return $out;
 	}
 
 	/** @param array<Node\Arg|Node\VariadicPlaceholder> $args */
@@ -250,6 +350,7 @@ final class Facts extends NodeVisitorAbstract
 					'static' => $stmt->isStatic(),
 					'abstract' => $stmt->isAbstract() || $node instanceof Stmt\Interface_,
 					'attributes' => self::attributes($stmt->attrGroups),
+					'attrs' => $this->attrs($stmt->attrGroups),
 					'annotations' => array_values(array_unique($m[1])),
 				];
 				if ($stmt->name->toLowerString() !== '__construct') {
@@ -289,6 +390,7 @@ final class Facts extends NodeVisitorAbstract
 			'implements' => $node instanceof Stmt\Class_ || $node instanceof Stmt\Enum_ ? array_map(static fn (Name $n) => $n->toString(), $node->implements) : [],
 			'traits' => $traits,
 			'attributes' => self::attributes($node->attrGroups),
+			'attrs' => $this->attrs($node->attrGroups),
 			'methods' => $methods === [] ? new stdClass() : $methods,
 		];
 	}
@@ -368,6 +470,9 @@ final class Facts extends NodeVisitorAbstract
 			}
 			$this->calls[] = [$line, $this->currentClass(), $this->currentMethod(), $node->name->name,
 				$this->typeOf($on), $innerName, $innerType, $this->arguments($node->args)];
+			if ($node->name->name === 'registerRoutes' && isset($node->args[1]) && $node->args[1] instanceof Node\Arg) {
+				$this->registered[] = [$line, $this->value($node->args[1]->value)];
+			}
 		}
 		return null;
 	}
@@ -414,7 +519,23 @@ foreach ($files as $path) {
 		$facts = new Facts();
 		$traverser = new NodeTraverser();
 		$traverser->addVisitor($facts);
-		$traverser->traverse($resolver->traverse($parser->parse($code) ?? []));
+		$ast = $resolver->traverse($parser->parse($code) ?? []);
+		$traverser->traverse($ast);
+		// What a file of appinfo/ returns: the last return at its top level.
+		$returns = null;
+		if (strncmp($path, 'appinfo/', 8) === 0) {
+			$top = $ast;
+			foreach ($ast as $stmt) {
+				if ($stmt instanceof Stmt\Namespace_) {
+					$top = array_merge($top, $stmt->stmts);
+				}
+			}
+			foreach ($top as $stmt) {
+				if ($stmt instanceof Stmt\Return_ && $stmt->expr !== null) {
+					$returns = ['line' => $stmt->getStartLine(), 'value' => $facts->value($stmt->expr)];
+				}
+			}
+		}
 	} catch (\Throwable $e) {
 		$out[$path] = ['error' => $e->getMessage()];
 		continue;
@@ -426,7 +547,11 @@ foreach ($files as $path) {
 		'funcs' => $facts->funcs,
 		'ocserver' => $facts->ocserver,
 		'calls' => $facts->calls,
+		'registered' => $facts->registered,
 	];
+	if ($returns !== null) {
+		$out[$path]['returns'] = $returns;
+	}
 }
 
 $json = json_encode(
