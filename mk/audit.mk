@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
 # SPDX-License-Identifier: MIT
 #
-# ncmake developer module: seven checks on a checkout.
+# ncmake developer module: ten checks on a checkout.
 #
 # consistency-audit reads the metadata of a checkout and holds the statements it
 # finds against each other: the version in appinfo/info.xml against the ones in
@@ -58,6 +58,17 @@
 # level 0. Each step marks the lines of the log it wrote, so the analyser can
 # tell which request, command or job logged what. It exits 0 with findings.
 #
+# profile asks what the app costs a server: the same server with nextcloud/profiler
+# enabled and its caches on Redis, the Redis image of Nextcloud All-in-One in a
+# container beside it. A fixed set of requests that are not the app's - WebDAV,
+# the dashboard, OCS - runs without the app, with its previous release and with
+# the staged app, and the GET routes of the app and the requests profile_requests
+# names run with both releases. Each phase warms up first and then repeats its
+# requests; the analyser compares the lowest query count of each request, which
+# is stable where times are not, and names the queries the app adds, the ones it
+# repeats, and the ones it has more than its previous release. It exits 0 with
+# findings.
+#
 # deps-audit asks the package managers' own audits whether a dependency that
 # ships has a published vulnerability: composer audit over composer.lock in the
 # build image of the PHP floor, and the audit of npm, pnpm or yarn over the npm
@@ -97,7 +108,7 @@
 # separate file costs nothing beyond its own header: fetching the analysers is the
 # core's, under "Analyser libraries" there.
 #
-# The same discovery rule is why build-verify, changelog-lint, php-compat, install-test, runtime-audit, deps-audit, php-audit and secrets-audit are
+# The same discovery rule is why build-verify, changelog-lint, php-compat, install-test, runtime-audit, profile, deps-audit, php-audit and secrets-audit are
 # targets in this file and not modules of their own: a new module file reaches a machine only on the
 # next dev-init, while a target added to a file the cache already holds arrives with
 # the next refresh.
@@ -116,7 +127,8 @@ verify_libs      = build-verify.mjs bundler-config.mjs lockfile.mjs report-text.
 changelog_libs   = changelog-lint.mjs data.mjs report-text.mjs data/appstore.json
 compat_libs      = php-compat.mjs report-text.mjs
 install_libs     = install-test.mjs install-test.sh report-text.mjs
-runtime_libs     = runtime-audit.mjs runtime-audit.sh runtime-audit.php report-text.mjs
+runtime_libs     = runtime-audit.mjs runtime-audit.sh runtime-audit.php route-plan.mjs report-text.mjs
+profile_libs     = profile.mjs profile.sh profile.php route-plan.mjs report-text.mjs
 deps_libs        = deps-audit.mjs built-assets.mjs bundler-config.mjs data.mjs deps-audit.php licences.json lockfile.mjs report-text.mjs scratch-build.mjs data/spdx-licenses.json
 php_audit_libs   = php-audit.mjs php-audit.php data.mjs report-text.mjs data/nextcloud-3rdparty.json data/nextcloud-ocp.json data/nextcloud-server.json
 secrets_libs     = secrets-audit.mjs data.mjs secrets-placeholders.json report-text.mjs data/composer-auth.json data/gitleaks-rules.json
@@ -126,6 +138,7 @@ secrets_libs     = secrets-audit.mjs data.mjs secrets-placeholders.json report-t
 ncmake_libs += $(if $(filter consistency-audit,$(MAKECMDGOALS)),$(consistency_libs)) $(if $(filter build-verify,$(MAKECMDGOALS)),$(verify_libs)) $(if $(filter changelog-lint,$(MAKECMDGOALS)),$(changelog_libs)) $(if $(filter php-compat,$(MAKECMDGOALS)),$(compat_libs)) $(if $(filter deps-audit,$(MAKECMDGOALS)),$(deps_libs)) $(if $(filter secrets-audit,$(MAKECMDGOALS)),$(secrets_libs))
 ncmake_libs += $(if $(filter install-test,$(MAKECMDGOALS)),$(install_libs))
 ncmake_libs += $(if $(filter runtime-audit,$(MAKECMDGOALS)),$(runtime_libs))
+ncmake_libs += $(if $(filter profile,$(MAKECMDGOALS)),$(profile_libs))
 ncmake_libs += $(if $(filter php-audit,$(MAKECMDGOALS)),$(php_audit_libs))
 
 # The app is mounted at /app inside the container, so the mount point cannot tell
@@ -152,6 +165,7 @@ changelog_cmdline = make changelog-lint ARGS=\"%s\"
 compat_cmdline    = make php-compat ARGS=\"%s\"
 install_cmdline   = make install-test ARGS=\"%s\"
 runtime_cmdline   = make runtime-audit ARGS=\"%s\"
+profile_cmdline   = make profile ARGS=\"%s\"
 deps_cmdline      = make deps-audit ARGS=\"%s\"
 php_audit_cmdline = make php-audit ARGS=\"%s\"
 secrets_cmdline   = make secrets-audit ARGS=\"%s\"
@@ -253,6 +267,23 @@ server_tags = eol='$(nc_eol)'; master='$(nc_master)'; min='$(nc_min)'; max='$(nc
 # parameter with neither a default nor a value there is not requested.
 runtime_dir     = build/runtime-audit
 runtime_params ?=
+
+# == profile ==
+# The same server images, each beside a Redis container whose network it shares:
+# neither publishes a port, and the server reaches Redis on 127.0.0.1. The
+# All-in-One image needs a log level, and takes its password from the
+# environment, which the run sets per container. The highest major the app
+# declares runs unless NC names others: the costs of a request are what is
+# compared, not whether the app runs everywhere, which install-test asks.
+# profile_rounds is how many rounds count after the two that warm up;
+# profile_requests names requests of the app sent as the admin, "<VERB> <path>
+# ...", beside its GET routes. The previous release is PREVIOUS=<tarball or URL>,
+# or else the release before this version in the catalogue of the App Store
+# module, which make fetch-apps keeps; PREVIOUS=none leaves it out.
+profile_dir         = build/profile
+profile_rounds     ?= 5
+profile_requests   ?=
+profile_redis_image ?= ghcr.io/nextcloud-releases/aio-redis:latest
 
 # deps-audit runs composer audit where make build resolves the dependencies, in
 # the build image of the PHP floor, in a make of its own as php-compat does. The
@@ -469,7 +500,7 @@ export secrets_ignore_body
 # Appends what the tool returned, after a newline where the file lacks one at its end.
 secrets_ignore_append = f=.gitleaksignore; if [ -s "$$f" ] && [ -n "$$(tail -c1 "$$f")" ]; then echo >> "$$f"; fi; cat "$(secrets_ignore_add)" >> "$$f"
 
-.PHONY: consistency-audit build-verify changelog-lint php-compat php-compat-run install-test install-test-run runtime-audit runtime-audit-run deps-audit deps-audit-composer php-audit php-audit-run secrets-audit secrets-ignore
+.PHONY: consistency-audit build-verify changelog-lint php-compat php-compat-run install-test install-test-run runtime-audit runtime-audit-run profile profile-run deps-audit deps-audit-composer php-audit php-audit-run secrets-audit secrets-ignore
 
 consistency-audit:
 	@$(audit_core)
@@ -567,6 +598,60 @@ runtime-audit: check-app
 
 runtime-audit-run:
 	@$(call container_prep,$(install_image):$(install_tag)) && $(install_container) $(install_image):$(install_tag) sh $(runtime_dir)/runtime-audit.sh '$(app_id)' $(runtime_dir)/$(install_tag)
+
+# php-audit runs first, as for runtime-audit: its routes are the requests of the
+# app. The previous release is unpacked into build/profile/previous on the host,
+# where the server half finds it; previous.txt says which one it is, or why
+# there is none.
+profile: check-app
+	@$(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory stage >&2
+	@$(audit_core)
+	@$(call server_core,profile)
+	@case '$(profile_rounds)' in ''|*[!0-9]*|0) echo "ERROR: profile_rounds is a number of rounds, 1 or more: '$(profile_rounds)'" >&2; exit 1 ;; esac
+	@$(call ncmake_lib_need,$(profile_libs))
+	@$(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory php-audit ARGS= JSON= >/dev/null || exit 1
+	@$(server_tags) \
+	[ -n '$(NC)' ] || tags=$${tags##* }; \
+	echo "==> profile on Nextcloud $${tags:-none} (RUNTIME=$(RUNTIME))" >&2; \
+	rm -rf $(profile_dir) && mkdir -p $(profile_dir) || exit 1; \
+	printf 'min=%s\nmax=%s\nfirst=%s\nmaster=%s\ntags=%s\nrounds=%s\n' "$$min" "$$max" "$$first" "$$master" "$$tags" '$(profile_rounds)' >$(profile_dir)/range; \
+	cp "$(ncmake_lib_dir)/profile.sh" "$(ncmake_lib_dir)/profile.php" $(profile_dir)/ || exit 1; \
+	$(ncmake_lib_read_run) '$(call ncmake_lib_guard,profile) PROFILE_PARAMS="$(runtime_params)" PROFILE_REQUESTS="$(profile_requests)" node $(ncmake_lib_path)/profile.mjs --plan' || exit 1; \
+	state=; source='$(PREVIOUS)'; version=; \
+	case "$$source" in \
+		none) state=none ;; \
+		'') if [ -z '$(value apps_cache)' ]; then state=no-appstore; \
+			elif $(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory fetch-apps >&2 && cp '$(apps_cache)' $(profile_dir)/apps.json; then \
+				$(ncmake_lib_read_run) '$(call ncmake_lib_guard,profile) node $(ncmake_lib_path)/profile.mjs --previous=$(profile_dir)/apps.json >$(profile_dir)/previous.release' || exit 1; \
+				IFS="$$(printf '\t')" read -r version source <$(profile_dir)/previous.release || state=not-found; \
+			else state=download-failed; fi ;; \
+	esac; \
+	if [ -z "$$state" ]; then \
+		echo "==> previous release $${version:-$$source}" >&2; \
+		case "$$source" in \
+			http://*|https://*) curl -fsSL $(curl_retry) "$$source" -o $(profile_dir)/previous.tar.gz || state=download-failed ;; \
+			*) cp "$$source" $(profile_dir)/previous.tar.gz || state=download-failed ;; \
+		esac; \
+	fi; \
+	if [ -z "$$state" ]; then \
+		mkdir -p $(profile_dir)/previous && tar -xzf $(profile_dir)/previous.tar.gz -C $(profile_dir)/previous 2>/dev/null && [ -f $(profile_dir)/previous/$(app_id)/appinfo/info.xml ] && state=ok || state=unpack; \
+	fi; \
+	[ "$$state" = ok ] || rm -rf $(profile_dir)/previous; \
+	printf 'state=%s\nsource=%s\nversion=%s\n' "$$state" "$$source" "$$version" >$(profile_dir)/previous.txt; \
+	for t in $$tags; do \
+		echo "==> Nextcloud $$t" >&2; mkdir -p $(profile_dir)/$$t; \
+		$(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory profile-run install_tag=$$t || echo "$$?" >$(profile_dir)/$$t/failed; \
+	done; \
+	$(ncmake_lib_read_run) '$(call ncmake_lib_guard,profile) PROFILE_CMDLINE="$(profile_cmdline)" PROFILE_PARAMS="$(runtime_params)" PROFILE_REQUESTS="$(profile_requests)" node $(ncmake_lib_path)/profile.mjs $(ARGS) $(ncmake_json_arg)'
+
+# The password reaches both containers through the environment, not the command
+# line, and the Redis container goes when the run ends, whatever its outcome.
+profile-run:
+	@$(call container_prep,$(profile_redis_image)) && $(call container_prep,$(install_image):$(install_tag)) && \
+	redis=ncmake-profile-$$$$; REDIS_HOST_PASSWORD=$$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n'); export REDIS_HOST_PASSWORD; \
+	trap '$(container_cli) rm -f "$$redis" >/dev/null 2>&1' EXIT; \
+	$(container_cli) run -d --rm --label ncmake --name "$$redis" -e AIO_LOG_LEVEL=warn -e REDIS_HOST_PASSWORD $(profile_redis_image) >/dev/null && \
+	$(install_container) --network container:"$$redis" -e REDIS_HOST_PASSWORD $(install_image):$(install_tag) sh $(profile_dir)/profile.sh '$(app_id)' $(profile_dir)/$(install_tag) $(profile_rounds)
 
 deps-audit: check-app
 	@$(audit_core)
@@ -845,6 +930,73 @@ Examples:
 The report is written to build/reports/runtime-audit.txt and
 build/reports/runtime-audit.json, and the exit code is 0 with or without
 findings.
+endef
+
+define help_profile
+make profile [NC=all|"<major> ..."] [PREVIOUS=<tarball|URL>|none]
+             [ARGS="<analyser arguments>"] [JSON=<file>]
+
+Measures what the app costs a Nextcloud server: the queries, cache operations
+and events of each request, without the app and with it. Run make build first.
+
+It runs make php-audit first, whose inventory lists the routes of the app,
+then starts the highest major the app declares that an image exists for,
+NC=all every declared major, NC="<major> ..." the ones named, each from
+$(install_image),
+with nextcloud/profiler enabled, the server in debug mode, which the profiler
+requires, and its caches on Redis: the image $(profile_redis_image)
+in a container beside it. Three phases run in the same container:
+  base      the server without the app; an app the server ships is disabled
+  previous  the previous release of the app
+  app       the staged app, replacing the previous release as an update would,
+            with occ upgrade where the server asks for it
+Each phase sends its requests twice to warm up and then profile_rounds times
+($(profile_rounds)) to count. The requests that are not the app's: PROPFIND
+with Depth: 1 on the files of the admin and on a folder of 200 files, PUT, GET
+and DELETE of a file, the dashboard, and the OCS capabilities and user.
+status.php is not among them: the profiler records nothing for it. With the
+previous release and the staged app the GET routes of the inventory run as
+well, their parameters filled from runtime_params as for make runtime-audit,
+and the requests profile_requests in ncmake.mk names, "<VERB> <path> ...",
+sent as the admin.
+
+The previous release is the one PREVIOUS names, a tarball or its URL, or else
+the newest release below this version in the App Store catalogue, which the
+App Store module fetches with make fetch-apps; a pre-release counts only when
+this version is one. PREVIOUS=none leaves the phase out.
+
+Each figure is the lowest of the rounds: what the server does now and then
+besides a request only adds to it. A difference counts where both sides
+reached their lowest in two rounds or more, or where it is larger than the
+spread of the rounds; times and memory are shown, and no finding rests on them.
+
+  [!] the app adds queries to a request that is not its own, with the SQL it
+      adds and the frame of the app in its backtrace
+  [!] a request that is not the app's answers otherwise with the app
+  [!] the app runs the same query with the same parameters twice in one
+      request, or the same query with 5 or more different parameters
+  [!] a request has more queries than with the previous release
+  [!] the server did not start, did not reach Redis, or the app does not enable
+  [!] profile_requests is no list of "<VERB> <path>" pairs
+  [i] no server image for a major the app declares
+  [i] the app adds cache operations to a request that is not its own
+  [i] no previous release, or it does not enable on this server
+  [i] routes not measured: no GET, or a parameter without a value
+  [i] a request reached its lowest query count in one round only
+
+Neither container publishes a port, and both are removed after the run. What
+each run left stays in build/profile/<tag>: per phase and round the queries
+with their parameters and backtrace frame, and the cache operations.
+
+Examples:
+  make build && make profile        the highest declared major
+  make profile NC=all               every declared major
+  make profile PREVIOUS=none        without the previous release
+  make profile ARGS=--details       every query behind the findings
+  make profile ARGS=--help          the analyser's own option list
+
+The report is written to build/reports/profile.txt and
+build/reports/profile.json, and the exit code is 0 with or without findings.
 endef
 
 define help_install-test
@@ -1374,6 +1526,8 @@ help::
 	@echo "    $(cd)optional $(cv)NC=all$(cd), see $(cv)make help-install-test$(c0)"
 	@echo "  $(ct)runtime-audit$(c0)        Whether the routes, commands, jobs and settings of the app work on a real server"
 	@echo "    $(cd)optional $(cv)NC=all$(cd), $(cv)ARGS=\"--details\"$(cd), see $(cv)make help-runtime-audit$(c0)"
+	@echo "  $(ct)profile$(c0)              What the app costs the requests of a server, against the server without it and its previous release"
+	@echo "    $(cd)optional $(cv)NC=all$(cd), $(cv)PREVIOUS=<tarball|URL>|none$(cd), see $(cv)make help-profile$(c0)"
 	@echo "  $(ct)deps-audit$(c0)           Whether a dependency that ships has a published vulnerability or a licence the app cannot ship"
 	@echo "    $(cd)optional $(cv)ARGS=\"--details\"$(cd), $(cv)NO_ADVISORIES=1$(cd), see $(cv)make help-deps-audit$(c0)"
 	@echo "  $(ct)php-audit$(c0)            What the PHP source has, and whether the server can load and run it as the manual describes"
