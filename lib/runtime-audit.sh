@@ -166,8 +166,14 @@ begin
 timeout 600 runuser -u www-data -- php "$web/occ" setupchecks --output=json >"$out/setupchecks.json" 2>"$out/setupchecks.err"
 record setupchecks all $?
 
+# A verb that carries a body gets one, as every client of an app sends it: an
+# empty JSON object. A request without a Content-Type is one no client sends, and
+# an app that reads its parameters by the content type rightly refuses it.
 while IFS=$tab read -r name verb as path; do
-	request request "$name:$as" "$verb" "$as" "$path"
+	case $verb in
+		POST | PUT | PATCH) request request "$name:$as" "$verb" "$as" "$path" -H 'Content-Type: application/json' --data '{}' ;;
+		*) request request "$name:$as" "$verb" "$as" "$path" ;;
+	esac
 done <"$dir/plan"
 
 settings >"$out/settings.after"
