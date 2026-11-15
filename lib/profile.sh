@@ -9,8 +9,8 @@
 # Runs as root in a container of ghcr.io/ernolf/ncmake-server, an installed
 # Nextcloud server, with the app checkout as the working directory. The
 # container shares the network of a Redis container, which listens on
-# 127.0.0.1:6379 with the password in REDIS_HOST_PASSWORD: the profiler records
-# cache operations only where the caches are Redis.
+# 127.0.0.1:6379: the profiler records cache operations only where the caches
+# are Redis.
 #
 # With nextcloud/profiler enabled, it sends a fixed set of requests that are
 # not the app's, three times over:
@@ -140,7 +140,7 @@ php -r 'echo PHP_VERSION;' >"$out/php"
 occ status --output=json >"$out/status.json" 2>"$out/status.err"
 
 i=0
-until php -r '$r = new Redis(); exit(@$r->connect("127.0.0.1", 6379, 1.0) && $r->auth(getenv("REDIS_HOST_PASSWORD")) && $r->ping() ? 0 : 1);' 2>/dev/null; do
+until php -r '$r = new Redis(); exit(@$r->connect("127.0.0.1", 6379, 1.0) && $r->ping() ? 0 : 1);' 2>/dev/null; do
 	i=$((i + 1))
 	[ "$i" -lt 30 ] || stop redis
 	sleep 1
@@ -148,7 +148,6 @@ done
 {
 	occ config:system:set redis host --value=127.0.0.1
 	occ config:system:set redis port --value=6379 --type=integer
-	occ config:system:set redis password --value="$REDIS_HOST_PASSWORD"
 	occ config:system:set memcache.local --value='\OC\Memcache\Redis'
 	occ config:system:set memcache.distributed --value='\OC\Memcache\Redis'
 	occ config:system:set memcache.locking --value='\OC\Memcache\Redis'
