@@ -908,7 +908,10 @@ a newer release of an app the server ships asks for it, and then:
   [!] the capabilities, WebDAV, or disabling and enabling again fail
   [!] the log has an error, "dirty table reads", a transaction longer than
       1s or a deadlock that reaches the app: logged for the app, or with a
-      file or a class of the app in its trace
+      file or a class of the app in its trace; a dirty read counts only
+      where the app built the query
+  [i] "dirty table reads" of a query the server builds, which the app
+      only calls
   [i] a PHP deprecation that reaches the app
   [i] routes not requested for want of a parameter value
   [i] the app registers a capability, and no new key appears
