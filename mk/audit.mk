@@ -270,11 +270,11 @@ runtime_params ?=
 
 # == profile ==
 # The same server images, each beside a Redis container whose network it shares:
-# neither publishes a port, and the server reaches Redis on 127.0.0.1. The
-# All-in-One image needs a log level, and takes its password from the
-# environment, which the run sets per container. The highest major the app
-# declares runs unless NC names others: the costs of a request are what is
-# compared, not whether the app runs everywhere, which install-test asks.
+# neither publishes a port, and the server reaches Redis on 127.0.0.1, so it
+# runs without a password. The All-in-One image needs a log level. The highest
+# major the app declares runs unless NC names others: the costs of a request
+# are what is compared, not whether the app runs everywhere, which install-test
+# asks.
 # profile_rounds is how many rounds count after the two that warm up;
 # profile_requests names requests of the app sent as the admin, "<VERB> <path>
 # ...", beside its GET routes. The previous release is PREVIOUS=<tarball or URL>,
@@ -644,14 +644,13 @@ profile: check-app
 	done; \
 	$(ncmake_lib_read_run) '$(call ncmake_lib_guard,profile) PROFILE_CMDLINE="$(profile_cmdline)" PROFILE_PARAMS="$(runtime_params)" PROFILE_REQUESTS="$(profile_requests)" node $(ncmake_lib_path)/profile.mjs $(ARGS) $(ncmake_json_arg)'
 
-# The password reaches both containers through the environment, not the command
-# line, and the Redis container goes when the run ends, whatever its outcome.
+# The Redis container goes when the run ends, whatever its outcome.
 profile-run:
 	@$(call container_prep,$(profile_redis_image)) && $(call container_prep,$(install_image):$(install_tag)) && \
-	redis=ncmake-profile-$$$$; REDIS_HOST_PASSWORD=$$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n'); export REDIS_HOST_PASSWORD; \
+	redis=ncmake-profile-$$$$; \
 	trap '$(container_cli) rm -f "$$redis" >/dev/null 2>&1' EXIT; \
-	$(container_cli) run -d --rm --label ncmake --name "$$redis" -e AIO_LOG_LEVEL=warn -e REDIS_HOST_PASSWORD $(profile_redis_image) >/dev/null && \
-	$(install_container) --network container:"$$redis" -e REDIS_HOST_PASSWORD $(install_image):$(install_tag) sh $(profile_dir)/profile.sh '$(app_id)' $(profile_dir)/$(install_tag) $(profile_rounds)
+	$(container_cli) run -d --rm --label ncmake --name "$$redis" -e AIO_LOG_LEVEL=warn $(profile_redis_image) >/dev/null && \
+	$(install_container) --network container:"$$redis" $(install_image):$(install_tag) sh $(profile_dir)/profile.sh '$(app_id)' $(profile_dir)/$(install_tag) $(profile_rounds)
 
 deps-audit: check-app
 	@$(audit_core)
