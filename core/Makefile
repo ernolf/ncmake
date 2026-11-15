@@ -2534,6 +2534,9 @@ skill-install:
 # CI runner is shared with every other job on that machine and answers 403 every
 # so often. GITHUB_TOKEN or GH_TOKEN, where the environment offers one, raises
 # that to 5000; a workstation usually has neither and does not need one.
+# The analyser libraries the modules fetched beside themselves go afterwards, as
+# with dev-clean: the TTL would otherwise keep a library older than the module
+# that runs it, and the next target that needs one fetches its current version.
 dev-init:
 	@mkdir -p "$(ncmake_cache)"
 	@echo "==> Fetching ncmake developer modules ($(ncmake_ref))..."
@@ -2549,6 +2552,7 @@ dev-init:
 			|| { echo "ERROR: could not fetch module $$m" >&2; exit 1; }; \
 		echo "  module: $$m"; \
 	done; \
+	rm -rf "$(ncmake_lib_dir)"; rm -f $(ncmake_cache)/*-$(ncmake_ref).mjs $(ncmake_cache)/*-$(ncmake_ref).mjs.etag; \
 	echo "==> Done. 'make help' now includes the module targets (all apps on this machine)."
 
 # Remove the developer modules from the cache - back to the plain user target set.
@@ -2916,7 +2920,9 @@ App Store management, the CI workflow manager, ...) into the per-machine cache.
 Their targets appear in every ncmake app on this machine from the next make run
 on; the module list is discovered from the repo, so new modules arrive without
 a core update. The cache refreshes with the same TTL mechanism as the core
-Makefile. make dev-clean removes the modules again.
+Makefile. The analyser libraries of the modules are dropped, and the next
+target that needs one fetches the version that belongs to them. make dev-clean
+removes the modules again.
 endef
 
 define help_dev-clean
