@@ -644,12 +644,14 @@ profile: check-app
 	done; \
 	$(ncmake_lib_read_run) '$(call ncmake_lib_guard,profile) PROFILE_CMDLINE="$(profile_cmdline)" PROFILE_PARAMS="$(runtime_params)" PROFILE_REQUESTS="$(profile_requests)" node $(ncmake_lib_path)/profile.mjs $(ARGS) $(ncmake_json_arg)'
 
-# The Redis container goes when the run ends, whatever its outcome.
+# The Redis container goes when the run ends, whatever its outcome. It runs
+# without --rm, so that a run the server stopped for want of Redis can keep its
+# status and its log in redis.log first.
 profile-run:
 	@$(call container_prep,$(profile_redis_image)) && $(call container_prep,$(install_image):$(install_tag)) && \
-	redis=ncmake-profile-$$$$; \
-	trap '$(container_cli) rm -f "$$redis" >/dev/null 2>&1' EXIT; \
-	$(container_cli) run -d --rm --label ncmake --name "$$redis" -e AIO_LOG_LEVEL=warn $(profile_redis_image) >/dev/null && \
+	redis=ncmake-profile-$$$$; run=$(profile_dir)/$(install_tag); \
+	trap 'if [ "$$(cat "$$run/stopped" 2>/dev/null)" = redis ]; then { $(container_cli) ps -a --filter name="$$redis" --format "{{.Status}}"; $(container_cli) logs "$$redis"; } >"$$run/redis.log" 2>&1; fi; $(container_cli) rm -f "$$redis" >/dev/null 2>&1' EXIT; \
+	$(container_cli) run -d --label ncmake --name "$$redis" -e AIO_LOG_LEVEL=warn $(profile_redis_image) >/dev/null && \
 	$(install_container) --network container:"$$redis" $(install_image):$(install_tag) sh $(profile_dir)/profile.sh '$(app_id)' $(profile_dir)/$(install_tag) $(profile_rounds)
 
 deps-audit: check-app

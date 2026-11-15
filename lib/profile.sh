@@ -139,12 +139,15 @@ install() {
 php -r 'echo PHP_VERSION;' >"$out/php"
 occ status --output=json >"$out/status.json" 2>"$out/status.err"
 
+# redis.err keeps the error of the last check, for a run that stops here.
 i=0
-until php -r '$r = new Redis(); exit(@$r->connect("127.0.0.1", 6379, 1.0) && $r->ping() ? 0 : 1);' 2>/dev/null; do
+until php -r '$r = new Redis(); try { exit($r->connect("127.0.0.1", 6379, 1.0) && $r->ping() ? 0 : 1); } catch (Throwable $e) { fwrite(STDERR, $e->getMessage() . "
+"); exit(1); }' 2>"$out/redis.err"; do
 	i=$((i + 1))
 	[ "$i" -lt 30 ] || stop redis
 	sleep 1
 done
+rm -f "$out/redis.err"
 {
 	occ config:system:set redis host --value=127.0.0.1
 	occ config:system:set redis port --value=6379 --type=integer
