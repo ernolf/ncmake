@@ -1088,6 +1088,10 @@ and that no package they name requires in the lock file, is reported as
   [i] vulnerable-dependency-not-bundled  in the lock file, not in the bundle
 with the same advisories and fix; both sources can miss a package, so it may
 ship all the same. Without a build output every package counts as shipped.
+The JSON names the packages they name, and ARGS=--bundle=<file> reads them
+from the JSON of an earlier run of the same release in place of the build
+output, so an audit with today's advisories needs no build. <file> has to lie
+in the checkout, the only directory the analyser sees.
 composer is not affected: vendor/ ships whole. [i] marks an
 abandoned package with its suggested replacement, an advisory source that did
 not answer, in which case nothing of that lock file was checked, and a
@@ -1130,6 +1134,7 @@ ARGS is passed to the analyser:
   make deps-audit ARGS=--json > deps.json  machine-readable, nothing else
   make deps-audit JSON=deps.json        the report, and the JSON in deps.json
   make deps-audit NO_ADVISORIES=1       abandoned packages and licences only
+  make deps-audit ARGS=--bundle=build/deps.json  the bundle of an earlier run
   make deps-audit ARGS=--self-test      the licence table against its examples
   make deps-audit ARGS=--help           the analyser's own option list
 
