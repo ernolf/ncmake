@@ -18,6 +18,7 @@
 //     news       [line, class, arguments] of every new <class>
 //     funcs      [line, function, arguments] of every call of a named function
 //     ocserver   the lines that read OC::$server
+//     consts     [line, class, name] of every class constant read by name
 //     calls      [line, class, method, name, receiver, inner name, inner
 //                receiver, arguments] of every method call: the class and the
 //                method it stands in, the type of what it is called on where
@@ -83,6 +84,7 @@ final class Facts extends NodeVisitorAbstract
 	public array $funcs = [];
 	public array $ocserver = [];
 	public array $calls = [];
+	public array $consts = [];
 	public array $registered = [];
 	public array $migrations = [];
 
@@ -445,6 +447,13 @@ final class Facts extends NodeVisitorAbstract
 					$this->news[] = [$line, $class, $this->arguments($node->args)];
 				}
 			}
+		} elseif ($node instanceof Expr\ClassConstFetch) {
+			if ($node->class instanceof Name && $node->name instanceof Node\Identifier && $node->name->toLowerString() !== 'class') {
+				$class = $this->className($node->class);
+				if ($class !== null) {
+					$this->consts[] = [$line, $class, $node->name->name];
+				}
+			}
 		} elseif ($node instanceof Expr\StaticPropertyFetch) {
 			if ($node->class instanceof Name && $node->class->toString() === 'OC'
 				&& $node->name instanceof Node\VarLikeIdentifier && $node->name->name === 'server') {
@@ -617,6 +626,7 @@ foreach ($files as $path) {
 		'funcs' => $facts->funcs,
 		'ocserver' => $facts->ocserver,
 		'calls' => $facts->calls,
+		'consts' => $facts->consts,
 		'registered' => $facts->registered,
 		'migrations' => $facts->migrations,
 	];
