@@ -130,7 +130,7 @@ install_libs     = install-test.mjs install-test.sh report-text.mjs
 runtime_libs     = runtime-audit.mjs runtime-audit.sh runtime-audit.php route-plan.mjs report-text.mjs
 profile_libs     = profile.mjs profile.sh profile.php route-plan.mjs report-text.mjs
 deps_libs        = deps-audit.mjs built-assets.mjs bundler-config.mjs data.mjs deps-audit.php licences.json lockfile.mjs report-text.mjs scratch-build.mjs data/spdx-licenses.json
-php_audit_libs   = php-audit.mjs php-audit.php data.mjs report-text.mjs data/nextcloud-3rdparty.json data/nextcloud-ocp.json data/nextcloud-server.json
+php_audit_libs   = php-audit.mjs php-audit.php data.mjs report-text.mjs data/nextcloud-3rdparty.json data/nextcloud-hooks.json data/nextcloud-ocp.json data/nextcloud-server.json
 secrets_libs     = secrets-audit.mjs data.mjs secrets-placeholders.json report-text.mjs data/composer-auth.json data/gitleaks-rules.json
 
 # What the goals on this command line need, handed to the core's analyser library
