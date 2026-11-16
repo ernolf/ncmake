@@ -84,6 +84,7 @@ final class Facts extends NodeVisitorAbstract
 	public array $ocserver = [];
 	public array $calls = [];
 	public array $registered = [];
+	public array $migrations = [];
 
 	/** @var list<array{name: ?string, parent: ?string, props: array<string, string>, record: ?int}> */
 	private array $classStack = [];
@@ -477,8 +478,77 @@ final class Facts extends NodeVisitorAbstract
 		return null;
 	}
 
+	/** The table an expression of changeSchema stands for: [name, created], or null. */
+	private function tableOf(Node $e): ?array
+	{
+		if ($e instanceof Expr\Variable && is_string($e->name)) {
+			return $this->scopeStack[count($this->scopeStack) - 1]['tables'][$e->name] ?? null;
+		}
+		if ($e instanceof Expr\MethodCall && $e->name instanceof Node\Identifier
+			&& in_array($e->name->name, ['createTable', 'getTable'], true) && isset($e->args[0]) && $e->args[0] instanceof Node\Arg) {
+			return [$this->value($e->args[0]->value), $e->name->name === 'createTable'];
+		}
+		return null;
+	}
+
+	/** The column an expression of changeSchema stands for: [table, created, column], or null. */
+	private function columnOf(Node $e): ?array
+	{
+		if ($e instanceof Expr\Variable && is_string($e->name)) {
+			return $this->scopeStack[count($this->scopeStack) - 1]['columns'][$e->name] ?? null;
+		}
+		if ($e instanceof Expr\MethodCall && $e->name instanceof Node\Identifier
+			&& in_array($e->name->name, ['addColumn', 'getColumn'], true) && isset($e->args[0]) && $e->args[0] instanceof Node\Arg) {
+			$table = $this->tableOf($e->var);
+			return $table === null ? null : [$table[0], $table[1], $this->value($e->args[0]->value)];
+		}
+		return null;
+	}
+
+	/**
+	 * Every call of changeSchema on a table, a column or the schema, as
+	 * [line, table, created, method, arguments, column]. It runs as the node
+	 * is left, so a call is recorded after the calls its receiver holds.
+	 */
+	private function migration(Node $node): void
+	{
+		if (!$this->scopeStack || $this->currentMethod() !== 'changeSchema') {
+			return;
+		}
+		$top = count($this->scopeStack) - 1;
+		if ($node instanceof Expr\Assign && $node->var instanceof Expr\Variable && is_string($node->var->name)) {
+			$name = $node->var->name;
+			unset($this->scopeStack[$top]['tables'][$name], $this->scopeStack[$top]['columns'][$name]);
+			$table = $this->tableOf($node->expr);
+			$column = $table === null ? $this->columnOf($node->expr) : null;
+			if ($table !== null) {
+				$this->scopeStack[$top]['tables'][$name] = $table;
+			} elseif ($column !== null) {
+				$this->scopeStack[$top]['columns'][$name] = $column;
+			}
+			return;
+		}
+		if (!($node instanceof Expr\MethodCall) || !($node->name instanceof Node\Identifier)) {
+			return;
+		}
+		$method = $node->name->name;
+		$args = [];
+		foreach (array_slice($node->args, 0, MAX_ARGS) as $arg) {
+			$args[] = $arg instanceof Node\Arg ? $this->value($arg->value) : UNKNOWN;
+		}
+		$line = $node->getStartLine();
+		if (in_array($method, ['createTable', 'dropTable'], true)) {
+			$this->migrations[] = [$line, $args[0] ?? UNKNOWN, $method === 'createTable', $method, [], null];
+		} elseif (($table = $this->tableOf($node->var)) !== null) {
+			$this->migrations[] = [$line, $table[0], $table[1], $method, $args, null];
+		} elseif (($column = $this->columnOf($node->var)) !== null) {
+			$this->migrations[] = [$line, $column[0], $column[1], $method, $args, $column[2]];
+		}
+	}
+
 	public function leaveNode(Node $node)
 	{
+		$this->migration($node);
 		if ($node instanceof Stmt\ClassLike) {
 			array_pop($this->classStack);
 		} elseif ($node instanceof Node\FunctionLike) {
@@ -548,6 +618,7 @@ foreach ($files as $path) {
 		'ocserver' => $facts->ocserver,
 		'calls' => $facts->calls,
 		'registered' => $facts->registered,
+		'migrations' => $facts->migrations,
 	];
 	if ($returns !== null) {
 		$out[$path]['returns'] = $returns;
