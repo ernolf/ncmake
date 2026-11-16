@@ -108,14 +108,14 @@
       "source": "plurals",
       "note": "a number that varies needs the plural form: n() with %n",
       "calls": ["t"],
-      "match": "(?:%(?:\\d+\\$)?d|%n|\\{(?:n|count|number|num|total|amount|seconds|minutes|hours|days)\\})\\}?(?! ?(?:of|on|in|at|to|from|and|or|by|for)\\b) ?\\p{L}",
+      "match": "(?<!(?:\\b(?:ID|Id|id|code|type|version|port|line|page|step|level|index|status|error|number|no\\.|No\\.)\\s?|#))(?:%(?:\\d+\\$)?d|%n|\\{(?:n|count|number|num|total|amount|seconds|minutes|hours|days)\\})\\}?(?! ?(?:of|on|in|at|to|from|and|or|by|for)\\b) ?\\p{L}",
       "examples": [
         { "bad": "Vault will be locked in %1$d seconds" },
         { "bad": "Hides in {seconds}s" },
         { "bad": "{n} of {total} votes" },
         { "bad": "Parsed {{num}} credentials" }
       ],
-      "ok": ["Hide {name}", "Import calendars", "Room {number}", "Week {number} of {year}", "Replies ({count})", "Pieces: {count}", "{n}% of the users", "Buy {amount}."]
+      "ok": ["Hide {name}", "Import calendars", "Room {number}", "Week {number} of {year}", "Replies ({count})", "Pieces: {count}", "{n}% of the users", "Buy {amount}.", "Recipe with ID %d was not found.", "HTTP status code %d is not expected.", "Issue #%d is closed."]
     },
     {
       "id": "R9",
@@ -135,11 +135,12 @@
       "source": "plurals",
       "note": "the guidelines name %n as the number of a plural; this one carries another placeholder instead",
       "calls": ["n"],
-      "match": "^(?![\\s\\S]*%n)[\\s\\S]*(?:%(?:\\d+\\$)?[ds]|\\{[^{}\\s]+\\})",
+      "match": "%(?:\\d+\\$)?[dsu]|\\{[^{}\\s]+\\}",
+      "require": "%n",
       "examples": [
         { "bad": "Import {count} calendars" }
       ],
-      "ok": ["Import %n calendars", "Import calendars"]
+      "ok": ["Import %n calendars", "Import calendars", "Warning %u occurred %n times while parsing %s."]
     },
     {
       "id": "R11",
