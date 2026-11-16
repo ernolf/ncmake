@@ -25,7 +25,7 @@
 # reads the bundler and its config, report-text.mjs prints; the analyser itself
 # decides what is worth saying.
 report_libs = bundle-report.mjs built-assets.mjs bundler-config.mjs lockfile.mjs report-text.mjs
-audit_libs  = build-audit.mjs build-defects.json built-assets.mjs bundler-config.mjs lockfile.mjs report-text.mjs scratch-build.mjs
+audit_libs  = build-audit.mjs build-defects.json built-assets.mjs bundler-config.mjs data.mjs data/nextcloud-frontend.json lockfile.mjs report-text.mjs scratch-build.mjs
 
 # What the goals on this command line need, handed to the core's analyser library
 # section: appended, never set, because every analyser module adds its own.
