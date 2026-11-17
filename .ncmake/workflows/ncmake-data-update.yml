@@ -12,8 +12,20 @@
 # data/ is edited by hand: what an analyser or the core goes by about the world
 # outside, the Nextcloud majors and their PHP, the Node.js release schedule, comes
 # from here. A source that cannot be read fails the job but keeps no other file
-# from its pull request. Once that pull request is merged the cleanup job deletes
+# from its pull request. Once a pull request is merged the cleanup job deletes
 # its branch.
+#
+# The changes go into two pull requests that never share a file:
+#
+#   ncmake/data/tools   data/tools.json, the release of each tool ncmake
+#                       downloads and executes, and the four files read at those
+#                       releases: github-runners, gitleaks-rules, tool-configs
+#                       and zizmor-audits. A digest of the same release cannot
+#                       tell a compromised one apart, so this one waits for a
+#                       review.
+#   ncmake/data/update  every other file of data/: facts the analysers read,
+#                       nothing of it is executed. It merges itself (squash) once
+#                       the required checks pass.
 #
 # A comment of "@ncmake-updater rebase" on that pull request re-runs the update
 # job, as the same command does for the workflow updater: create-pull-request
@@ -35,11 +47,12 @@ on:
   workflow_dispatch:
   # React to a merge so the cleanup job can remove the branch. This fires for
   # every closed pull request; the cleanup job filters down to a merged
-  # ncmake/data/update.
+  # ncmake/data/update or ncmake/data/tools.
   pull_request:
     types: [closed]
   # "@ncmake-updater rebase" in a pull request comment. This fires for every
-  # comment; the command job filters down to the command on ncmake/data/update.
+  # comment; the command job filters down to the command on ncmake/data/update
+  # and ncmake/data/tools.
   issue_comment: # zizmor: ignore[dangerous-triggers] commands only from OWNER/MEMBER/COLLABORATOR, no comment text in run:, the default branch checked out, never the pull request head
     types: [created]
 
@@ -81,9 +94,10 @@ jobs:
           read -r head head_repo < <(gh api "repos/$REPO/pulls/$PR" \
             --jq '"\(.head.ref) \(.head.repo.full_name)"')
           ours=false
-          if [ "$head" = ncmake/data/update ] && [ "$head_repo" = "$REPO" ]; then
-            ours=true
-          fi
+          case "$head" in
+            ncmake/data/update | ncmake/data/tools)
+              [ "$head_repo" = "$REPO" ] && ours=true ;;
+          esac
           echo "ours=$ours" >> "$GITHUB_OUTPUT"
 
       - name: Acknowledge the command
@@ -134,8 +148,45 @@ jobs:
         run: make data-update
 
       # Also after a failed source: the files that could be read are as current
-      # as their sources, and the failed one is as it was.
-      - name: Open pull request
+      # as their sources, and the failed one is as it was. Changes outside
+      # add-paths are stashed by the action and restored afterwards, so the
+      # second pull request still finds its files.
+      - name: Open pull request for the tools
+        if: ${{ !cancelled() }}
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          sign-commits: true
+          signoff: true
+          branch: ncmake/data/tools
+          delete-branch: true
+          add-paths: |
+            data/tools.json
+            data/github-runners.json
+            data/gitleaks-rules.json
+            data/tool-configs.json
+            data/zizmor-audits.json
+          title: 'chore(data): update the tools ncmake fetches'
+          commit-message: 'chore(data): update the tools ncmake fetches'
+          body: |
+            Automated by the ncmake data update.
+
+            `make data-update` found a new release of a tool that ncmake
+            downloads and executes, or a value read at such a release changed.
+            The digest in data/tools.json comes from the same release, so it
+            does not tell a compromised one apart: before merging, open the
+            release each changed source link names and check that it is a
+            regular release of the project itself.
+
+            ---
+
+            Commands, written as a comment on this pull request:
+
+            - `@ncmake-updater rebase` rebuilds this branch on top of the
+              current base
+
+      - name: Open pull request for the data
+        id: data-pr
         if: ${{ !cancelled() }}
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
@@ -144,7 +195,13 @@ jobs:
           signoff: true
           branch: ncmake/data/update
           delete-branch: true
-          add-paths: data/
+          add-paths: |
+            data/
+            :(exclude)data/tools.json
+            :(exclude)data/github-runners.json
+            :(exclude)data/gitleaks-rules.json
+            :(exclude)data/tool-configs.json
+            :(exclude)data/zizmor-audits.json
           title: 'chore(data): update the generated data from its sources'
           commit-message: 'chore(data): update the generated data from its sources'
           body: |
@@ -152,7 +209,9 @@ jobs:
 
             `make data-update` regenerated data/ from the sources each file
             names, and a value changed. The diff shows which, and the sources
-            of the file name the reading it comes from. Review and merge.
+            of the file name the reading it comes from. Nothing of it is
+            executed, so this pull request merges itself once the required
+            checks pass.
 
             ---
 
@@ -160,6 +219,16 @@ jobs:
 
             - `@ncmake-updater rebase` rebuilds this branch on top of the
               current base
+
+      - name: Merge the data once the checks pass
+        if: >-
+          !cancelled()
+          && (steps.data-pr.outputs.pull-request-operation == 'created'
+            || steps.data-pr.outputs.pull-request-operation == 'updated')
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR: ${{ steps.data-pr.outputs.pull-request-number }}
+        run: gh pr merge --auto --squash "$PR" --repo "${{ github.repository }}"
 
       - name: Report the command as done
         if: github.event_name == 'issue_comment'
@@ -174,7 +243,8 @@ jobs:
     if: >-
       github.event_name == 'pull_request'
       && github.event.pull_request.merged == true
-      && github.event.pull_request.head.ref == 'ncmake/data/update'
+      && (github.event.pull_request.head.ref == 'ncmake/data/update'
+        || github.event.pull_request.head.ref == 'ncmake/data/tools')
     runs-on: ubuntu-latest
     steps:
       - name: Create app token
@@ -189,8 +259,9 @@ jobs:
       - name: Delete the merged branch if it is still there
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
-          ref="repos/${{ github.repository }}/git/refs/heads/ncmake/data/update"
+          ref="repos/${{ github.repository }}/git/refs/heads/$HEAD_REF"
           # The repository may have deleted the head branch on merge already.
           if gh api "$ref" >/dev/null 2>&1; then
             gh api --method DELETE "$ref" \

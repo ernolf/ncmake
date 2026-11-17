@@ -30,8 +30,8 @@
     "source": "ncmake"
   },
   "ncmake-data-update.yml": {
-    "hash": "3d2c84e69d1682cf2222223914296868fd8c439d56cea5d4819e909ed4ced357",
-    "sha": "af8031eff69dea6262dd6c4c9b837ce4dc7e85de",
+    "hash": "ca1f0ac446e4fda3df44aae367c423bee9e7804e64c2ad16f7f8ec267ae0703e",
+    "sha": "d85da5b8b27a925f0289c286e53590e859e85696",
     "source": "local"
   },
   "ncmake-smoke.yml": {
