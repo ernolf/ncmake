@@ -4,11 +4,12 @@
 #
 # install-test.sh - the half of make install-test that runs on the server.
 #
-#   install-test.sh <app id> <output directory>
+#   install-test.sh <app id> <output directory> [<app tree>]
 #
 # Runs as root in a container of ghcr.io/ernolf/ncmake-server, an installed
 # Nextcloud server, with the app checkout as the working directory. It copies
-# build/stage/<app id> into custom_apps, enables the app, lets the web server
+# the app tree, build/stage/<app id> or the unpacked tarball make install-test
+# TARBALL= names, into custom_apps, enables the app, lets the web server
 # answer a few requests, runs cron.php and leaves what happened in the output
 # directory, where lib/install-test.mjs reads it. It judges nothing itself and
 # ends with 0 whenever it got as far as writing those files.
@@ -17,6 +18,7 @@ set -u
 
 app=$1
 out=$2
+src=${3:-build/stage/$app}
 web=/var/www/html
 # The admin account the image was installed with.
 auth=admin:admin
@@ -42,7 +44,7 @@ finish() {
 php -r 'echo PHP_VERSION;' >"$out/php"
 occ status --output=json >"$out/status.json" 2>"$out/status.err"
 
-if ! { cp -a "build/stage/$app" "$web/custom_apps/$app" && chown -R www-data:www-data "$web/custom_apps/$app"; } 2>"$out/copy.err"; then
+if ! { cp -a "$src" "$web/custom_apps/$app" && chown -R www-data:www-data "$web/custom_apps/$app"; } 2>"$out/copy.err"; then
 	echo copy >"$out/stopped"
 	finish
 fi

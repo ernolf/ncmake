@@ -45,6 +45,7 @@
 # install-test asks what no reading of the checkout answers: does the packaged app
 # install and run on a server. It starts an installed Nextcloud server per major,
 # the image ncmake-server of the ncmake-images repository, copies the staged app
+# or, with TARBALL=, a shipped tarball
 # into it, enables it, sends a few requests, runs cron.php and reads the log of
 # the server afterwards. An app that ships without a file it requires enables
 # without a word and fails on every request; only the log says so. The runs
@@ -163,7 +164,7 @@ consistency_keep = $(keep_dirs) $(keep_files) $(keep_extra)
 verify_cmdline = make build-verify ARGS=\"%s\"
 changelog_cmdline = make changelog-lint ARGS=\"%s\"
 compat_cmdline    = make php-compat ARGS=\"%s\"
-install_cmdline   = make install-test ARGS=\"%s\"
+install_cmdline   = make install-test $(if $(install_tarball),TARBALL=$(install_tarball) )ARGS=\"%s\"
 runtime_cmdline   = make runtime-audit ARGS=\"%s\"
 profile_cmdline   = make profile ARGS=\"%s\"
 deps_cmdline      = make deps-audit ARGS=\"%s\"
@@ -237,6 +238,12 @@ compat_run   = out=$(compat_dir)/$(php_version); php -n -r "echo PHP_VERSION;" >
 # ones above the newest end-of-life major, and for master.
 install_image ?= ghcr.io/ernolf/ncmake-server
 install_dir    = build/install-test
+# TARBALL= installs a shipped tarball instead of the stage. It is unpacked here,
+# outside install_dir, which every run empties first, and the run then starts
+# again with the id and the majors of the info.xml it ships, so it needs no
+# checkout.
+install_tarball_dir = build/install-tarball
+install_source      = stage
 # The server half, lib/install-test.sh, runs as root in the container: it writes
 # into the server and starts its web server. Under docker that is the run without
 # --user; the script hands its output to the owner of the checkout. Each tag runs
@@ -555,25 +562,49 @@ php-compat-run:
 	@$(php_run) '$(compat_run)'
 
 # The staging runs first, its output on stderr, so ARGS=--json prints the JSON
-# and nothing else.
-install-test: check-app
-	@$(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory stage >&2
+# and nothing else. With TARBALL= nothing is staged: the tarball is fetched and
+# unpacked, and the second make installs that tree with the id and the majors of
+# its own info.xml. A checkout of another app is refused, so a run never mixes
+# the tarball of one app with the checkout of another.
+install-test: $(if $(or $(TARBALL),$(install_src)),,check-app)
+ifneq ($(TARBALL),)
+	@$(call server_core,install-test)
+	@src='$(TARBALL)'; dir=$(install_tarball_dir); rm -rf $$dir && mkdir -p $$dir/tree || exit 1; \
+	case "$$src" in \
+		https://*) echo "==> Downloading $$src" >&2; curl -fsSL --proto '=https' --max-filesize 209715200 -o $$dir/app.tar.gz "$$src" || { echo "ERROR: could not download $$src" >&2; exit 1; }; file=$$dir/app.tar.gz ;; \
+		*://*) echo "ERROR: TARBALL= takes a file or an https URL, not $$src" >&2; exit 1 ;; \
+		*) file=$$src; [ -f "$$file" ] || { echo "ERROR: $$file is no file" >&2; exit 1; } ;; \
+	esac; \
+	tar xzf "$$file" -C $$dir/tree --no-same-owner --no-same-permissions || { echo "ERROR: $$src is no gzipped tar archive" >&2; exit 1; }; \
+	set -- $$dir/tree/*; \
+	[ $$# -eq 1 ] && [ -f "$$1/appinfo/info.xml" ] || { echo "ERROR: $$src does not hold exactly one directory with appinfo/info.xml" >&2; exit 1; }; \
+	tree=$$1; \
+	set -- $$(python3 -c 'import sys, xml.etree.ElementTree as E; r = E.parse(sys.argv[1]).getroot(); n = r.find("dependencies/nextcloud"); v = lambda k: ((n.get(k) or "") if n is not None else "").split(".")[0] or "-"; print((r.findtext("id") or "").strip() or "-", v("min-version"), v("max-version"))' "$$tree/appinfo/info.xml") || exit 1; \
+	id=$$1; min=$$2; max=$$3; \
+	echo "$$id" | grep -qxE '[a-z][a-z0-9_]*[a-z0-9]' || { echo "ERROR: no valid <id> in appinfo/info.xml of $$src" >&2; exit 1; }; \
+	[ -z '$(app_id)' ] || [ '$(app_id)' = "$$id" ] || { echo "ERROR: $$src is the app $$id, the checkout here is $(app_id)" >&2; exit 1; }; \
+	[ "$$min" != - ] || min=; [ "$$max" != - ] || max=; \
+	$(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory install-test TARBALL= install_tarball='$(TARBALL)' \
+		install_src="$$tree" install_source=tarball app_id="$$id" nc_min="$$min" nc_max="$$max"
+else
+	$(if $(install_src),,@$(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory stage >&2)
 	@$(audit_core)
 	@$(call server_core,install-test)
 	@$(call ncmake_lib_need,$(install_libs))
 	@$(server_tags) \
 	echo "==> install-test on Nextcloud $${tags:-none} (RUNTIME=$(RUNTIME))" >&2; \
 	rm -rf $(install_dir) && mkdir -p $(install_dir) || exit 1; \
-	printf 'min=%s\nmax=%s\nfirst=%s\nmaster=%s\ntags=%s\n' "$$min" "$$max" "$$first" "$$master" "$$tags" >$(install_dir)/range; \
+	printf 'min=%s\nmax=%s\nfirst=%s\nmaster=%s\ntags=%s\nsource=%s\nsrc=%s\ntarball=%s\n' "$$min" "$$max" "$$first" "$$master" "$$tags" '$(install_source)' '$(install_src)' '$(notdir $(install_tarball))' >$(install_dir)/range; \
 	cp "$(ncmake_lib_dir)/install-test.sh" $(install_dir)/ || exit 1; \
 	for t in $$tags; do \
 		echo "==> Nextcloud $$t" >&2; mkdir -p $(install_dir)/$$t; \
 		$(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory install-test-run install_tag=$$t || echo "$$?" >$(install_dir)/$$t/failed; \
 	done; \
 	$(ncmake_lib_read_run) '$(call ncmake_lib_guard,install-test) INSTALL_TEST_CMDLINE="$(install_cmdline)" node $(ncmake_lib_path)/install-test.mjs $(ARGS) $(ncmake_json_arg)'
+endif
 
 install-test-run:
-	@$(call container_prep,$(install_image):$(install_tag)) && $(install_container) $(install_image):$(install_tag) sh $(install_dir)/install-test.sh '$(app_id)' $(install_dir)/$(install_tag)
+	@$(call container_prep,$(install_image):$(install_tag)) && $(install_container) $(install_image):$(install_tag) sh $(install_dir)/install-test.sh '$(app_id)' $(install_dir)/$(install_tag) '$(or $(install_src),build/stage/$(app_id))'
 
 # php-audit runs first: its inventory, build/reports/php-audit.json, is what the
 # plan and the analyser read. Its own report is not printed here, and the
@@ -1004,10 +1035,17 @@ build/reports/profile.json, and the exit code is 0 with or without findings.
 endef
 
 define help_install-test
-make install-test [NC=all|"<major> ..."] [ARGS="<analyser arguments>"] [JSON=<file>]
+make install-test [NC=all|"<major> ..."] [TARBALL=<file>|<https URL>] [ARGS="<analyser arguments>"] [JSON=<file>]
 
 Installs the staged app, what make dist packs, on a real Nextcloud server and
 checks whether it runs there. Run make build first.
+
+TARBALL= installs a release tarball instead, a file or an https URL, the one
+the App Store ships for example: nothing is staged, and the id and the majors
+come from the appinfo/info.xml in the tarball, which must hold exactly one
+directory. It runs without a checkout as well, with
+make -f <ncmake Makefile> install-test TARBALL=...; in the checkout of another
+app it stops. The tarball is unpacked in build/install-tarball.
 
 Two servers are started: the lowest and the highest Nextcloud major of
 <nextcloud min-version> and max-version in appinfo/info.xml that a server
@@ -1038,6 +1076,8 @@ Examples:
   make install-test NC=all              every major in between too
   make install-test NC=master           only master
   make install-test ARGS=--details      every log entry behind the findings
+  make install-test TARBALL=https://example.org/app-1.0.0.tar.gz
+                                        the tarball a release ships
   make install-test ARGS=--json > install.json  machine-readable, nothing else
   make install-test JSON=install.json   the report, and the JSON in install.json
   make install-test ARGS=--help         the analyser's own option list
