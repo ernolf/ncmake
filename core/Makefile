@@ -346,7 +346,7 @@ active_php_image = $(if $(filter min,$(PHP)),$(php_image),$(analysis_image))
 # .git above the app would lie outside a mount of the app alone, and the analysers
 # that read the tracked files or the history need it.
 app_top   := $(shell git -C "$(CURDIR)" rev-parse --show-toplevel 2>/dev/null)
-app_rel   := $(patsubst $(app_top)/%,%,$(filter $(app_top)/%,$(CURDIR)))
+app_rel   := $(if $(app_top),$(patsubst $(app_top)/%,%,$(filter $(app_top)/%,$(CURDIR))))
 app_path   = /app$(if $(app_rel),/$(app_rel))
 app_mount  = -v "$(if $(app_rel),$(app_top),$(CURDIR))":/app -w $(app_path)
 
