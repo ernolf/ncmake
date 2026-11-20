@@ -63,10 +63,11 @@ wf_runner_rewrite ?= $(if $(filter $(wf_runner_org),$(firstword $(subst /, ,$(gh
 # CC0-1.0 is the natural default - the same license the Nextcloud apps put on
 # their generated files. Override in ncmake.mk to match your app's convention.
 wf_lock_license   ?= CC0-1.0
-# Copyright holder for the sidecar. The year is read from date at generation
-# time, so a file regenerated in a later year carries that year on its own -
-# right for generated content. Override the whole line in ncmake.mk.
-wf_lock_copyright ?= $(shell date +%Y) [ernolf] Raphael Gradenwitz
+# Copyright holder for the sidecar. Empty means the current year and the first
+# <author> of appinfo/info.xml, read at generation time, so the line names the
+# app's own author and a file regenerated in a later year carries that year.
+# Without an <author> the sidecar gets no copyright line. Override in ncmake.mk.
+wf_lock_copyright ?=
 export wf_lock_license
 export wf_lock_copyright
 
@@ -85,6 +86,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import xml.etree.ElementTree as ET
 
 WF_DIR = '.github/workflows'
 LOCK = os.path.join(WF_DIR, '.ncmake-workflows.json')
@@ -193,6 +195,14 @@ def save_lock(lock):
     # sidecar - keeps make reuse green without touching the app's REUSE.toml.
     lic = os.environ.get('wf_lock_license', 'CC0-1.0')
     cop = os.environ.get('wf_lock_copyright', '').strip()
+    if not cop:
+        try:
+            author = ET.parse('appinfo/info.xml').getroot().find('author')
+        except (OSError, ET.ParseError):
+            author = None
+        name = ' '.join((author.text or '').split()) if author is not None else ''
+        if name:
+            cop = '%s %s' % (time.strftime('%Y'), name)
     # REUSE-IgnoreStart
     with open(LOCK + '.license', 'w', encoding='utf-8', newline='\n') as f:
         if cop:
@@ -543,7 +553,9 @@ which case the labels are kept), fixes the template defects ncmake knows of
 (the repeated --threads of psalm.yml and psalm-matrix.yml; a fix whose text is
 gone upstream is warned about), writes them into .github/workflows/ and records source, upstream sha and content hash in
 .ncmake-workflows.json, with a .license sidecar next to it. A license that a
-written file or the sidecar names (wf_lock_license, default CC0-1.0) and that
+written file or the sidecar names (wf_lock_license, default CC0-1.0; the
+copyright line, wf_lock_copyright, defaults to the year and the first <author>
+of appinfo/info.xml) and that
 LICENSES/ lacks is added from the SPDX license list, so make reuse stays green;
 a LicenseRef-* cannot be fetched and stops the run. A repository without
 LICENSES/ and REUSE.toml gets no license texts. Commit the lock, its .license
