@@ -2956,6 +2956,24 @@ the analyser libraries those modules fetched - make help shows the plain user
 target set again. make dev-init brings them back.
 endef
 
+define help_clean
+make clean
+
+Removes build/: the staged tree, the tarballs and the per-checkout cache in
+build/cache/. The next target creates what it needs again.
+endef
+
+define help_dist-clean
+make dist-clean
+
+Runs make clean, then git clean -dffX: removes every git-ignored file and
+directory of the checkout, so vendor/, node_modules/, a git-ignored js/, caches
+and the nested repositories composer leaves behind. Untracked files that are not
+ignored stay. git lists each removed path. A file the app ignores on purpose,
+such as a local configuration, goes too. make dist-clean && make build is a
+build from scratch.
+endef
+
 define help_image-clean
 make image-clean [OWN=1] [OLD=1] [DRY=1] [ENGINE=podman|docker]
 
