@@ -55,13 +55,13 @@ Everything is in the **[wiki](https://github.com/ernolf/ncmake/wiki)**; its side
 
 ## Using ncmake with an AI assistant
 
-`skills/ncmake/SKILL.md` is a skill file that teaches an AI coding assistant how ncmake works: what each target does, which command belongs to which job, the order of a release, and the traps that cost time otherwise (`make build` already runs `composer install --no-dev` and `npm ci && npm run build`, so nobody has to invent a build step). It also draws the line between the targets that only read and the ones that commit, tag, push or publish.
+`skills/ncmake/` is a skill that teaches an AI coding assistant how ncmake works: what each target does, which command belongs to which job, the order of a release, and the traps that cost time otherwise (`make build` already runs `composer install --no-dev` and `npm ci && npm run build`, so nobody has to invent a build step). It also draws the line between the targets that only read and the ones that commit, tag, push or publish. `SKILL.md` holds what every task needs, `references/` one file per module, which the assistant reads only when the task needs it.
 
-Copy it to where your assistant looks for skills, for example:
+In an ncmake app, `make skill-install` puts it into `~/.claude/skills/ncmake/`. Without one, copy the directory to where your assistant looks for skills, for example:
 
 ```sh
-mkdir -p ~/.claude/skills/ncmake
-curl -fsSL https://raw.githubusercontent.com/ernolf/ncmake/main/skills/ncmake/SKILL.md -o ~/.claude/skills/ncmake/SKILL.md
+mkdir -p ~/.claude/skills
+curl -fsSL https://codeload.github.com/ernolf/ncmake/tar.gz/main | tar -xz -C ~/.claude/skills --strip-components=2 ncmake-main/skills/ncmake
 ```
 
 It is plain Markdown with a short YAML front matter, so any assistant that reads project instructions can use it, whether or not it calls them skills.
