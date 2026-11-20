@@ -242,11 +242,14 @@ no_runtime   = sh -c 'echo >&2; echo "ERROR: no container runtime found (podman/
 #                    uses it so dependencies resolve against the support floor, which
 #                    is what package-correct output needs. 'make php-compat' runs it
 #                    for other minors too, through php_version.
-#   analysis_image - the official composer image: always the newest PHP patch plus composer,
-#                    git and unzip. Everything interactive (composer, psalm) runs here, where
-#                    a current runtime matters - psalm needs a recent patch - while the
-#                    analysed PHP level stays pinned through psalm.xml, so the image's fixed
-#                    PHP version does not affect the result.
+#   analysis_image - the same image at the ceiling of Nextcloud master, the newest PHP
+#                    minor a server runs on. Everything interactive (composer, psalm) runs
+#                    here, where a current runtime matters - psalm needs a recent patch -
+#                    while the analysed PHP level stays pinned through psalm.xml. The
+#                    official composer image is no such runtime: it moves to a PHP before
+#                    Nextcloud supports it, and its PHP 8.6 came without mbstring.
+#   composer_image - the official composer image, only the source of the Composer binary
+#                    of a php_image built on the host.
 # The Node line comes from package.json's engines.node, see node_major, and runs in
 # node_tool_image.
 # What changes over time and can be read from a source, the majors of
@@ -313,7 +316,8 @@ php_base_image ?= docker.io/library/php:$(php_version)-cli-alpine
 # php_image_repo is the repository ncmake-images publishes the PHP images under.
 php_image_repo  = ghcr.io/ernolf/ncmake-php
 php_image      ?= $(php_image_repo):$(php_version)
-analysis_image ?= docker.io/library/composer:2
+analysis_image ?= $(php_image_repo):$(call nc_php_ceiling,$(nc_master))
+composer_image ?= docker.io/library/composer:2
 # One image runs Node for every line: node_tool_image, Debian slim with git, the CA
 # certificates, the compiler node-gyp builds a native module with, the archive and
 # download tools an install script finds in the official Node images, and Yarn 1,
@@ -545,7 +549,7 @@ container_run  = $(call container_prep,$(1)) && $(container) $(2) $(1)
 # would refuse a dependency that requires one of them (phpspreadsheet requires gd),
 # and the build would not test what the server offers. php/Containerfile of the
 # ncmake-images repository therefore adds to it git, unzip and su-exec, Composer from
-# analysis_image, the memory_limit of the Nextcloud CI images and the extensions of
+# composer_image, the memory_limit of the Nextcloud CI images and the extensions of
 # its ARG extensions, and fails when one of them does not load. That repository
 # publishes the image as php_image, for amd64 and arm64, for every PHP minor from the
 # floor of the newest end-of-life Nextcloud major (see nc_eol) to the ceiling of
@@ -555,7 +559,7 @@ container_run  = $(call container_prep,$(1)) && $(container) $(2) $(1)
 # names an extension the published image lacks, and when no source serves php_image,
 # for a PHP minor that is not published or a registry out of reach. That image
 # carries a fingerprint of its inputs, the Containerfile, php_extensions and the IDs
-# of its base image and of analysis_image, as the label ncmake.inputs, and is built
+# of its base image and of composer_image, as the label ncmake.inputs, and is built
 # again when one of them changes; the image it supersedes is removed. A build that
 # fails removes the untagged images it left behind, found by that label. A php_image
 # set in ncmake.mk is used as it is, nothing is built.
@@ -594,7 +598,7 @@ php_floor_setup   = for t in $(php_floor_tools); do command -v $$t >/dev/null ||
 # for a php_image of one's own. php_floor_pick leaves the image to run in img.
 php_local_image   = $(if $(filter localhost/ncmake-php:%,$(php_image)),$(php_image),localhost/ncmake-php:$(php_version))
 php_floor_mode    = $(if $(filter localhost/ncmake-php:%,$(php_image)),local,$(if $(filter $(php_image_repo):%,$(php_image)),$(if $(filter-out $(php_extensions_published),$(php_extensions)),local,pull)))
-php_floor_build   = { $(image_prep) $(container_cli) '$(php_base_image)' '$(image_sources)' '$(image_sources_url)' || :; } && { $(image_prep) $(container_cli) '$(analysis_image)' '$(image_sources)' '$(image_sources_url)' || :; } && $(php_image_build) $(container_cli) '$(php_base_image)' '$(analysis_image)' '$(php_local_image)' '$(php_extensions)' && $(call container_prep,$(php_local_image))
+php_floor_build   = { $(image_prep) $(container_cli) '$(php_base_image)' '$(image_sources)' '$(image_sources_url)' || :; } && { $(image_prep) $(container_cli) '$(composer_image)' '$(image_sources)' '$(image_sources_url)' || :; } && $(php_image_build) $(container_cli) '$(php_base_image)' '$(composer_image)' '$(php_local_image)' '$(php_extensions)' && $(call container_prep,$(php_local_image))
 php_floor_pick    = { img='$(php_image)'; \
 	$(if $(filter pull,$(php_floor_mode)),$(call container_prep,$(php_image)); $(container_cli) image inspect "$$img" >/dev/null 2>&1 || { echo "==> $(php_image) is not available; building $(php_local_image) instead" >&2; img='$(php_local_image)'; $(php_floor_build); }; ) \
 	$(if $(filter local,$(php_floor_mode)),img='$(php_local_image)'; $(php_floor_build); ) \
@@ -1860,7 +1864,7 @@ composer: check-app
 	@echo "==> composer $(ARGS) (RUNTIME=$(RUNTIME))"
 	@$(php_run) 'composer $(ARGS)'
 
-# Static analysis. Runs 'composer psalm' on analysis_image (the current composer image)
+# Static analysis. Runs 'composer psalm' on analysis_image (the ceiling of Nextcloud master)
 # because psalm needs a recent runtime, while the analysed PHP level stays pinned through
 # psalm.xml. PHP=max is the default, but pin it here so the target is independent of it.
 # ARGS is forwarded to psalm past composer's own options (composer psalm -- ...), so
@@ -2606,9 +2610,9 @@ define help_composer
 make composer ARGS="<composer arguments>"
 
 Runs any composer command in a throwaway container, so no composer or PHP is
-needed on the host. It uses analysis_image by default (the official composer
-image: newest PHP plus composer, git and unzip), which is what dev tools such as
-psalm need. Add PHP=min to run on php_image instead, the PHP floor build image,
+needed on the host. It uses analysis_image by default (ncmake-php at the newest
+PHP minor Nextcloud master runs on, with composer, git, unzip and the extensions
+of a Nextcloud server), which is what dev tools such as psalm need. Add PHP=min to run on php_image instead, the PHP floor build image,
 to resolve dependencies against the support floor.
 
 Examples:
@@ -2624,8 +2628,8 @@ define help_psalm
 make psalm [ARGS="<psalm arguments>"]
 
 Runs static analysis (composer psalm) in a throwaway container on analysis_image
-(the official composer image: newest PHP plus composer, git and unzip), so no PHP
-is needed on the host. The runtime is modern enough for current psalm, while the
+(ncmake-php at the newest PHP minor Nextcloud master runs on), so no PHP is
+needed on the host. The runtime is modern enough for current psalm, while the
 analysed PHP level stays pinned via psalm.xml. Install the dev tools first with
 make composer ARGS=install.
 
