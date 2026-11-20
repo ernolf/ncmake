@@ -282,6 +282,37 @@ def rewrite_runners(text, name):
                 print('  %s: runner %s -> %s' % (name, old, new))
     return text
 
+# Template defects that break an app outside the Nextcloud org, fixed on
+# install until upstream fixes the template: per template, old=new pairs.
+# psalm: the template appends --threads=1 to "composer run psalm", whose app
+# script often sets --threads itself; psalm 7.5 and later abort on the repeated
+# option (vimeo/psalm#13680). ncmake#515. An install that no longer finds the old
+# text warns; the entry is then obsolete and goes.
+PSALM_THREADS = ('composer run psalm -- --threads=1 --monochrome', 'composer run psalm -- --monochrome')
+TEMPLATE_FIXES = {
+    'psalm.yml': [PSALM_THREADS],
+    'psalm-matrix.yml': [PSALM_THREADS],
+}
+
+def fix_template(text, name):
+    for old, new in TEMPLATE_FIXES.get(name, []):
+        if old in text:
+            text = text.replace(old, new)
+            print('  %s: fixed %s -> %s' % (name, old, new))
+        else:
+            print('  WARNING %s: the template no longer has %s - the fix of ncmake is obsolete' % (name, old))
+    return text
+
+# An installed workflow that still has the old text of a fix is out of date even
+# when its template is not, so workflows-update brings the fix to it.
+def needs_fix(name):
+    try:
+        with open(os.path.join(WF_DIR, name), encoding='utf-8') as f:
+            text = f.read()
+    except OSError:
+        return False
+    return any(old in text for old, _ in TEMPLATE_FIXES.get(name, []))
+
 def state(name, entry, lock):
     path = os.path.join(WF_DIR, name)
     exists = os.path.exists(path)
@@ -331,6 +362,7 @@ def install(names, lock, cat):
         text = fetch(entry['raw']).decode('utf-8')
         text = substitute(text, name)
         text = rewrite_runners(text, name)
+        text = fix_template(text, name)
         path = os.path.join(WF_DIR, name)
         os.makedirs(WF_DIR, exist_ok=True)
         verb = 'updated' if os.path.exists(path) else 'installed'
@@ -367,7 +399,7 @@ def cmd_update():
             print('skipped (locally modified - reinstall via workflows-install to discard): %s' % name)
         elif name not in cat:
             print('skipped (gone upstream): %s' % name)
-        elif st in ('update available', 'missing'):
+        elif st in ('update available', 'missing') or (st == 'installed' and needs_fix(name)):
             todo.append(name)
         else:
             print('up to date: %s' % name)
@@ -507,8 +539,9 @@ a comma or a space), replaces GitHub's template placeholders ($$default-branch
 from the origin HEAD; unknown ones are warned about and left as-is), rewrites the
 org-scoped runner labels of data/github-runners.json to ubuntu-latest so the
 templates run outside that org (unless your origin owner is wf_runner_org, in
-which case the labels are kept), writes them
-into .github/workflows/ and records source, upstream sha and content hash in
+which case the labels are kept), fixes the template defects ncmake knows of
+(the repeated --threads of psalm.yml and psalm-matrix.yml; a fix whose text is
+gone upstream is warned about), writes them into .github/workflows/ and records source, upstream sha and content hash in
 .ncmake-workflows.json, with a .license sidecar next to it. A license that a
 written file or the sidecar names (wf_lock_license, default CC0-1.0) and that
 LICENSES/ lacks is added from the SPDX license list, so make reuse stays green;
@@ -540,8 +573,9 @@ define help_workflows-update
 make workflows-update [COMMIT=1|PR=1 [BODY=<path>]]
 
 Brings every managed workflow to the current upstream state: 'update available'
-and 'missing' files are reinstalled, locally modified files are skipped with a
-note, up-to-date files are left alone. A license text an updated file needs is
+and 'missing' files are reinstalled, and so is a file that still lacks a fix
+of workflows-install; locally modified files are skipped with a note, up-to-date
+files are left alone. A license text an updated file needs is
 added as for workflows-install. Run it from time to time (or after a
 workflows-list showed updates) and commit the result.
 
