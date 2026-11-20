@@ -16,6 +16,8 @@
 | `docker.io/fsfe/reuse` | `make reuse` | the REUSE compliance checker |
 | `docker.io/library/php:<version>-cli-alpine` | `make lint-php-syntax` | the plain PHP image, one per version the target checks; `php -l` needs no extension |
 
+`make php-containerfile` prints the Containerfile of the ncmake-php images as cached on this host, with its build arguments `base`, `composer` and `extensions`; it needs no app and changes nothing.
+
 `PHP=min|max` switches the PHP side explicitly. `build` pins `PHP := min`, `psalm` pins `PHP := max`. `RUNTIME=podman|docker|docker-rootless|bare` selects the runtime; it is auto-detected with podman preferred, and `docker` maps the caller's uid and gid so no root-owned files appear in the checkout.
 
 Every Node container mounts `npm/`, `corepack/` and `yarn/` of the per-machine ncmake cache (`${XDG_CACHE_HOME:-~/.cache}/ncmake/`) read-write as the download cache of npm, corepack and yarn, so the tarballs of a lockfile and the package managers corepack fetches are downloaded once per host, and `make build`, `build-verify` and the next app share them; `npm ci` and yarn check every tarball against the `integrity` the lockfile records. Yarn 1, from corepack or the one in `ncmake-node`, keeps its cache in `yarn/` (`YARN_CACHE_FOLDER`), Yarn 2 and later their global cache in `yarn/berry/` (`YARN_GLOBAL_FOLDER`); their project cache stays where the app puts it. `RUNTIME=bare` keeps the npm cache of the host.

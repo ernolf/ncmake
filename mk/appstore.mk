@@ -307,6 +307,55 @@ beta, daily and git channels. NIGHTLY=1 on such a version asks first, because
 installations could not update from it.
 endef
 
+define help_release
+make release    (maintainer)
+
+Runs make dist and make sign in one step: packs the tarball from the staged
+tree and prints its App Store signature. Needs <app_id>.key in the cert dir and
+the build outputs from make build. It publishes nothing; make publish submits a
+release to the App Store.
+endef
+
+define help_list-releases
+make list-releases
+
+Prints the releases of this app on the App Store as compact JSON: version,
+creation date and download URL of each. Reads the App Store's apps.json, cached
+in build/cache/ and refreshed with its ETag. Changes nothing.
+endef
+
+define help_list-releases-full
+make list-releases-full
+
+Prints the whole App Store entry of this app as JSON, from the same cached
+apps.json as make list-releases. Changes nothing.
+endef
+
+define help_list-for-author
+make list-for-author
+
+Prompts for a search string and prints every App Store app with an author whose
+name contains it, ignoring case: id, name, authors and release versions. Needs
+no app. Changes nothing.
+endef
+
+define help_delete-release
+make delete-release [NIGHTLY=1]    (maintainer)
+
+Lists the published releases of this app, prompts for the version to delete,
+asks for confirmation and deletes that release from the App Store. NIGHTLY=1
+deletes from the nightly channel. Needs appstore_api-token in the cert dir.
+A deleted release cannot be restored.
+endef
+
+define help_ratings
+make ratings
+
+Prints the App Store ratings of this app as JSON: their count, the average on a
+scale of 0 to 5, and each rating with its date and comment, newest first.
+Changes nothing.
+endef
+
 help::
 	@echo ""
 	@echo "$(ch)App Store (developer module)$(c0)  $(cd)(cert dir: $(cert_dir)$(cert_dir_note))$(c0)"

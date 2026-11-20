@@ -68,7 +68,7 @@ It is plain Markdown with a short YAML front matter, so any assistant that reads
 
 ## Requirements
 
-GNU make, git, curl, openssl, rsync, python3; optionally `xmllint` (ncmake falls back to `grep` without it). For containerized builds: podman or docker — otherwise `RUNTIME=bare` with composer and npm on the `PATH`.
+GNU make, git, curl, openssl, rsync, python3; optionally `xmllint` (ncmake reads `info.xml` with python3 without it). For containerized builds: podman or docker — otherwise `RUNTIME=bare` with composer and npm on the `PATH`.
 
 ## Show that your app uses ncmake
 

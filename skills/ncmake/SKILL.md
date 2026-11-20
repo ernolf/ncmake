@@ -1,6 +1,6 @@
 ---
 name: ncmake
-description: Build, package, deploy, version, release and publish a Nextcloud app with ncmake, the generic Makefile, and manage its CI workflows. Use this whenever a repository contains appinfo/info.xml together with an ncmake Makefile, or when the task is a Nextcloud app build, dependency run, bundle size analysis, checkout audit, version bump, changelog, tag, integrity signature, App Store submission or workflow update.
+description: Build, package, deploy, version, release and publish a Nextcloud app with ncmake, the generic Makefile, and manage its CI workflows. Use this whenever a repository contains appinfo/info.xml together with an ncmake Makefile, when ncmake is to be added to a Nextcloud app or run there for the first time, or when the task is a Nextcloud app build, dependency run, bundle size analysis, checkout audit, version bump, changelog, tag, integrity signature, App Store submission or workflow update.
 ---
 
 <!--
@@ -26,16 +26,20 @@ The stub must sit in the repository root. Everything derives from `$(CURDIR)`, a
 
 The stub also works in a repository that is no Nextcloud app. Without `appinfo/info.xml` the targets that read only the repository run: `reuse`, `secrets-audit` (its shipped scope then checks the tracked files), `consistency-audit` and every `lint-*` target. Every other target stops with "no valid <id> found in appinfo/info.xml".
 
+## Adding ncmake to an app
+
+ncmake goes into an existing app (`appinfo/info.xml` with `<id>` and `<version>`) as one committed file, the stub, fetched with `curl -fLO https://raw.githubusercontent.com/ernolf/ncmake/main/bootstrap/GNUmakefile` into the repository root. Nothing else is added: no build scripts, no copied Makefile, no hand-written workflows. The host needs GNU make, git, curl, openssl, rsync, python3 and podman or docker. `references/getting-started.md` is the full path for a newcomer, from the stub to the first release, with the commit subjects the changelog understands, the command-line switches and every setting of `ncmake.mk`; read it whenever someone starts with ncmake or asks what to do next.
+
 ## Ground rules
 
 Follow these before proposing any command. They are the mistakes that cost the most time.
 
 1. **`make build` is the complete build.** It already runs `composer install --no-dev --prefer-dist --no-progress`, with the app's own `post-install-cmd`, when `composer.json` declares real runtime requirements (anything besides `php`, `ext-*` and `bamarni/composer-bin-plugin`) or the app has `composer/autoload.php` next to a `composer.json`, or a shipped PHP file requires `vendor/autoload.php`, and `npm ci && npm run build` when `package.json` has a `scripts.build` (with `pnpm-lock.yaml` or `yarn.lock` the same through pnpm or yarn via corepack; without any lock file `npm install`, and the build says it is not reproducible). Without a `package.json` at the root, a frontend in `js/` with `js/package.json` builds in `js/`, from its own lock file. Never propose `make npm ARGS=ci` or `make npm ARGS="run build"` as a build step, and never propose them as a preparation for `make build`.
-2. **`make help-<target>` is the authoritative reference.** Every target has extended help with its exact options and examples. Run it instead of guessing an option name.
+2. **`make help-<target>` is the authoritative reference.** Every target that `make help` lists has extended help with its exact options and examples. Run it instead of guessing an option name.
 3. **Do not add build configuration.** No wrapper scripts, no extra make targets, no CI build steps that duplicate `make build`. A genuine deviation belongs in `ncmake.mk` (plain make syntax, one variable per line).
 4. **Never edit the version by hand** in `info.xml`, `composer.json` or `package.json`. `make version` does the bump, the validation and the lockfile sync.
 5. **Never write a CHANGELOG section by hand.** `make changelog` generates it from the conventional commits. A translated `CHANGELOG.<code>.md` is the exception: nothing generates it.
-6. **Maintainer targets change the world.** `version`, `changelog`, `tag`, `stable-branch`, `csr`, `register`, `sign`, `release`, `publish`, `delete-release`, `integrity-enable`, `integrity-sign`, `dist-signed`, `l10n-init`, `secrets-ignore`, `dev-init` and every `COMMIT=1` / `PR=1` / `AMEND=1` variant write commits, tags, branches, pull requests, App Store entries or signatures. Run them only when the user explicitly asks for that step, one step at a time. Read-only targets (`build`, `dist`, `psalm`, `reuse`, `composer`, `npm`, `integrity-check`, `bundle-report`, `build-audit`, `consistency-audit`, `build-verify`, `changelog-lint`, `php-compat`, `install-test`, `runtime-audit`, `profile`, `deps-audit`, `php-audit`, `secrets-audit`, `l10n-check`, `l10n-lint` (without `FIX=1`), `lint` and every `lint-*` target, `list-releases`, `workflows-list`, `help`) are free to run.
+6. **Maintainer targets change the world.** `version`, `changelog`, `tag`, `stable-branch`, `csr`, `register`, `sign`, `release`, `publish`, `delete-release`, `integrity-enable`, `integrity-sign`, `dist-signed`, `l10n-init`, `secrets-ignore`, `dev-init` and every `COMMIT=1` / `PR=1` / `AMEND=1` variant write commits, tags, branches, pull requests, App Store entries or signatures. Run them only when the user explicitly asks for that step, one step at a time. Read-only targets (`build`, `dist`, `psalm`, `reuse`, `composer`, `npm`, `integrity-check`, `bundle-report`, `build-audit`, `consistency-audit`, `build-verify`, `changelog-lint`, `php-compat`, `install-test`, `runtime-audit`, `profile`, `deps-audit`, `php-audit`, `secrets-audit`, `l10n-check`, `l10n-lint` (without `FIX=1`), `lint` and every `lint-*` target, `list-releases`, `list-releases-full`, `ratings`, `workflows-list`, `help`) are free to run.
 7. **`build/` is generated.** Never edit, never commit, never reference a file in it as source. `make clean` removes it.
 8. **The host needs no toolchain.** Do not tell anyone to install composer, PHP or Node. podman (preferred) or docker is enough. `RUNTIME=bare` exists for hosts that deliberately run the tools directly.
 9. **The checkout directory name is not the app id.** The id comes from `appinfo/info.xml` and the two often differ.
@@ -116,6 +120,7 @@ The detail of each module is in `references/` next to this file. Read the one th
 
 | File | Read it for |
 | --- | --- |
+| `references/getting-started.md` | adding ncmake to an app, what the host needs, the first steps in order, the commit subjects the changelog uses, the command-line switches, every `ncmake.mk` setting |
 | `references/containers.md` | the container images and what runs in which, `PHP=min\|max`, `RUNTIME=`, the image record, registry fallback, `image-clean`, `cache-clean`, idle cleanup |
 | `references/app-store.md` | certificate, `csr`, `register`, `sign`, `release`, `publish`, `delete-release`, `list-releases` |
 | `references/integrity.md` | `appinfo/signature.json`: `integrity-enable`, `integrity-sign`, `integrity-check`, `dist-signed`, the committed certificate |
@@ -211,7 +216,7 @@ This skill is a copy that does not refresh itself. `make skill-install` fetches 
 
 ## Conventions ncmake assumes
 
-Conventional commit subjects (the changelog is generated from them), `main` as the default branch, `git commit -s` (the modules pass `-s`, so DCO checks pass), signed tags, and REUSE-compliant licensing (`make reuse` checks it).
+Conventional commit subjects (the changelog is generated from them: `feat` becomes Added, `fix` Fixed, `perf` Changed, every other type and every unconventional subject is left out, a breaking change is kept and marked; see `references/getting-started.md`), `main` as the default branch, `git commit -s` (the modules pass `-s`, so DCO checks pass), signed tags, and REUSE-compliant licensing (`make reuse` checks it).
 
 ## Further reading
 
