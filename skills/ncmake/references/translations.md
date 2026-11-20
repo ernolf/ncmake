@@ -1,0 +1,20 @@
+<!--
+  - SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
+  - SPDX-License-Identifier: MIT
+-->
+
+# Translations module
+
+The repository side of the Nextcloud Transifex sync, in `mk/l10n.mk`. Transifex itself is not touched: no API call and no token, the sync stays with the Nextcloud bot.
+
+| Target | What it does |
+| --- | --- |
+| `make l10n-init [COMMIT=1\|PR=1]` | writes `l10n/.gitkeep`, `.l10nignore` and `.tx/config` where they are missing and covers them in `REUSE.toml`, then prints the steps outside the repository |
+| `make l10n-check` | validates the setup on every branch the bot syncs, as the request check of nextcloud/docker-ci does |
+| `make l10n-lint [FIX=1] [L10N_RULES=<file>]` | holds the English source strings against the rules of the translation team and names file and line of each finding |
+
+`l10n-init` derives everything from what ncmake reads anyway. `.tx/config` is the template of the translation request with the app id from `info.xml` as the resource and in the `.po` and `.pot` names, which is the name the translation tool writes. `.l10nignore` lists `js/` and `vendor/` where `.gitignore` marks them as build output or they exist, and `vendor-bin/` where it exists. An existing file is left as it is. In `REUSE.toml` the new files join the annotation that already covers one of the sync files, or get one of their own under the copyright and license the file states in its header. The printed steps are, for an app outside the nextcloud organisation, inviting `nextcloud-bot` with write access and exempting it from the ruleset that protects `main`, then opening the translation request at nextcloud/docker-ci.
+
+`l10n-check` fetches origin and checks the branches the bot syncs as origin has them: `main`, `master` and those in `.tx/backport` on `main`, or without that file the default list of `validateSyncSetup.sh`, read from that script at run time. Per branch it runs the translation tool's `prepare-source-validation` and `validateTranslationFiles.sh` over a copy of the branch, in the image the bot runs in (`ghcr.io/nextcloud/continuous-integration-translations`), so the validation is the Nextcloud one. On top of that it reports what makes a sync fail or extract the wrong strings without a message: an `.l10nignore` that misses a build output or third-party tree (a line with a carriage return, trailing blanks or a leading slash never matches, because the tool compares it unchanged), a `.tx/config` whose resource or file names are not the app id, and a `.tx/backport` entry that is not a `stable*` branch on origin. Findings are marked `[!]` and `[i]`; a `[!]` or a failed validation exits non-zero. It writes nothing into the checkout, the copies stay under `build/cache/l10n-check`, and it needs podman or docker.
+
+`l10n-lint` catches what the translation team rejects in its review before the first sync, after which it locks the resource until the strings are fixed: a typographic apostrophe, three dots instead of the ellipsis, a contraction, a counted number without the plural form, a plural without its number. The strings are the template the translation tool writes, in the bot's image, for a copy of the working tree; each is located in the sources as the literal of a `t()` or `n()` call or as an element of `appinfo/info.xml`, and every finding names the rules, the fix and the file and line. `FIX=1` rewrites the strings with a fix in the sources and never touches `l10n/*.json`, which come from Transifex. The rules are not code: `lib/l10n-rules.json` in the ncmake repository holds each rule with its weight (`must` is what the review rejects, `should` a call the guidelines leave open, such as a plural that carries `{count}` instead of `%n`), its source, its pattern or requirement, its replacement and examples, and a rule whose examples do not hold stops the run. A new rule is a pull request against that file. `L10N_RULES=<file>` uses a rule file of one's own, `ARGS=--self-test` only tests the rule file. It needs podman or docker.
