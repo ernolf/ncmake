@@ -127,7 +127,7 @@ consistency_libs = consistency-audit.mjs bundler-config.mjs data.mjs lockfile.mj
 verify_libs      = build-verify.mjs bundler-config.mjs lockfile.mjs report-text.mjs scratch-build.mjs
 changelog_libs   = changelog-lint.mjs data.mjs report-text.mjs data/appstore.json
 compat_libs      = php-compat.mjs report-text.mjs
-install_libs     = install-test.mjs install-test.sh report-text.mjs
+install_libs     = install-test.mjs install-test.sh data.mjs report-text.mjs data/tool-configs.json
 runtime_libs     = runtime-audit.mjs runtime-audit.sh runtime-audit.php route-plan.mjs report-text.mjs
 profile_libs     = profile.mjs profile.sh profile.php route-plan.mjs report-text.mjs
 deps_libs        = deps-audit.mjs built-assets.mjs bundler-config.mjs data.mjs deps-audit.php licences.json lockfile.mjs report-text.mjs scratch-build.mjs data/spdx-licenses.json
@@ -244,6 +244,21 @@ install_dir    = build/install-test
 # checkout.
 install_tarball_dir = build/install-tarball
 install_source      = stage
+# PHPUNIT=1 runs the app's PHPUnit suite against the same servers, COVERAGE=1
+# with pcov switched on. The suite needs what the stage leaves out: tests/, the
+# configuration and the dev dependencies. The checkout is copied into
+# install_tests and composer install runs there, in the container and with the
+# PHP of make composer, so the checkout keeps the vendor/ make build left. The
+# composer scripts of the app install a vendor-bin/phpunit, as make composer
+# ARGS=install does.
+install_phpunit = $(if $(filter 1,$(PHPUNIT) $(COVERAGE)),1)
+install_tests   = $(install_dir)/phpunit/$(app_id)
+install_phpunit_prep = echo "==> PHPUnit: the checkout with its dev dependencies" >&2; \
+	mkdir -p $(install_tests) && rsync -a --exclude=/build --exclude=/.git --exclude=node_modules ./ $(install_tests)/ || exit 1; \
+	if [ -f $(install_tests)/composer.json ]; then \
+		rc=0; $(php_run) 'cd $(install_tests) && composer install --no-interaction --no-progress' >$(install_dir)/phpunit.composer.txt 2>&1 || rc=$$?; \
+		echo "$$rc" >$(install_dir)/phpunit.composer.rc; \
+	fi;
 # The server half, lib/install-test.sh, runs as root in the container: it writes
 # into the server and starts its web server. Under docker that is the run without
 # --user; the script hands its output to the owner of the checkout. Each tag runs
@@ -569,6 +584,7 @@ php-compat-run:
 install-test: $(if $(or $(TARBALL),$(install_src)),,check-app)
 ifneq ($(TARBALL),)
 	@$(call server_core,install-test)
+	$(if $(install_phpunit),@echo "ERROR: PHPUNIT=1 and COVERAGE=1 run the tests of the checkout; a tarball does not ship them - leave TARBALL= out" >&2; exit 1)
 	@src='$(TARBALL)'; dir=$(install_tarball_dir); rm -rf $$dir && mkdir -p $$dir/tree || exit 1; \
 	case "$$src" in \
 		https://*) echo "==> Downloading $$src" >&2; curl -fsSL --proto '=https' --max-filesize 209715200 -o $$dir/app.tar.gz "$$src" || { echo "ERROR: could not download $$src" >&2; exit 1; }; file=$$dir/app.tar.gz ;; \
@@ -594,8 +610,9 @@ else
 	@$(server_tags) \
 	echo "==> install-test on Nextcloud $${tags:-none} (RUNTIME=$(RUNTIME))" >&2; \
 	rm -rf $(install_dir) && mkdir -p $(install_dir) || exit 1; \
-	printf 'min=%s\nmax=%s\nfirst=%s\nmaster=%s\ntags=%s\nsource=%s\nsrc=%s\ntarball=%s\n' "$$min" "$$max" "$$first" "$$master" "$$tags" '$(install_source)' '$(install_src)' '$(notdir $(install_tarball))' >$(install_dir)/range; \
-	cp "$(ncmake_lib_dir)/install-test.sh" $(install_dir)/ || exit 1; \
+	printf 'min=%s\nmax=%s\nfirst=%s\nmaster=%s\ntags=%s\nsource=%s\nsrc=%s\ntarball=%s\nphpunit=%s\ncoverage=%s\n' "$$min" "$$max" "$$first" "$$master" "$$tags" '$(install_source)' '$(install_src)' '$(notdir $(install_tarball))' '$(install_phpunit)' '$(filter 1,$(COVERAGE))' >$(install_dir)/range; \
+	cp "$(ncmake_lib_dir)/install-test.sh" "$(ncmake_lib_dir)/data/tool-configs.json" $(install_dir)/ || exit 1; \
+	$(if $(install_phpunit),$(install_phpunit_prep)) \
 	for t in $$tags; do \
 		echo "==> Nextcloud $$t" >&2; mkdir -p $(install_dir)/$$t; \
 		$(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory install-test-run install_tag=$$t || echo "$$?" >$(install_dir)/$$t/failed; \
@@ -604,7 +621,7 @@ else
 endif
 
 install-test-run:
-	@$(call container_prep,$(install_image):$(install_tag)) && $(install_container) $(install_image):$(install_tag) sh $(install_dir)/install-test.sh '$(app_id)' $(install_dir)/$(install_tag) '$(or $(install_src),build/stage/$(app_id))'
+	@$(call container_prep,$(install_image):$(install_tag)) && $(install_container) $(install_image):$(install_tag) sh $(install_dir)/install-test.sh '$(app_id)' $(install_dir)/$(install_tag) '$(or $(install_src),build/stage/$(app_id))' '$(if $(install_phpunit),$(install_tests))' '$(filter 1,$(COVERAGE))'
 
 # php-audit runs first: its inventory, build/reports/php-audit.json, is what the
 # plan and the analyser read. Its own report is not printed here, and the
@@ -1035,7 +1052,7 @@ build/reports/profile.json, and the exit code is 0 with or without findings.
 endef
 
 define help_install-test
-make install-test [NC=all|"<major> ..."] [TARBALL=<file>|<https URL>] [ARGS="<analyser arguments>"] [JSON=<file>]
+make install-test [NC=all|"<major> ..."] [TARBALL=<file>|<https URL>] [PHPUNIT=1] [COVERAGE=1] [ARGS="<analyser arguments>"] [JSON=<file>]
 
 Installs the staged app, what make dist packs, on a real Nextcloud server and
 checks whether it runs there. Run make build first.
@@ -1067,14 +1084,32 @@ the OCS capabilities and WebDAV, and cron.php runs once.
   [i] an entry of that level that does not name the app
   [i] the app declares majors below the lowest image, which are not installed
 
+PHPUNIT=1 then runs the app's PHPUnit suite on each server, with the app in
+custom_apps/<app id>, where its tests/bootstrap.php expects it. The checkout is
+copied into build/install-test/phpunit and composer install runs there, as
+make composer ARGS=install runs it, so PHPUnit is the app's own, from
+vendor-bin/phpunit or require-dev. The configuration is the one the test:unit
+script of composer.json names, otherwise the first configuration file PHPUnit
+looks for, in the root or in tests/. The suite runs after nextcloud.log is read, so what it logs
+is no finding of the install. COVERAGE=1 implies PHPUNIT=1 and switches pcov of
+the server on: coverage.xml (Clover) and coverage/ (HTML) stay beside the
+other output. A tarball ships no tests, so TARBALL= takes neither.
+  [!] the suite fails: a test fails or errs, or PHPUnit does not finish
+  [!] the app has a PHPUnit configuration, and composer install brings no
+      PHPUnit
+  [i] the app has no PHPUnit configuration, so no suite ran
+
 The container publishes no port and is removed after the run. What each run
 left stays in build/install-test/<tag>: the output of occ and cron.php, the
-status of each request, nextcloud.log and the output of the web server.
+status of each request, nextcloud.log and the output of the web server, and
+with PHPUNIT=1 phpunit.txt and junit.xml.
 
 Examples:
   make build && make install-test       the lowest and the highest major
   make install-test NC=all              every major in between too
   make install-test NC=master           only master
+  make install-test PHPUNIT=1           and the app's PHPUnit suite on them
+  make install-test COVERAGE=1          the suite with its coverage report
   make install-test ARGS=--details      every log entry behind the findings
   make install-test TARBALL=https://example.org/app-1.0.0.tar.gz
                                         the tarball a release ships
