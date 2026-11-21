@@ -14,7 +14,7 @@ The lint workflows of ncmake-workflows as make targets, in `mk/lint.mk`. Each ta
 | `make lint-containerfiles [JSON=<file>]` | hadolint over every tracked Containerfile and Dockerfile |
 | `make lint-markdown [JSON=<file>]` | markdownlint-cli2 over every tracked Markdown file |
 | `make lint-php-syntax [PHP_VERSIONS="<versions>"] [JSON=<file>]` | `php -l` over every tracked PHP file, once per PHP version |
-| `make lint-shell [JSON=<file>]` | shellcheck over every tracked shell script |
+| `make lint-shell [JSON=<file>]` | shellcheck over every tracked shell script, and the rule `unset-local`: under `set -u`, every name `local` or `declare` declares gets a value (`local x=""`, `local -a x=()`); one meant to stay unset takes `# ncmake disable=unset-local` on the line before |
 | `make lint-version [JSON=<file>]` | the version of `package.json`, `composer.json` and `package-lock.json` against `appinfo/info.xml` |
 | `make lint-vue-imports [JSON=<file>]` | imports of the `@nextcloud/vue` root in the tracked source files |
 | `make lint-web [JSON=<file>]` | ESLint, Stylelint and html-validate over the plain web files of a repository without a `package.json` |
