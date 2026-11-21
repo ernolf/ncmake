@@ -517,6 +517,16 @@ shell script is a file named *.sh or *.bash, or one whose first line is a
 shebang that names sh, bash, dash or ksh. shellcheck reads the repository's
 .shellcheckrc. A repository without shell scripts passes.
 
+Beside shellcheck it applies the rule unset-local, which fails as well: in a
+script that runs set -u (set -euo pipefail, set -o nounset, ...), every name
+local, declare or typeset declares gets a value, local x="" or local -a x=().
+A name declared without one is unset, and every path that reads it before it
+assigns it ends the script with "unbound variable"; shellcheck does not see
+it. local -, declare -p, -f and -F declare nothing and are left alone. A
+variable that is meant to stay unset, because the script asks for it with
+$${x+x}, takes the directive on the line before, with the reason:
+  # ncmake disable=unset-local -- the caller tells set from empty
+
 The binary is the one of shellcheck's GitHub release, checked against its
 digest and kept in tools/ of the ncmake cache.
 
@@ -614,7 +624,7 @@ help::
 	@echo "  $(ct)lint-markdown$(c0)        markdownlint over the Markdown files"
 	@echo "  $(ct)lint-php-syntax$(c0)      php -l over the PHP files, per PHP version"
 	@echo "    $(cd)optional $(cv)PHP_VERSIONS=\"8.2 8.4\"$(cd), see $(cv)make help-lint-php-syntax$(c0)"
-	@echo "  $(ct)lint-shell$(c0)           shellcheck over the shell scripts"
+	@echo "  $(ct)lint-shell$(c0)           shellcheck and unset-local over the shell scripts"
 	@echo "  $(ct)lint-version$(c0)         version files against appinfo/info.xml"
 	@echo "  $(ct)lint-vue-imports$(c0)     imports of the @nextcloud/vue root"
 	@echo "  $(ct)lint-web$(c0)             ESLint, Stylelint, html-validate without a package.json"
