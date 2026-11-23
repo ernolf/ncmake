@@ -35,12 +35,12 @@ def _retry(what, call):
             time.sleep(DELAY)
 
 
-def fetch(url, missing_ok=False, binary=False):
+def fetch(url, missing_ok=False, binary=False, headers=None):
     """The body of url as text, or as bytes with binary. With missing_ok, a 404
     returns None: the path does not exist at that ref, which is an answer, not a
     failure."""
     def call():
-        req = urllib.request.Request(url, headers={'User-Agent': 'ncmake-data-update'})
+        req = urllib.request.Request(url, headers={'User-Agent': 'ncmake-data-update', **(headers or {})})
         token = os.environ.get('GITHUB_TOKEN')
         if token and url.startswith('https://api.github.com/'):
             req.add_header('Authorization', 'Bearer ' + token)
