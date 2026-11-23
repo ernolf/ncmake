@@ -12,6 +12,7 @@
     "bot-conditions": "attack",
     "cache-poisoning": "attack",
     "concurrency-limits": "hardening",
+    "dangerous-checkout": "attack",
     "dangerous-triggers": "attack",
     "dependabot-cooldown": "hardening",
     "dependabot-execution": "attack",
