@@ -54,8 +54,16 @@
 #                   master pins it
 #     column_notnull whether a column without the option notnull is NotNull,
 #                    Column.php of that doctrine/dbal
+#
+# The core pulls the PHP images of ncmake-images by these values: the floor of the
+# newest end-of-life major and every minor up to the ceiling of master, where
+# composer and psalm run. A PHP minor without its image there would fail every app
+# the day the file names it. So while one is not published, the file stays as it
+# was and the script fails, as with a source that cannot be read; the first run
+# after ncmake-images has published it writes the file.
 
 import json
+import os
 import re
 import sys
 
@@ -74,6 +82,14 @@ DBAL = 'https://raw.githubusercontent.com/doctrine/dbal/%s/%s'
 # doctrine/dbal moved its sources from lib/Doctrine/DBAL/ to src/ in 3.0.
 DBAL_DIRS = ('src', 'lib/Doctrine/DBAL')
 LIMIT = r'(\d+|\$MAX_NAME_LENGTH)'
+# php_image_repo of the core names the repository of the PHP images.
+CORE = os.path.join(os.path.dirname(common.DATA_DIR), 'core', 'Makefile')
+MANIFESTS = ', '.join((
+    'application/vnd.oci.image.index.v1+json',
+    'application/vnd.docker.distribution.manifest.list.v2+json',
+    'application/vnd.oci.image.manifest.v1+json',
+    'application/vnd.docker.distribution.manifest.v2+json',
+))
 
 ABOUT = ('The majors of nextcloud/server, the PHP each one runs on, the PHP extensions it '
          'requires, the apps whose routes may state a root and what it checks in the schema '
@@ -206,6 +222,34 @@ def migration_defaults(master_sha):
     return values, sources
 
 
+def unpublished(php, eol, master):
+    """The images of the PHP minors from the floor of eol to the ceiling of master
+    that the registry does not serve. A major's last minor is the highest one
+    php names."""
+    floor = php.get(str(eol), {}).get('min')
+    ceiling = php.get(str(master), {}).get('max')
+    if not floor or not ceiling:
+        sys.exit('ERROR: lib/versioncheck.php gives no PHP floor for %d or no ceiling for %d' % (eol, master))
+    last = {}
+    for r in php.values():
+        for v in r.values():
+            a, b = (int(x) for x in v.split('.'))
+            last[a] = max(last.get(a, 0), b)
+    (fa, fb), (ca, cb) = ((int(x) for x in v.split('.')) for v in (floor, ceiling))
+    minors = ['%d.%d' % (a, b) for a in range(fa, ca + 1)
+              for b in range(fb if a == fa else 0, (cb if a == ca else last.get(a, -1)) + 1)]
+    with open(CORE, 'r', encoding='utf-8') as f:
+        m = re.search(r'^php_image_repo\s*=\s*(\S+)', f.read(), re.M)
+    if not m:
+        sys.exit('ERROR: core/Makefile sets no php_image_repo')
+    registry, path = m.group(1).split('/', 1)
+    # The registry hands an anonymous pull token for a public image.
+    token = json.loads(common.fetch('https://%s/token?scope=repository:%s:pull' % (registry, path)))['token']
+    headers = {'Authorization': 'Bearer ' + token, 'Accept': MANIFESTS}
+    return ['%s:%s' % (m.group(1), v) for v in minors
+            if common.fetch('https://%s/v2/%s/manifests/%s' % (registry, path, v), missing_ok=True, headers=headers) is None]
+
+
 def schedule_majors(text, heading):
     """The majors in the bold first column of the table below heading."""
     majors = []
@@ -296,6 +340,11 @@ def main():
     }
     if not (values['eol'] < maintained[0] <= values['newest'] < master):
         sys.exit('ERROR: the sources disagree: %r' % {k: v for k, v in values.items() if k not in ('php', 'extensions', 'root_urls', 'migrations')})
+    missing = unpublished(php, values['eol'], master)
+    if missing:
+        sys.exit('ERROR: %s %s not published yet, so data/nextcloud-server.json stays as it was. '
+                 'The workflow PHP images of ernolf/ncmake-images publishes it; the first run after that writes the file.'
+                 % (' and '.join(missing), 'is' if len(missing) == 1 else 'are'))
     sources = {
         'master': '%s/blob/%s/version.php' % (REPO, master_sha),
         'newest': '%s/releases/tag/%s' % (REPO, newest_tag),
