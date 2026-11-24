@@ -17,7 +17,11 @@
 #                          app calls it and does not implement it
 #              methods     per method that is not private, the first and the
 #                          last major that has it; a protected one is what a
-#                          class of an app that extends or uses it calls
+#                          class of an app that extends or uses it calls. A
+#                          method that carries #[\Override] counts from the
+#                          first major on in which a parent declares it; a
+#                          parent outside OCP\ and NCU\, such as a PSR
+#                          interface, is not read and counts as declaring it
 #              constants   per constant that is not private, and per case of an
 #                          enum, the first and the last major that has it
 #              deprecated  the first major whose doc comment of the class
@@ -56,6 +60,10 @@ DECL = re.compile(
     r'^((?:#\[[^\n]*\]\s*)*)(?:(?:abstract|final|readonly)\s+)*(class|interface|trait|enum)\s+(%s)'
     r'(?:\s*:\s*%s)?(?:\s+extends\s+([^{]*?))?(?:\s+implements\s+([^{]*?))?\s*\{' % (NAME, NAME), re.M)
 METHOD = re.compile(r'^\s*((?:(?:abstract|final|public|protected|private|static)\s+)*)function\s+&?\s*(%s)\s*\(' % NAME, re.M)
+# A method that carries the attribute Override, past further attributes and
+# modifiers.
+OVERRIDE = re.compile(r'#\[\s*\\?Override\s*\]\s*(?:#\[[^\n]*\]\s*)*(?:(?:abstract|final|public|protected|static)\s+)*'
+                      r'function\s+&?\s*(%s)\s*\(' % NAME)
 CONST = re.compile(r'^\s*((?:(?:final|public|protected|private)\s+)*)const\s+(?:%s\s+)?(%s)\s*=' % (QNAME, NAME), re.M)
 CASE = re.compile(r'^\s*case\s+(%s)\s*[=;]' % NAME, re.M)
 ATTRIBUTE = re.compile(r'#\[\s*(%s)' % QNAME)
@@ -102,7 +110,7 @@ def resolve(name, namespace, uses):
 
 
 def declarations(text):
-    """[(name, kind, parents, attributes, methods)] of one file."""
+    """[(name, kind, parents, attributes, methods, constants, overrides)] of one file."""
     text = SKIP.sub(lambda m: '' if m.group(1) else "''", text)
     m = NAMESPACE.search(text)
     namespace = m.group(1) if m else ''
@@ -122,13 +130,14 @@ def declarations(text):
         constants = sorted({n for modifiers, n in CONST.findall(body) if 'private' not in modifiers.split()}
                            | (set(CASE.findall(body)) if kind == 'enum' else set()))
         marks = [resolve(a, namespace, uses) for a in ATTRIBUTE.findall(attributes)]
-        found.append((resolve(name, namespace, uses), kind, sorted(set(parents)), marks, methods, constants))
+        overrides = sorted(set(OVERRIDE.findall(body)) & set(methods))
+        found.append((resolve(name, namespace, uses), kind, sorted(set(parents)), marks, methods, constants, overrides))
     return found
 
 
 def read(ref):
-    """{class: (kind, parents, attributes, methods, constants, deprecations)} of
-    the package at ref."""
+    """{class: (kind, parents, attributes, methods, constants, overrides,
+    deprecations)} of the package at ref."""
     data = common.fetch(ARCHIVE % ref, binary=True)
     classes = {}
     with tarfile.open(fileobj=io.BytesIO(data), mode='r:gz') as tar:
@@ -146,11 +155,62 @@ def read(ref):
             notes = deprecations(text)
             if len(found) > 1 and (notes[0] is not None or notes[1]):
                 sys.exit('ERROR: %s of %s declares more than one class and deprecates something' % (path, ref))
-            for name, kind, parents, marks, methods, constants in found:
-                classes[name] = (kind, parents, marks, methods, constants, notes)
+            for name, kind, parents, marks, methods, constants, overrides in found:
+                classes[name] = (kind, parents, marks, methods, constants, overrides, notes)
     if not classes:
         sys.exit('ERROR: %s has no class below %s' % (ref, ' or '.join(ROOTS)))
     return classes
+
+
+def inherit(values, parents_of, overriding):
+    """Move the first major of each method that carries #[Override] back to the
+    first major from which on a parent declares it without a gap: the server
+    declared again what the class had before, and a call of it works there."""
+    classes, majors = values['classes'], values['majors']
+
+    def outside(name):
+        return not name.startswith(('OCP\\', 'NCU\\'))
+
+    def declares(name, method, major, foreign):
+        """Whether name or a parent of it declares method in major; of the
+        parents outside the API only those in foreign count."""
+        if outside(name):
+            return name in foreign
+        c = classes.get(name)
+        span = c['methods'].get(method) if c else None
+        if span and span[0] <= major <= span[1]:
+            return True
+        return any(declares(p, method, major, foreign) for p in parents_of.get(name, {}).get(major, ()))
+
+    def reached(name, major):
+        """The parents outside the API that name reaches in major."""
+        found = set()
+        for p in parents_of.get(name, {}).get(major, ()):
+            found |= {p} if outside(p) else reached(p, major)
+        return found
+
+    # The first major each method has in the packages, before any moves.
+    first = {(name, method): classes[name]['methods'][method][0]
+             for name, methods in overriding.items() for method in methods}
+    # A parent that overrides as well may move first, so repeat until nothing moves.
+    moved = True
+    while moved:
+        moved = False
+        for name, methods in overriding.items():
+            c = classes[name]
+            for method in sorted(methods):
+                span = c['methods'][method]
+                # Where a parent of the API declares it in the first major, the
+                # method overrides that one; otherwise one of the parents outside
+                # the API it reaches there, whose methods are not read.
+                at = first[name, method]
+                foreign = set() if any(declares(p, method, at, set()) for p in parents_of[name].get(at, ())) else reached(name, at)
+                earlier = [major for major in majors if major < span[0]]
+                for major in reversed(earlier):
+                    if not any(declares(p, method, major, foreign) for p in parents_of[name].get(major, ())):
+                        break
+                    span[0] = major
+                    moved = True
 
 
 def main():
@@ -163,10 +223,15 @@ def main():
 
     values = {'majors': sorted(refs), 'classes': {}}
     sources = {}
+    # Per class the parents of each major, and the methods that carry
+    # #[\Override] in any of them.
+    parents_of, overriding = {}, {}
     for major in sorted(refs):
         sha = heads[refs[major]]
         sources[str(major)] = '%s/tree/%s' % (REPO, sha)
-        for name, (kind, parents, marks, methods, constants, (whole, members)) in read(sha).items():
+        for name, (kind, parents, marks, methods, constants, overrides, (whole, members)) in read(sha).items():
+            parents_of.setdefault(name, {})[major] = parents
+            overriding.setdefault(name, set()).update(overrides)
             c = values['classes'].setdefault(name, {'kind': kind, 'majors': [major, major], 'parents': parents,
                                                     'methods': {}, 'constants': {}, 'deprecated_members': {}})
             c['kind'], c['parents'] = kind, parents
@@ -183,6 +248,7 @@ def main():
             for member, note in members.items():
                 if member in c['methods'] or member in c['constants']:
                     c['deprecated_members'][member] = [c['deprecated_members'].get(member, [major])[0], note]
+    inherit(values, parents_of, overriding)
     for c in values['classes'].values():
         c['constants'] = dict(sorted(c['constants'].items()))
         c['deprecated_members'] = dict(sorted(c['deprecated_members'].items()))

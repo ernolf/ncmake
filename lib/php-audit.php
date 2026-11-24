@@ -14,7 +14,8 @@
 //                attributes and, per method, line, visibility, static, abstract,
 //                attributes and the annotations of its doc comment; attrs has
 //                each attribute once more with its line and its arguments
-//     refs       per class name the file uses, the first line that does
+//     refs       per class name the file uses, the first line that does; the
+//                OC of OC::$server is in ocserver only
 //     news       [line, class, arguments] of every new <class>
 //     funcs      [line, function, arguments] of every call of a named function
 //     ocserver   the lines that read OC::$server
@@ -457,6 +458,8 @@ final class Facts extends NodeVisitorAbstract
 		} elseif ($node instanceof Expr\StaticPropertyFetch) {
 			if ($node->class instanceof Name && $node->class->toString() === 'OC'
 				&& $node->name instanceof Node\VarLikeIdentifier && $node->name->name === 'server') {
+				// One access, reported as OC::$server and not once more as OC.
+				$node->class->setAttribute('noClass', true);
 				$this->ocserver[] = $line;
 			}
 		} elseif ($node instanceof Expr\Assign) {
