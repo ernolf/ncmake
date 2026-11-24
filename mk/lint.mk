@@ -541,9 +541,10 @@ read, against version in package.json and composer.json and the root entries
 version and packages[""].version of package-lock.json, where the file is
 tracked and states one, and fails where the lint-version workflow of
 ncmake-workflows fails: on every version that differs, compared as written,
-and on a manifest that is not valid JSON. make version bumps them all in one
-step. A file that states no version is not checked, and a repository without
-appinfo/info.xml passes.
+and on a manifest that is not valid JSON. A version that differs is one
+finding, which names every place that states it. make version bumps them all
+in one step. A file that states no version is not checked, and a repository
+without appinfo/info.xml passes.
 
 $(call lint_help_common,lint-version)
 endef
