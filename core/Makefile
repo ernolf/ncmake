@@ -165,7 +165,14 @@ vendor_ignored = $(shell git check-ignore -q vendor/ 2>/dev/null && echo 1)
 js_out_ignored = $(if $(filter js,$(node_root)),$(shell { sed -n 's|^/\{0,1\}js/||p' .gitignore 2>/dev/null; cat js/.gitignore 2>/dev/null; } | grep -v '^[[:space:]]*\(#\|$$\)' | grep -vq '^/\{0,1\}node_modules/\{0,1\}$$' && echo 1))
 # The app's own post-install-cmd runs with the install: it is where an app moves
 # dependencies into a prefixed namespace under lib/Vendor.
-php_build_cmd  ?= $(if $(need_composer),composer install --no-dev --prefer-dist --no-progress)
+php_build_default = $(if $(need_composer),composer install --no-dev --prefer-dist --no-progress)
+php_build_cmd  ?= $(php_build_default)
+# An app may keep that step in a script of its own that no install event runs,
+# for its release tooling to call. After the default install, composer_scope_tool
+# names such a script, and the build runs it; a php_build_cmd of ncmake.mk is left
+# as it is.
+php_build_scope = $(if $(subst x$(php_build_default)x,,x$(php_build_cmd)x),,1)
+scope_dirs     = $(filter-out vendor composer,$(keep_dirs) $(keep_extra))
 # Composer resolves against every extension the build runtime loads, so a locked
 # package that conflicts with one the image carries but nothing requires (as
 # symfony/cache does with ext-redis < 6.1) would fail the build. The extensions
@@ -1834,23 +1841,146 @@ stable-branch: check-app
 
 # == Build ==
 
+# A failed build ends with the line that names the cause. Composer, npm, pnpm,
+# yarn and the bundlers print their summary last (the path of the npm debug log,
+# the usage of a composer command, a stack trace), and the cause above it.
+# build_logged runs a command with its output on the terminal and in a file of
+# the temporary directory d, and when it fails, prints the first line of that
+# output that has the form of an error, prefixed with the tool, as its last line.
+# A line that only announces the message (it ends in a colon, or it is the
+# "Problem 1" or "[...Exception]" heading of composer, or the "ERROR in <module>"
+# of webpack) is quoted with the next line that is not empty; under a composer
+# problem, the line that only says a package is locked gives way to the
+# requirement after it. The fields npm puts before its message (code, path,
+# command, ...) and the warnings of a nested npm are passed over, and quoted only
+# when no other line has the form of an error. Where no line has that form,
+# nothing is added.
+define build_error_awk
+function trim(s) { gsub(/[ \t]+/, " ", s); sub(/^ /, "", s); sub(/ $$/, "", s); return s }
+{ gsub(/\033\[[0-9;]*[A-Za-z]/, ""); sub(/\r$$/, "") }
+head != "" && / is locked to version .* an update of this package was not requested\.$$/ { next }
+head != "" { if (NF) { print substr(head " " trim($$0), 1, 300); found = 1; exit } next }
+/^npm (error|ERR!) / || /^ERROR/ || /^error / || /\[ERROR\]/ || /ERR_PNPM_/ || /error TS[0-9]+:/ ||
+	/^(\[[^ ]+\] )?[A-Za-z]*Error: / || /: (command )?not found$$/ || /^ *Problem [0-9]+ *$$/ || /^- Required package / ||
+	/^ *\[[^ ]*(Exception|Error)\] *$$/ || /^In [^ ]+ line [0-9]+:$$/ || /^Script .* returned with error code [0-9]+$$/ {
+	line = trim($$0)
+	if (line ~ /^npm (error|ERR!) ((code|errno|syscall|path|cwd|signal|command)( |$$)|npm (warn|WARN) )/) { if (meta == "") meta = line; next }
+	if (line ~ /:$$/ || line ~ /^Problem [0-9]+$$/ || line ~ /^\[.*\]$$/ || line ~ /^ERROR in /) { head = line; next }
+	print substr(line, 1, 300); found = 1; exit
+}
+END { if (!found && head != "") print substr(head, 1, 300); else if (!found && meta != "") print substr(meta, 1, 300) }
+endef
+export build_error_awk
+build_logged = { $(2); echo $$? >"$$d/rc"; } 2>&1 | tee "$$d/log"; \
+	rc=$$(cat "$$d/rc" 2>/dev/null || echo 1); \
+	if [ "$$rc" != 0 ]; then line=$$(awk "$$build_error_awk" "$$d/log"); [ -z "$$line" ] || echo "$(1) stopped at: $$line" >&2; fi; \
+	[ "$$rc" = 0 ]
+
+# The scripts of composer.json that move dependencies into a prefixed namespace
+# but run on no install event: a script that pre-install-cmd, post-install-cmd,
+# pre-autoload-dump and post-autoload-dump do not reach, through @<name> or
+# composer [run-script] <name>, that itself or through the scripts it calls
+# regenerates the autoloader (dump-autoload), and whose own commands name a path
+# below a shipped directory which is missing and which .gitignore ignores, so
+# only a build writes it. Of those, a script that another of them calls is left
+# out. One line per script, its name and that path. Arguments: the shipped
+# directories besides vendor/ and composer/, which the install itself writes.
+define composer_scope_tool
+import json
+import os
+import re
+import subprocess
+import sys
+
+try:
+    with open('composer.json', encoding='utf-8') as f:
+        scripts = json.load(f).get('scripts')
+except (OSError, ValueError, AttributeError):
+    sys.exit(0)
+if not isinstance(scripts, dict) or not sys.argv[1:]:
+    sys.exit(0)
+
+CALL = re.compile(r'(?:^|[\s;&|(])(?:@|composer(?:\.phar)?\s+(?:run(?:-script)?\s+)?)([\w:.-]+)')
+DUMP = re.compile(r'\bdump-?autoload\b')
+PATH = re.compile(r'(?<![\w./-])(?:\./)?((?:' + '|'.join(map(re.escape, sys.argv[1:])) + r')/[\w.-]+)')
+INSTALL = ('pre-install-cmd', 'post-install-cmd', 'pre-autoload-dump', 'post-autoload-dump')
+
+
+def commands(name):
+    v = scripts.get(name)
+    v = [v] if isinstance(v, str) else v if isinstance(v, list) else []
+    return [c for c in v if isinstance(c, str)]
+
+
+def reach(names):
+    seen, todo = set(), list(names)
+    while todo:
+        n = todo.pop()
+        if n in seen:
+            continue
+        seen.add(n)
+        todo.extend(m.group(1) for c in commands(n) for m in CALL.finditer(c) if m.group(1) in scripts)
+    return seen
+
+
+def ignored(path):
+    return subprocess.run(['git', 'check-ignore', '-q', '--', path + '/'], stdout=subprocess.DEVNULL,
+                          stderr=subprocess.DEVNULL).returncode == 0
+
+
+installed = reach([n for n in INSTALL if n in scripts])
+found = {}
+for name in scripts:
+    if name in installed or re.match(r'(pre|post)-', name):
+        continue
+    if not any(DUMP.search(c) for n in reach([name]) for c in commands(n)):
+        continue
+    paths = [p for p in dict.fromkeys(PATH.findall('\n'.join(commands(name)))) if not os.path.exists(p) and ignored(p)]
+    if paths:
+        found[name] = paths[0]
+for name, path in found.items():
+    if not any(name in reach([o]) for o in found if o != name):
+        print(name, path)
+endef
+export composer_scope_tool
+
 # Build the app's dependencies and frontend. What runs is auto-detected (see the
 # build heuristics at the top) and routed to its container via RUNTIME. PHP=min so
 # packaging resolves dependencies against the support floor (php_min).
+# A script that composer_scope_tool names runs after the install; where it names
+# more than one, the build stops and names them, because which one an app's
+# release runs is not in its files.
 build: PHP := min
 build: check-app
 	@echo "==> Building via RUNTIME=$(RUNTIME)"
 	@if [ -n "$(php_build_cmd)" ]; then \
+		d=$$(mktemp -d) && trap 'rm -rf "$$d"' EXIT || exit 1; \
 		$(if $(composer_vendor_require),echo "composer: $(composer_vendor_require) requires vendor/autoload.php";) \
 		app="$(php_app)"; min="$(php_min)"; \
 		if [ "$$app" != "$$min" ]; then echo "composer: building on PHP $$min, the floor of Nextcloud $(nc_eol), the newest end-of-life major; the app's own floor is $${app:+PHP }$${app:-unknown}"; fi; \
 		echo "+ $(php_build_cmd)"; \
-		$(php_run) 'export COMPOSER_IGNORE_PLATFORM_REQ="$$($(php_ignored_ext))"; $(php_build_cmd)' || exit 1; \
+		$(call build_logged,composer,$(php_run) 'export COMPOSER_IGNORE_PLATFORM_REQ="$$($(php_ignored_ext))"; $(php_build_cmd)') || exit 1; \
+		if [ -n "$(php_build_scope)" ]; then \
+			scope=$$(python3 -c "$$composer_scope_tool" $(scope_dirs)); \
+			if [ $$(printf '%s' "$$scope" | grep -c .) -gt 1 ]; then \
+				echo "ERROR: composer: these scripts write a path the install leaves missing, and no install event runs them:" >&2; \
+				printf '%s\n' "$$scope" | sed 's/^/         /' >&2; \
+				echo "       Set php_build_cmd in ncmake.mk to the install and the script the release runs." >&2; \
+				exit 1; \
+			fi; \
+			if [ -n "$$scope" ]; then \
+				set -- $$scope; \
+				echo "composer: $$2 is missing after the install; script $$1 writes it, and no install event runs it"; \
+				echo "+ composer run-script --no-dev $$1"; \
+				$(call build_logged,composer,$(php_run) 'export COMPOSER_IGNORE_PLATFORM_REQ="$$($(php_ignored_ext))"; composer run-script --no-dev '"$$1") || exit 1; \
+			fi; \
+		fi; \
 	else echo "(composer: nothing to build)"; fi
 	@if [ -n "$(node_build_cmd)" ]; then \
+		d=$$(mktemp -d) && trap 'rm -rf "$$d"' EXIT || exit 1; \
 		$(if $(node_cd),echo "npm: the frontend is in js/ (js/package.json) and builds there";) \
 		if [ -z "$(node_lock)" ]; then echo "npm: no lock file, so the dependencies are resolved anew and this build is not reproducible" >&2; fi; \
-		echo "+ $(node_build_cmd)"; $(node_run) '$(if $(filter npm,$(node_pm)),$(node_npm_setup))$(node_pm_setup)$(node_build_cmd)' || exit 1; \
+		echo "+ $(node_build_cmd)"; $(call build_logged,$(node_pm),$(node_run) '$(if $(filter npm,$(node_pm)),$(node_npm_setup))$(node_pm_setup)$(node_build_cmd)') || exit 1; \
 	else echo "(npm: nothing to build)"; fi
 
 # Generic pass-through into the throwaway containers: run any composer or npm
@@ -2604,6 +2734,11 @@ the host needs neither PHP nor Node. What runs is detected from your files:
                                pnpm-lock.yaml or yarn.lock that package manager,
                                through corepack; without a lock file npm install,
                                and the build is not reproducible
+An app that moves its dependencies into a prefixed namespace in a composer script
+that no install event runs gets that script run after the install: one that
+regenerates the autoloader and writes a git-ignored path below a shipped
+directory, lib/Vendor for example, that the install left missing. Where several
+scripts qualify, the build stops and names them.
 Without a package.json at the root, a frontend in js/ (js/package.json) builds
 in js/, from its own lock file; js/node_modules never ships.
 npm is the one the Node line ships, unless engines.npm in package.json does not
@@ -2611,7 +2746,10 @@ allow it: then the newest npm release in that range that runs on the Node line.
 Composer ignores the PHP extensions the build image loads but neither
 composer.json nor a locked package requires, so the build fails only on what the
 app requires. A side that does not apply is skipped; override in ncmake.mk (php_build_cmd,
-node_build_cmd). RUNTIME= selects the container (podman, docker, docker-rootless,
+node_build_cmd). When a step fails, the last line quotes the first line of its
+output that has the form of an error, "composer stopped at: ..." or
+"npm stopped at: ...", since the tools print their cause above their closing
+lines. RUNTIME= selects the container (podman, docker, docker-rootless,
 bare). Each image is pulled again once its last check is older than
 IMAGE_CHECK_MIN minutes (default 1440), and the image that pull superseded is
 removed right away. A pull tries the registries that ncmake's image-sources list
