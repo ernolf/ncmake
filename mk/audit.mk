@@ -1239,7 +1239,9 @@ capabilities. And it reports findings:
   class loading    no composer/autoload.php, an autoloader without a class
                    map or beyond level 1, one that does not map the app
                    namespace or requires a vendor/ no build writes, a class
-                   in lib/ off its PSR-4 path, psr-0
+                   in lib/ off its PSR-4 path that no Composer installation
+                   below lib/, classmap or psr-4 entry of another namespace
+                   loads, psr-0
   dependencies     a package in vendor/ that the server ships as well, and
                    development tools in require-dev of the root
   public API       OC\ and OC_ classes and OC::$$server, a class that
