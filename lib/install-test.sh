@@ -4,7 +4,7 @@
 #
 # install-test.sh - the half of make install-test that runs on the server.
 #
-#   install-test.sh <app id> <output directory> [<app tree> [<test tree> [<coverage>]]]
+#   install-test.sh <app id> <output directory> [<app tree> [<test tree> [<coverage> [<database>]]]]
 #
 # Runs as root in a container of ghcr.io/ernolf/ncmake-server, an installed
 # Nextcloud server, with the app checkout as the working directory. It copies
@@ -20,6 +20,11 @@
 # against the same server. That happens after nextcloud.log is copied, so what
 # the tests log does not count as a finding of the install. A coverage of 1
 # runs it with pcov switched on.
+#
+# A database of "pgsql <user> <password> <name>" moves the server onto the
+# PostgreSQL container make started beside it, and an app whose <php
+# max-version> the server refuses is enabled with it raised; lib/server-setup.sh
+# does both.
 
 set -u
 
@@ -28,6 +33,7 @@ out=$2
 src=${3:-build/stage/$app}
 tests=${4:-}
 coverage=${5:-}
+database=${6:-}
 web=/var/www/html
 # The facts of data/ the suite needs; make install-test copies them beside this script.
 data=$(cd "$(dirname "$0")" && pwd)/tool-configs.json
@@ -55,13 +61,22 @@ finish() {
 php -r 'echo PHP_VERSION;' >"$out/php"
 occ status --output=json >"$out/status.json" 2>"$out/status.err"
 
+. "$(dirname "$0")/server-setup.sh"
+# shellcheck disable=SC2086 # the database is the type and its three values
+if ! db_setup "$out" $database; then
+	echo database >"$out/stopped"
+	finish
+fi
+
 if ! { cp -a "$src" "$web/custom_apps/$app" && chown -R www-data:www-data "$web/custom_apps/$app"; } 2>"$out/copy.err"; then
 	echo copy >"$out/stopped"
 	finish
 fi
+php_cap "$out" "$web/custom_apps/$app"
 
 occ app:enable "$app" >"$out/enable.txt" 2>&1
 echo $? >"$out/enable.rc"
+php_retry "$out" "$(cat "$out/enable.rc")"
 
 apache2-foreground >"$out/apache.log" 2>&1 &
 i=0

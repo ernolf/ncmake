@@ -4,7 +4,7 @@
 #
 # runtime-audit.sh - the half of make runtime-audit that runs on the server.
 #
-#   runtime-audit.sh <app id> <output directory>
+#   runtime-audit.sh <app id> <output directory> [<database>]
 #
 # Runs as root in a container of ghcr.io/ernolf/ncmake-server, an installed
 # Nextcloud server, with the app checkout as the working directory. It copies
@@ -16,6 +16,11 @@
 # one line of <output directory>/steps with the lines of nextcloud.log it
 # covers, so lib/runtime-audit.mjs can tell which step logged what. It judges
 # nothing itself and ends with 0 whenever it got as far as writing those files.
+#
+# A database of "pgsql <user> <password> <name>" moves the server onto the
+# PostgreSQL container make started beside it, and an app whose <php
+# max-version> the server refuses is enabled with it raised; lib/server-setup.sh
+# does both, as for make install-test.
 
 set -u
 # sort and comm have to agree on one order.
@@ -23,6 +28,7 @@ export LC_ALL=C
 
 app=$1
 out=$2
+database=${3:-}
 dir=$(dirname "$out")
 web=/var/www/html
 log=$web/data/nextcloud.log
@@ -85,6 +91,13 @@ finish() {
 php -r 'echo PHP_VERSION;' >"$out/php"
 occ status --output=json >"$out/status.json" 2>"$out/status.err"
 
+. "$dir/server-setup.sh"
+# shellcheck disable=SC2086 # the database is the type and its three values
+if ! db_setup "$out" $database; then
+	echo database >"$out/stopped"
+	finish
+fi
+
 apache2-foreground >"$out/apache.log" 2>&1 &
 i=0
 until curl -fs -o /dev/null --max-time 5 http://localhost/status.php; do
@@ -113,11 +126,13 @@ if ! { cp -a "build/stage/$app" "$web/custom_apps/$app" && chown -R www-data:www
 	echo copy >"$out/stopped"
 	finish
 fi
+php_cap "$out" "$web/custom_apps/$app"
 
 begin
 occ app:enable "$app" >"$out/enable.txt" 2>&1
 rc=$?
 record enable "$app" "$rc"
+php_retry "$out" "$rc"
 if [ "$rc" -ne 0 ]; then
 	echo enable >"$out/stopped"
 	finish
