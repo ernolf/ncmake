@@ -20,7 +20,8 @@
 # A database of "pgsql <user> <password> <name>" moves the server onto the
 # PostgreSQL container make started beside it, and an app whose <php
 # max-version> the server refuses is enabled with it raised; lib/server-setup.sh
-# does both, as for make install-test.
+# does both, as for make install-test, and installs the apps make fetched for
+# an app that needs another one.
 
 set -u
 # sort and comm have to agree on one order.
@@ -83,6 +84,7 @@ settings() { runuser -u www-data -- php "$dir/runtime-audit.php" settings 2>/dev
 # host can read and remove them whatever runtime started the container.
 finish() {
 	if [ -f "$log" ]; then cp "$log" "$out/nextcloud.log"; else : >"$out/nextcloud.log"; fi
+	deps_missing "$out" "build/stage/$app"
 	chown -R --reference=. "$out" 2>/dev/null
 	exit 0
 }
@@ -110,6 +112,9 @@ until curl -fs -o /dev/null --max-time 5 http://localhost/status.php; do
 done
 
 OC_PASS=${user#*:} occ user:add --password-from-env "${user%%:*}" >"$out/user.txt" 2>&1
+# The apps the app needs come before what the server has without the app, so
+# their commands and settings do not count as the app's.
+deps_setup "$out"
 
 # What the server has without the app. An app the server ships is disabled
 # first, so its own commands and settings count as new.

@@ -24,7 +24,8 @@
 # A database of "pgsql <user> <password> <name>" moves the server onto the
 # PostgreSQL container make started beside it, and an app whose <php
 # max-version> the server refuses is enabled with it raised; lib/server-setup.sh
-# does both.
+# does both. It also installs the apps make fetched for an app that needs
+# another one, and names in missing the namespaces of those a run lacked.
 
 set -u
 
@@ -54,6 +55,7 @@ request() {
 # The files are written as root; hand them to the owner of the checkout, so the
 # host can read and remove them whatever runtime started the container.
 finish() {
+	deps_missing "$out" "$src"
 	chown -R --reference=. "$out" 2>/dev/null
 	exit 0
 }
@@ -67,6 +69,7 @@ if ! db_setup "$out" $database; then
 	echo database >"$out/stopped"
 	finish
 fi
+deps_setup "$out"
 
 if ! { cp -a "$src" "$web/custom_apps/$app" && chown -R www-data:www-data "$web/custom_apps/$app"; } 2>"$out/copy.err"; then
 	echo copy >"$out/stopped"

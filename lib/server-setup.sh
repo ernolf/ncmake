@@ -11,7 +11,9 @@
 # PostgreSQL container when the app names pgsql, and db_setup installs the
 # server on it before the app is copied in. php_cap finds out whether the server
 # refuses the app for its <php max-version>, and raises it in the copy, so the
-# run shows whether the app runs on that PHP anyway.
+# run shows whether the app runs on that PHP anyway. deps_setup installs the
+# apps make fetched from the App Store for an app that needs another one, and
+# deps_missing names the namespaces of the apps a run lacked.
 
 # db_setup <output directory> [pgsql <user> <password> <database>]
 # Writes db, the database the server runs on; for pgsql also pgsql.txt, the
@@ -96,4 +98,77 @@ php_cap() {
 php_retry() {
 	[ -s "$1/php-raised" ] && [ "$2" != 0 ] || return 0
 	php -r '$v = explode(".", $argv[1]); echo $v[0] . "." . ($v[1] ?? "0");' -- "$(cat "$1/php-cap")" >"$1/retry"
+}
+
+# deps_setup <output directory>
+# make puts the apps it fetched from the App Store for the major of the run
+# into deps/<major> beside the run directories, the major being the name of the
+# run without the -php<minor> of a run on the PHP of max-version. Each is
+# enabled before the app under test: the release the server ships where it has
+# one, else the fetched one, copied into custom_apps. deps holds the id and the
+# exit code of occ app:enable, deps.<id>.txt its output.
+deps_setup() {
+	setup_dir=$1
+	deps=$(dirname "$setup_dir")/deps/$(basename "$setup_dir" | sed 's/-php[0-9.]*$//')
+	[ -d "$deps" ] || return 0
+	: >"$setup_dir/deps"
+	for d in "$deps"/*/; do
+		d=${d%/}
+		[ -f "$d/appinfo/info.xml" ] || continue
+		id=$(basename "$d")
+		if [ ! -d "$web/apps/$id" ] && ! { rm -rf "${web:?}/custom_apps/$id" && cp -a "$d" "$web/custom_apps/$id" && chown -R www-data:www-data "$web/custom_apps/$id"; } >"$setup_dir/deps.$id.txt" 2>&1; then
+			printf '%s\t%s\n' "$id" 1 >>"$setup_dir/deps"
+			continue
+		fi
+		occ app:enable "$id" >"$setup_dir/deps.$id.txt" 2>&1
+		printf '%s\t%s\n' "$id" "$?" >>"$setup_dir/deps"
+	done
+}
+
+# deps_missing <output directory> <app directory>
+# Writes missing: the namespaces OCA\<X> that an error of the run names, where
+# the error says a class or the service of it does not exist, and neither the
+# app nor an enabled app has that namespace. The errors are the lines of the
+# occ output of the run, but those of PHPUnit and of the install on pgsql, and
+# the entries of level 3 or higher in nextcloud.log, with the messages of their
+# exceptions and not their traces, which name every class on the way.
+deps_missing() {
+	occ app:list --output=json 2>/dev/null | php -r '
+		$b = preg_quote(chr(92), "/");
+		$web = $argv[3];
+		$have = [];
+		$x = @simplexml_load_file($argv[2] . "/appinfo/info.xml");
+		if ($x !== false) $have[] = trim((string) $x->namespace) ?: ucfirst(trim((string) $x->id));
+		foreach (array_keys(json_decode(stream_get_contents(STDIN), true)["enabled"] ?? []) as $id) {
+			foreach (["apps", "custom_apps"] as $d) {
+				$x = @simplexml_load_file("$web/$d/$id/appinfo/info.xml");
+				if ($x !== false) {
+					$have[] = trim((string) $x->namespace) ?: ucfirst($id);
+					break;
+				}
+			}
+		}
+		$have = array_map("strtolower", $have);
+		$texts = [];
+		foreach (glob($argv[1] . "/*.txt") as $f) {
+			if (strpos(basename($f), "phpunit") !== 0 && basename($f) !== "pgsql.txt") $texts = array_merge($texts, file($f) ?: []);
+		}
+		foreach (@file($argv[1] . "/nextcloud.log") ?: [] as $l) {
+			$e = json_decode($l, true);
+			if (!is_array($e) || ($e["level"] ?? 0) < 3) continue;
+			$t = is_string($e["message"] ?? null) ? $e["message"] : "";
+			for ($ex = $e["exception"] ?? null; is_array($ex); $ex = $ex["Previous"] ?? null) $t .= " " . ($ex["Message"] ?? "");
+			$texts[] = $t;
+		}
+		$missing = [];
+		foreach ($texts as $t) {
+			if (!preg_match("/not found|does not exist|could not resolve/i", $t)) continue;
+			preg_match_all("/OCA(?:$b)+([A-Za-z_][A-Za-z0-9_]*)$b/", $t, $m);
+			foreach ($m[1] as $ns) {
+				if (!in_array(strtolower($ns), $have, true)) $missing[strtolower($ns)] = $ns;
+			}
+		}
+		ksort($missing);
+		foreach ($missing as $ns) echo $ns, "\n";
+	' -- "$1" "$2" "$web" >"$1/missing"
 }

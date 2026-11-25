@@ -127,8 +127,8 @@ consistency_libs = consistency-audit.mjs bundler-config.mjs data.mjs lockfile.mj
 verify_libs      = build-verify.mjs bundler-config.mjs lockfile.mjs report-text.mjs scratch-build.mjs
 changelog_libs   = changelog-lint.mjs data.mjs report-text.mjs data/appstore.json
 compat_libs      = php-compat.mjs report-text.mjs
-install_libs     = install-test.mjs install-test.sh server-setup.sh data.mjs report-text.mjs data/tool-configs.json
-runtime_libs     = runtime-audit.mjs runtime-audit.sh runtime-audit.php server-setup.sh route-plan.mjs report-text.mjs
+install_libs     = install-test.mjs install-test.sh server-setup.sh server-deps.mjs data.mjs report-text.mjs data/tool-configs.json
+runtime_libs     = runtime-audit.mjs runtime-audit.sh runtime-audit.php server-setup.sh server-deps.mjs route-plan.mjs report-text.mjs
 profile_libs     = profile.mjs profile.sh profile.php route-plan.mjs report-text.mjs
 deps_libs        = deps-audit.mjs built-assets.mjs bundler-config.mjs data.mjs deps-audit.php licences.json lockfile.mjs report-text.mjs scratch-build.mjs data/spdx-licenses.json
 php_audit_libs   = php-audit.mjs php-audit.php data.mjs report-text.mjs data/nextcloud-3rdparty.json data/nextcloud-hooks.json data/nextcloud-ocp.json data/nextcloud-server.json
@@ -311,14 +311,53 @@ server_db_arg = $(if $(filter pgsql,$(install_db)),pgsql oc_$(install_pg_user) $
 # server half leaves retry with the minor of max-version, and the tag runs once
 # more on the image of that PHP, <tag>-php<minor>, as ncmake-images publishes
 # one for each PHP minor a major allows.
+# Where the run lacked the app of a namespace an error names, server_deps
+# fetches it from the App Store and the tag runs again with it, up to three
+# times for the apps those apps need in turn.
 server_runs = for t in $$run; do \
-		echo "==> Nextcloud $$t" >&2; mkdir -p $(1)/$$t; \
-		$(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory $(2) install_tag=$$t install_db=$$db || echo "$$?" >$(1)/$$t/failed; \
+		echo "==> Nextcloud $$t" >&2; round=0; \
+		while :; do \
+			rm -rf $(1)/$$t && mkdir -p $(1)/$$t || exit 1; \
+			$(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory $(2) install_tag=$$t install_db=$$db || echo "$$?" >$(1)/$$t/failed; \
+			round=$$((round + 1)); \
+			[ "$$round" -le 3 ] && [ -s $(1)/$$t/missing ] && { $(call server_deps,$(1),$(2)) } || break; \
+			echo "==> Nextcloud $$t once more, with the apps it needs" >&2; \
+		done; \
 		if [ -s $(1)/$$t/retry ]; then \
 			p=$$(cat $(1)/$$t/retry); echo "==> Nextcloud $$t on PHP $$p, the max-version of the app" >&2; mkdir -p $(1)/$$t-php$$p; \
 			$(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory $(2) install_tag=$$t-php$$p install_db=$$db || echo "$$?" >$(1)/$$t-php$$p/failed; \
 		fi; \
 	done;
+# $(call server_deps,<directory>,<run target>), within server_runs, looks the
+# namespaces the run of tag t lacked up in the list of apps of the App Store,
+# which the App Store module fetches, through lib/server-deps.mjs. The release
+# it picks is downloaded into deps/<tag>, where lib/server-setup.sh finds it,
+# once its info.xml shows that namespace. picked records per namespace what came
+# of it, and a namespace looked up once is not looked up again. It succeeds
+# when it fetched an app.
+server_dl_ns = python3 -c 'import sys, xml.etree.ElementTree as E; r = E.parse(sys.argv[1]).getroot(); print(((r.findtext("namespace") or "").strip() or (r.findtext("id") or "").strip()).lower())'
+server_deps = d=$(1)/deps/$$t; added=; tab=$$(printf '\t'); mkdir -p $$d || exit 1; \
+	if [ -z '$(value apps_cache)' ]; then sed "s/$$/$${tab}-$${tab}-$${tab}-$${tab}no-appstore/" $(1)/$$t/missing >$$d/pick; \
+	elif [ -s $(1)/apps.json ] || { $(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory fetch-apps >&2 && cp '$(apps_cache)' $(1)/apps.json; }; then \
+		$(ncmake_lib_read_run) '$(call ncmake_lib_guard,$(patsubst %-run,%,$(2))) node $(ncmake_lib_path)/server-deps.mjs --pick=$(1)/apps.json $(1)/'"$$t" >$$d/pick || exit 1; \
+	else sed "s/$$/$${tab}-$${tab}-$${tab}-$${tab}catalogue/" $(1)/$$t/missing >$$d/pick; fi; \
+	while IFS="$$tab" read -r ns id version url state; do \
+		grep -qi "^$$ns$$tab" $$d/picked 2>/dev/null && continue; \
+		if [ "$$state" = ok ]; then \
+			echo "==> Nextcloud $$t lacks the app of OCA\\$$ns: $$id $$version from the App Store" >&2; \
+			state=download-failed; rm -rf $$d/.dl && mkdir -p $$d/.dl || exit 1; \
+			if curl -fsSL $(curl_retry) --proto '=https' --max-filesize 209715200 "$$url" -o $$d/.dl/app.tar.gz \
+				&& tar xzf $$d/.dl/app.tar.gz -C $$d/.dl --no-same-owner --no-same-permissions 2>/dev/null \
+				&& [ -f $$d/.dl/$$id/appinfo/info.xml ]; then \
+				state=namespace; \
+				[ "$$($(server_dl_ns) $$d/.dl/$$id/appinfo/info.xml 2>/dev/null)" = "$$(printf '%s' "$$ns" | tr '[:upper:]' '[:lower:]')" ] \
+					&& rm -rf $$d/$$id && mv $$d/.dl/$$id $$d/$$id && state=installed && added=1; \
+			fi; \
+			rm -rf $$d/.dl; \
+		fi; \
+		printf '%s\t%s\t%s\t%s\n' "$$ns" "$$id" "$$version" "$$state" >>$$d/picked; \
+	done <$$d/pick; \
+	[ -n "$$added" ];
 # The database and the tags the server half runs on, as shell for the start of
 # the loop: it appends db and databases to the range file in the directory and
 # sets run, which stays empty when the app names no database the server offers.
@@ -973,8 +1012,9 @@ It runs make php-audit first, whose inventory lists the routes, commands,
 background jobs, setup checks, settings and capabilities of the app, then
 starts the same servers as make install-test: the lowest and the highest
 major the app declares that an image exists for, NC=all every major in
-between as well, each from $(install_image), on the database
-and with the PHP cap of the app as make install-test treats them.
+between as well, each from $(install_image), on the database,
+with the PHP cap of the app and with the apps it needs from the App Store as
+make install-test treats them.
 On each the staged app is enabled at log level 0, with occ upgrade where
 a newer release of an app the server ships asks for it, and then:
   every route is requested once without credentials and once as a user, or
@@ -1008,6 +1048,8 @@ a newer release of an app the server ships asks for it, and then:
   [i] "dirty table reads" of a query the server builds, which the app
       only calls
   [i] a PHP deprecation that reaches the app
+  [i] the app needs an app the server does not have: the one fetched for it,
+      or why there is none, with what its lack causes
   [i] routes not requested for want of a parameter value
   [i] the app registers a capability, and no new key appears
   [i] the app names only databases the server images do not offer
@@ -1135,6 +1177,14 @@ refuses to enable it. The max-version of the copy is then raised to that PHP,
 to see whether the app runs on it anyway, and where it still does not enable,
 the major runs once more on the image of the PHP the app declares,
 $(install_image):<major>-php<minor>, in build/install-test/<major>-php<minor>.
+Some apps build on another app, which info.xml has no way to name. Where an
+error of the run says a class of a namespace OCA\<X> does not exist and no
+enabled app has that namespace, the app of the App Store whose id that
+namespace stands for is fetched, in the newest release for the server, once
+its info.xml shows the namespace; the major runs again with it enabled before
+the app, up to three times for the apps those apps need in turn. What the
+missing app causes is reported in one finding, not on its own. The list of
+apps comes from the App Store module (make dev-init).
   [!] the PHP of the server is above <php max-version> of the app, with what
       the app did with the cap raised and on the PHP it declares
   [!] the server cannot be installed on PostgreSQL
@@ -1144,6 +1194,8 @@ $(install_image):<major>-php<minor>, in build/install-test/<major>-php<minor>.
   [!] nextcloud.log has an entry of level 3 (error) or higher that names the
       app: logged for the app, or with a path in custom_apps/<app id>/
   [i] an entry of that level that does not name the app
+  [i] the app needs an app the server does not have: the one fetched for it,
+      or why there is none, with what its lack causes
   [i] the app declares majors below the lowest image, which are not installed
   [i] the app names only databases the server images do not offer
 
