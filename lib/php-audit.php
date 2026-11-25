@@ -26,11 +26,14 @@
 //                the file states it, and for a call on the result of another
 //                call the name and the receiver of that one
 //     returns    in appinfo/ only: what the file returns, the way appinfo/routes.php
-//                returns its routes
-//     registered [line, routes] of every call of registerRoutes()
+//                returns its routes, and under items the line of each entry of
+//                its lists
+//     registered [line, routes, items] of every call of registerRoutes()
 // An argument is written where it is a constant: c:<class> for <class>::class,
 // k:<class>::<NAME> for a class constant, n:<class> for new <class>, s:<text>,
 // p:<text> for a text that goes on with something that is no constant,
+// h:<text> for a text that starts with something that is no constant, with NUL
+// for each such part,
 // i:<number>, b:true, b:false, b:null; anything else is null.
 // The arguments of an attribute, what a file returns and the routes of
 // registerRoutes() are written as values: a scalar, an array of values,
@@ -202,12 +205,93 @@ final class Facts extends NodeVisitorAbstract
 			if ($lead !== $e && ($lead instanceof Node\Scalar\String_ || $lead instanceof Node\InterpolatedStringPart)) {
 				return 'p:' . substr($lead->value, 0, MAX_TEXT);
 			}
-			return null;
+			return $this->template($e);
 		}
 		if (is_int($value)) {
 			return 'i:' . $value;
 		}
 		return is_string($value) ? 's:' . substr($value, 0, MAX_TEXT) : null;
+	}
+
+	/**
+	 * A text put together from parts, as h:<text> with NUL for each run of
+	 * parts that are no constant, where at least one part is: the texts of
+	 * Application::APP_ID . '.page.index' stay readable that way.
+	 */
+	private function template(Node $e): ?string
+	{
+		$parts = [];
+		$walk = function (Node $n) use (&$walk, &$parts): void {
+			if ($n instanceof Expr\BinaryOp\Concat) {
+				$walk($n->left);
+				$walk($n->right);
+				return;
+			}
+			if ($n instanceof Node\Scalar\InterpolatedString) {
+				foreach ($n->parts as $part) {
+					$walk($part);
+				}
+				return;
+			}
+			if ($n instanceof Node\Scalar\String_ || $n instanceof Node\InterpolatedStringPart) {
+				$parts[] = $n->value;
+				return;
+			}
+			try {
+				$value = $n instanceof Expr ? $this->evaluator->evaluateSilently($n) : null;
+			} catch (\Throwable $ex) {
+				$value = null;
+			}
+			$parts[] = is_string($value) || is_int($value) ? (string)$value : null;
+		};
+		$walk($e);
+		if (!in_array(null, $parts, true) || count(array_filter($parts, 'is_string')) === 0) {
+			return null;
+		}
+		$text = '';
+		foreach ($parts as $part) {
+			if ($part !== null) {
+				$text .= $part;
+			} elseif (substr($text, -1) !== "\0") {
+				$text .= "\0";
+			}
+		}
+		return 'h:' . substr($text, 0, MAX_TEXT);
+	}
+
+	/**
+	 * The start line of each entry of the lists in an array, keyed as value()
+	 * keys them: where appinfo/routes.php has each of its routes.
+	 */
+	public function itemLines(Node $e): array
+	{
+		$out = [];
+		if (!($e instanceof Expr\Array_)) {
+			return $out;
+		}
+		$keyed = function (array &$into, Node\ArrayItem $item, $value): void {
+			$key = $item->key === null ? null : $this->value($item->key);
+			if ($item->key !== null && (is_string($key) || is_int($key))) {
+				$into[$key] = $value;
+			} else {
+				$into[] = $value;
+			}
+		};
+		foreach ($e->items as $item) {
+			if ($item === null || $item->unpack || !($item->value instanceof Expr\Array_)) {
+				continue;
+			}
+			$lines = [];
+			foreach ($item->value->items as $entry) {
+				if ($entry === null || $entry->unpack) {
+					$lines[] = null;
+					continue;
+				}
+				$keyed($lines, $entry, $entry->getStartLine());
+			}
+			$keyed($out, $item, $lines);
+		}
+		return $out;
 	}
 
 	/**
@@ -484,7 +568,7 @@ final class Facts extends NodeVisitorAbstract
 			$this->calls[] = [$line, $this->currentClass(), $this->currentMethod(), $node->name->name,
 				$this->typeOf($on), $innerName, $innerType, $this->arguments($node->args)];
 			if ($node->name->name === 'registerRoutes' && isset($node->args[1]) && $node->args[1] instanceof Node\Arg) {
-				$this->registered[] = [$line, $this->value($node->args[1]->value)];
+				$this->registered[] = [$line, $this->value($node->args[1]->value), $this->itemLines($node->args[1]->value)];
 			}
 		}
 		return null;
@@ -614,7 +698,7 @@ foreach ($files as $path) {
 			}
 			foreach ($top as $stmt) {
 				if ($stmt instanceof Stmt\Return_ && $stmt->expr !== null) {
-					$returns = ['line' => $stmt->getStartLine(), 'value' => $facts->value($stmt->expr)];
+					$returns = ['line' => $stmt->getStartLine(), 'value' => $facts->value($stmt->expr), 'items' => $facts->itemLines($stmt->expr)];
 				}
 			}
 		}

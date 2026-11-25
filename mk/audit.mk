@@ -1041,12 +1041,18 @@ a newer release of an app the server ships asks for it, and then:
   [!] a setup check of the app is not listed, or it throws
   [!] a settings form of info.xml is not loaded, or its page is no 200
   [!] the capabilities, WebDAV, or disabling and enabling again fail
-  [!] the log has an error, "dirty table reads", a transaction longer than
-      1s or a deadlock that reaches the app: logged for the app, or with a
-      file or a class of the app in its trace; a dirty read counts only
-      where the app built the query
-  [i] "dirty table reads" of a query the server builds, which the app
-      only calls
+  [!] the log has an error, a transaction longer than 1s or a deadlock that
+      reaches the app: logged for the app, or with a file or a class of the
+      app in its trace; an error of a step reported above is not counted
+      again
+  [i] a route answers with a server error only because the request has no
+      value for a parameter outside the path whose type allows no null;
+      from Nextcloud 33 on, the server answers 400 where the parameter
+      stands on the line of the method name
+  [i] "dirty table reads" that reach the app, where it built the query or
+      only calls one the server builds; it matters with a read replica
+  [i] an error about what the test server does not have: a service outside
+      it, an address it cannot reach, a rate limit, a setting
   [i] a PHP deprecation that reaches the app
   [i] the app needs an app the server does not have: the one fetched for it,
       or why there is none, with what its lack causes
