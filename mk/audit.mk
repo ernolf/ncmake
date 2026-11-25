@@ -127,8 +127,8 @@ consistency_libs = consistency-audit.mjs bundler-config.mjs data.mjs lockfile.mj
 verify_libs      = build-verify.mjs bundler-config.mjs lockfile.mjs report-text.mjs scratch-build.mjs
 changelog_libs   = changelog-lint.mjs data.mjs report-text.mjs data/appstore.json
 compat_libs      = php-compat.mjs report-text.mjs
-install_libs     = install-test.mjs install-test.sh data.mjs report-text.mjs data/tool-configs.json
-runtime_libs     = runtime-audit.mjs runtime-audit.sh runtime-audit.php route-plan.mjs report-text.mjs
+install_libs     = install-test.mjs install-test.sh server-setup.sh data.mjs report-text.mjs data/tool-configs.json
+runtime_libs     = runtime-audit.mjs runtime-audit.sh runtime-audit.php server-setup.sh route-plan.mjs report-text.mjs
 profile_libs     = profile.mjs profile.sh profile.php route-plan.mjs report-text.mjs
 deps_libs        = deps-audit.mjs built-assets.mjs bundler-config.mjs data.mjs deps-audit.php licences.json lockfile.mjs report-text.mjs scratch-build.mjs data/spdx-licenses.json
 php_audit_libs   = php-audit.mjs php-audit.php data.mjs report-text.mjs data/nextcloud-3rdparty.json data/nextcloud-hooks.json data/nextcloud-ocp.json data/nextcloud-server.json
@@ -280,6 +280,52 @@ server_tags = eol='$(nc_eol)'; master='$(nc_master)'; min='$(nc_min)'; max='$(nc
 		*) tags='$(NC)' ;; \
 	esac; \
 	tags=$$(for t in $$tags; do if [ "$$t" = "$$master" ]; then echo master; else echo "$$t"; fi; done | sort -u | sort -V | tr '\n' ' '); tags=$${tags% };
+
+# The database a server target runs the app on. The image is installed on
+# SQLite, and Nextcloud refuses an app whose <database> entries in info.xml do
+# not name the database it runs on. Without entries, or with sqlite among them,
+# the server stays on SQLite; with pgsql among them it runs beside a container of
+# install_pg_image, whose network it shares, so neither publishes a port, and
+# lib/server-setup.sh installs the server anew on it before the app is
+# copied in. The All-in-One image creates the owner of the database as
+# oc_<POSTGRES_USER> and needs a log level. An app that names neither sqlite nor
+# pgsql is not run at all. $(call server_db,<info.xml>) prints the database,
+# sqlite, pgsql or none, and the entries.
+install_pg_image ?= ghcr.io/nextcloud-releases/aio-postgresql:latest
+install_pg_user   = nextcloud
+install_pg_pass   = ncmake
+install_pg_name   = nextcloud
+server_db = python3 -c 'import sys, xml.etree.ElementTree as E; d = [(e.text or "").strip() for e in E.parse(sys.argv[1]).getroot().findall("dependencies/database")]; print("sqlite" if not d or "sqlite" in d else "pgsql" if "pgsql" in d else "none", ",".join(d))' '$(1)'
+# $(call server_run,<command>) runs the command in the server image of
+# install_tag, on the database install_db names. The PostgreSQL container goes
+# with its volume when the run ends, whatever its outcome.
+server_run = $(call container_prep,$(install_image):$(install_tag)) && \
+	$(if $(filter pgsql,$(install_db)),$(call container_prep,$(install_pg_image)) && db=ncmake-db-$$$$; \
+	trap '$(container_cli) rm -fv "$$db" >/dev/null 2>&1' EXIT; \
+	$(container_cli) run -d --label ncmake --name "$$db" -e POSTGRES_USER=$(install_pg_user) -e POSTGRES_PASSWORD=$(install_pg_pass) -e POSTGRES_DB=$(install_pg_name) -e AIO_LOG_LEVEL=warn $(install_pg_image) >/dev/null && \
+	$(install_container) --network container:"$$db",$(install_container)) $(install_image):$(install_tag) $(1)
+server_db_arg = $(if $(filter pgsql,$(install_db)),pgsql oc_$(install_pg_user) $(install_pg_pass) $(install_pg_name))
+# $(call server_runs,<directory>,<run target>) runs each tag of the shell
+# variable run, on the database of db. Where the server refused the app for its
+# <php max-version> and the app did not enable with it raised either, the
+# server half leaves retry with the minor of max-version, and the tag runs once
+# more on the image of that PHP, <tag>-php<minor>, as ncmake-images publishes
+# one for each PHP minor a major allows.
+server_runs = for t in $$run; do \
+		echo "==> Nextcloud $$t" >&2; mkdir -p $(1)/$$t; \
+		$(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory $(2) install_tag=$$t install_db=$$db || echo "$$?" >$(1)/$$t/failed; \
+		if [ -s $(1)/$$t/retry ]; then \
+			p=$$(cat $(1)/$$t/retry); echo "==> Nextcloud $$t on PHP $$p, the max-version of the app" >&2; mkdir -p $(1)/$$t-php$$p; \
+			$(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory $(2) install_tag=$$t-php$$p install_db=$$db || echo "$$?" >$(1)/$$t-php$$p/failed; \
+		fi; \
+	done;
+# The database and the tags the server half runs on, as shell for the start of
+# the loop: it appends db and databases to the range file in the directory and
+# sets run, which stays empty when the app names no database the server offers.
+# $(call server_plan,<directory>,<info.xml>)
+server_plan = r=$$($(call server_db,$(2))) || exit 1; set -- $$r; db=$$1; \
+	printf 'db=%s\ndatabases=%s\n' "$$db" "$${2:-}" >>$(1)/range; \
+	run=$$tags; if [ "$$db" = none ]; then run=; echo "==> the app names no database the server offers ($${2:-}); nothing runs" >&2; fi;
 
 # == runtime-audit ==
 # The same server images. The plan, the server half and its settings helper are
@@ -603,7 +649,7 @@ ifneq ($(TARBALL),)
 	$(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory install-test TARBALL= install_tarball='$(TARBALL)' \
 		install_src="$$tree" install_source=tarball app_id="$$id" nc_min="$$min" nc_max="$$max"
 else
-	$(if $(install_src),,@$(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory stage >&2)
+	$(if $(install_src),,@$(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory stage build_skip=install-test >&2)
 	@$(audit_core)
 	@$(call server_core,install-test)
 	@$(call ncmake_lib_need,$(install_libs))
@@ -612,22 +658,21 @@ else
 	rm -rf $(install_dir) && mkdir -p $(install_dir) || exit 1; \
 	printf 'min=%s\nmax=%s\nfirst=%s\nmaster=%s\ntags=%s\nsource=%s\nsrc=%s\ntarball=%s\nphpunit=%s\ncoverage=%s\n' "$$min" "$$max" "$$first" "$$master" "$$tags" '$(install_source)' '$(install_src)' '$(notdir $(install_tarball))' '$(install_phpunit)' '$(filter 1,$(COVERAGE))' >$(install_dir)/range; \
 	cp "$(ncmake_lib_dir)/install-test.sh" "$(ncmake_lib_dir)/data/tool-configs.json" $(install_dir)/ || exit 1; \
+	cp "$(ncmake_lib_dir)/server-setup.sh" $(install_dir)/ || exit 1; \
+	$(call server_plan,$(install_dir),$(or $(install_src),build/stage/$(app_id))/appinfo/info.xml) \
 	$(if $(install_phpunit),$(install_phpunit_prep)) \
-	for t in $$tags; do \
-		echo "==> Nextcloud $$t" >&2; mkdir -p $(install_dir)/$$t; \
-		$(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory install-test-run install_tag=$$t || echo "$$?" >$(install_dir)/$$t/failed; \
-	done; \
+	$(call server_runs,$(install_dir),install-test-run) \
 	$(ncmake_lib_read_run) '$(call ncmake_lib_guard,install-test) INSTALL_TEST_CMDLINE="$(install_cmdline)" node $(ncmake_lib_path)/install-test.mjs $(ARGS) $(ncmake_json_arg)'
 endif
 
 install-test-run:
-	@$(call container_prep,$(install_image):$(install_tag)) && $(install_container) $(install_image):$(install_tag) sh $(install_dir)/install-test.sh '$(app_id)' $(install_dir)/$(install_tag) '$(or $(install_src),build/stage/$(app_id))' '$(if $(install_phpunit),$(install_tests))' '$(filter 1,$(COVERAGE))'
+	@$(call server_run,sh $(install_dir)/install-test.sh '$(app_id)' $(install_dir)/$(install_tag) '$(or $(install_src),build/stage/$(app_id))' '$(if $(install_phpunit),$(install_tests))' '$(filter 1,$(COVERAGE))' '$(server_db_arg)')
 
 # php-audit runs first: its inventory, build/reports/php-audit.json, is what the
 # plan and the analyser read. Its own report is not printed here, and the
 # staging prints on stderr, as for install-test.
 runtime-audit: check-app
-	@$(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory stage >&2
+	@$(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory stage build_skip=runtime-audit >&2
 	@$(audit_core)
 	@$(call server_core,runtime-audit)
 	@$(call ncmake_lib_need,$(runtime_libs))
@@ -636,16 +681,14 @@ runtime-audit: check-app
 	echo "==> runtime-audit on Nextcloud $${tags:-none} (RUNTIME=$(RUNTIME))" >&2; \
 	rm -rf $(runtime_dir) && mkdir -p $(runtime_dir) || exit 1; \
 	printf 'min=%s\nmax=%s\nfirst=%s\nmaster=%s\ntags=%s\n' "$$min" "$$max" "$$first" "$$master" "$$tags" >$(runtime_dir)/range; \
-	cp "$(ncmake_lib_dir)/runtime-audit.sh" "$(ncmake_lib_dir)/runtime-audit.php" $(runtime_dir)/ || exit 1; \
+	cp "$(ncmake_lib_dir)/runtime-audit.sh" "$(ncmake_lib_dir)/runtime-audit.php" "$(ncmake_lib_dir)/server-setup.sh" $(runtime_dir)/ || exit 1; \
 	$(ncmake_lib_read_run) '$(call ncmake_lib_guard,runtime-audit) RUNTIME_AUDIT_PARAMS="$(runtime_params)" node $(ncmake_lib_path)/runtime-audit.mjs --plan' || exit 1; \
-	for t in $$tags; do \
-		echo "==> Nextcloud $$t" >&2; mkdir -p $(runtime_dir)/$$t; \
-		$(MAKE) -f $(firstword $(MAKEFILE_LIST)) --no-print-directory runtime-audit-run install_tag=$$t || echo "$$?" >$(runtime_dir)/$$t/failed; \
-	done; \
+	$(call server_plan,$(runtime_dir),build/stage/$(app_id)/appinfo/info.xml) \
+	$(call server_runs,$(runtime_dir),runtime-audit-run) \
 	$(ncmake_lib_read_run) '$(call ncmake_lib_guard,runtime-audit) RUNTIME_AUDIT_CMDLINE="$(runtime_cmdline)" RUNTIME_AUDIT_PARAMS="$(runtime_params)" node $(ncmake_lib_path)/runtime-audit.mjs $(ARGS) $(ncmake_json_arg)'
 
 runtime-audit-run:
-	@$(call container_prep,$(install_image):$(install_tag)) && $(install_container) $(install_image):$(install_tag) sh $(runtime_dir)/runtime-audit.sh '$(app_id)' $(runtime_dir)/$(install_tag)
+	@$(call server_run,sh $(runtime_dir)/runtime-audit.sh '$(app_id)' $(runtime_dir)/$(install_tag) '$(server_db_arg)')
 
 # php-audit runs first, as for runtime-audit: its routes are the requests of the
 # app. The previous release is unpacked into build/profile/previous on the host,
@@ -930,7 +973,8 @@ It runs make php-audit first, whose inventory lists the routes, commands,
 background jobs, setup checks, settings and capabilities of the app, then
 starts the same servers as make install-test: the lowest and the highest
 major the app declares that an image exists for, NC=all every major in
-between as well, each from $(install_image).
+between as well, each from $(install_image), on the database
+and with the PHP cap of the app as make install-test treats them.
 On each the staged app is enabled at log level 0, with occ upgrade where
 a newer release of an app the server ships asks for it, and then:
   every route is requested once without credentials and once as a user, or
@@ -944,6 +988,9 @@ a newer release of an app the server ships asks for it, and then:
   capabilities, a PROPFIND with Depth: 1, and disabling and enabling the app
   again
 
+  [!] the PHP of the server is above <php max-version> of the app, with what
+      the app did with the cap raised and on the PHP it declares
+  [!] the server cannot be installed on PostgreSQL
   [!] occ app:enable fails, or the occ upgrade it asks for
   [!] a route of the inventory is not in occ router:list
   [!] a route answers with a server error, or the server cannot build its
@@ -963,6 +1010,7 @@ a newer release of an app the server ships asks for it, and then:
   [i] a PHP deprecation that reaches the app
   [i] routes not requested for want of a parameter value
   [i] the app registers a capability, and no new key appears
+  [i] the app names only databases the server images do not offer
 
 The route that answers without credentials carries "security": true in the
 JSON: a report published about the apps of others leaves it out, and the
@@ -1072,10 +1120,24 @@ the daily one of master, installed on SQLite, on the newest PHP the major runs
 on. NC=all starts every major in between as well, NC="34 master" the ones it
 names.
 
+The database is the one <database> in appinfo/info.xml allows: SQLite where
+the app names none or sqlite among them; where it names pgsql and not sqlite,
+each server runs beside a container of $(install_pg_image)
+and is installed anew on it before the app comes. An app
+that names neither sqlite nor pgsql is not installed.
+
 On each server the app is copied into custom_apps and enabled with
 occ app:enable. Then the server answers requests to the login page, the
 dashboard, the files app, the user and admin settings, the page of the app,
 the OCS capabilities and WebDAV, and cron.php runs once.
+Where the PHP of the server is above <php max-version> of the app, Nextcloud
+refuses to enable it. The max-version of the copy is then raised to that PHP,
+to see whether the app runs on it anyway, and where it still does not enable,
+the major runs once more on the image of the PHP the app declares,
+$(install_image):<major>-php<minor>, in build/install-test/<major>-php<minor>.
+  [!] the PHP of the server is above <php max-version> of the app, with what
+      the app did with the cap raised and on the PHP it declares
+  [!] the server cannot be installed on PostgreSQL
   [!] occ app:enable fails, or the app is not enabled afterwards
   [!] a request is answered with a server error (5xx)
   [!] cron.php fails
@@ -1083,6 +1145,7 @@ the OCS capabilities and WebDAV, and cron.php runs once.
       app: logged for the app, or with a path in custom_apps/<app id>/
   [i] an entry of that level that does not name the app
   [i] the app declares majors below the lowest image, which are not installed
+  [i] the app names only databases the server images do not offer
 
 PHPUNIT=1 then runs the app's PHPUnit suite on each server, with the app in
 custom_apps/<app id>, where its tests/bootstrap.php expects it. The checkout is

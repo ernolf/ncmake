@@ -875,9 +875,14 @@ export changelog_pr_body
 all: dist
 
 # The targets of an app need its id; help and the targets that read only the
-# repository, reuse and the analysers, run in any checkout.
+# repository, reuse and the analysers, run in any checkout. An <id> that is there
+# but invalid is a finding of make consistency-audit; every other target says it
+# was skipped for it, with a line that starts with SKIPPED:, so a consumer counts
+# the cause once.
 check-app:
-	@test -n "$(app_id)" || { echo >&2; echo "ERROR: no valid <id> found in appinfo/info.xml - run make from a Nextcloud app root." >&2; echo >&2; exit 1; }
+	@test -n "$(app_id)" || { id='$(subst ','\'',$(call info_xml,id,,.+))'; echo >&2; \
+		if [ -n "$$id" ]; then echo "SKIPPED: <id>$$id</id> in appinfo/info.xml is no valid app id; make consistency-audit reports it." >&2; \
+		else echo "ERROR: no valid <id> found in appinfo/info.xml - run make from a Nextcloud app root." >&2; fi; echo >&2; exit 1; }
 
 # == Branch, commit and pull request flow ==
 
@@ -2029,16 +2034,22 @@ reuse:
 	@$(reuse_run) lint $(ARGS)
 
 # Abort (do not ship a broken file set) when a build output is missing. Only
-# gitignored outputs are demanded: a committed js/ or vendor/ ships as-is.
+# gitignored outputs are demanded: a committed js/ or vendor/ ships as-is. A
+# target that stages only to install the app, install-test and runtime-audit,
+# sets build_skip to its name: without the build there is nothing to install, so
+# it says it was skipped, with a line that starts with SKIPPED:, and the cause
+# is the build.
+build_skip  =
+build_error = $(if $(build_skip),SKIPPED: $(build_skip) needs the build:,ERROR:)
 check-build:
 	@if [ -n "$(need_npm)" ] && [ -n "$(js_ignored)" ] && { [ ! -d js ] || [ -z "$$(ls -A js 2>/dev/null)" ]; }; then \
-		echo >&2; echo "ERROR: js/ is missing or empty - run 'make build' first." >&2; echo >&2; exit 1; \
+		echo >&2; echo "$(build_error) js/ is missing or empty - run 'make build' first." >&2; echo >&2; exit 1; \
 	fi
 	@if [ -n "$(need_npm)" ] && [ -n "$(js_out_ignored)" ] && ! git ls-files -o -i --exclude-standard --directory -- js 2>/dev/null | grep -qv '^js/node_modules/'; then \
-		echo >&2; echo "ERROR: the build output of the frontend in js/ is missing - run 'make build' first." >&2; echo >&2; exit 1; \
+		echo >&2; echo "$(build_error) the build output of the frontend in js/ is missing - run 'make build' first." >&2; echo >&2; exit 1; \
 	fi
 	@if [ -n "$(need_composer)" ] && [ -n "$(vendor_ignored)" ] && [ ! -f vendor/autoload.php ]; then \
-		echo >&2; echo "ERROR: vendor/autoload.php is missing - run 'make build' first." >&2; echo >&2; exit 1; \
+		echo >&2; echo "$(build_error) vendor/autoload.php is missing - run 'make build' first." >&2; echo >&2; exit 1; \
 	fi
 
 # Materialize the shipped runtime file set once, under the APP ID (the checkout
