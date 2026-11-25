@@ -240,6 +240,10 @@ lint_comma      := ,
 lint_php_given   = $(or $(strip $(subst ;, ,$(subst $(lint_comma), ,$(PHP_VERSIONS)))),$(strip $(subst ;, ,$(subst $(lint_comma), ,$(if $(wildcard .php-version),$(shell cat .php-version))))),$(lint_php_default))
 lint_php_digits  = $(subst .,,$(subst 0,,$(subst 1,,$(subst 2,,$(subst 3,,$(subst 4,,$(subst 5,,$(subst 6,,$(subst 7,,$(subst 8,,$(subst 9,,$(1))))))))))))
 lint_php_versions = $(foreach v,$(lint_php_given),$(if $(call lint_php_digits,$(v)),,$(if $(subst .,,$(v)),$(v))))
+# The files, as git pathspecs: the tracked PHP files outside a dependency tree,
+# whose shipped part php-compat checks, and outside the template of a generator,
+# whose path holds {{.
+lint_php_files = '*.php' '*.phtml' ':(exclude,glob)**/vendor/**' ':(exclude,glob)**/node_modules/**' ':(exclude)*{{*'
 # php -l per version over the tracked files on stdin, the exact version first. The
 # image is the plain PHP image: php -l needs no extension. With RUNTIME=bare the
 # host's php<version> runs, or its php when that is the version; without either
@@ -298,7 +302,7 @@ lint-php-syntax:
 	@$(if $(filter-out $(lint_php_versions),$(lint_php_given)),echo "ERROR: PHP_VERSIONS or .php-version holds a word that is no PHP version (digits and dots, as in 8.2)" >&2; exit 1,:)
 	@$(call lint_banner,$@,PHP $(lint_php_versions))
 	@pdir=$$(mktemp -d) && trap 'rm -rf "$$pdir"' EXIT && mkdir "$$pdir/runs" \
-		&& git -c safe.directory='*' ls-files -z -- '*.php' '*.phtml' > "$$pdir/files" || exit 1; \
+		&& git -c safe.directory='*' ls-files -z -- $(lint_php_files) > "$$pdir/files" || exit 1; \
 	if [ -s "$$pdir/files" ]; then :; $(foreach v,$(lint_php_versions),$(call lint_php_run,$(v)) < "$$pdir/files" > "$$pdir/runs/$(v).out" 2>&1; echo $$? > "$$pdir/runs/$(v).rc";) fi; \
 	$(call lint_node,$@,$(call lint_tool,LINT_PHP_OUTPUT,pdir,runs))
 
@@ -487,9 +491,11 @@ endef
 define help_lint-php-syntax
 make lint-php-syntax [PHP_VERSIONS="<versions>"] [ARGS="<options>"] [JSON=<file>]
 
-Runs php -l over every tracked PHP file, once per PHP version, as the
+Runs php -l over the tracked PHP files, once per PHP version, as the
 lint-php-syntax workflow of ncmake-workflows does, and fails where that
-workflow fails: on a parse or fatal error under any of the versions. A warning
+workflow fails: on a parse or fatal error under any of the versions. A
+dependency tree under vendor/ or node_modules/ is left out, as make php-compat
+checks what of it ships, and so is a path with {{, the template of a generator. A warning
 or deprecation php -l prints is [i]. The versions are, in this order, those of
 PHP_VERSIONS, those of a .php-version file in the checkout, or the default; they
 are separated by spaces, commas or semicolons, and only digits and dots make a
@@ -570,10 +576,13 @@ Runs ESLint over the JavaScript, Stylelint over the CSS and html-validate over
 the HTML of a repository without a package.json, as the lint-web workflow of
 ncmake-workflows does, and fails where that workflow fails: on an error of any
 of them. The files are the tracked ones outside node_modules/ and vendor/,
-without minified copies. A configuration of the repository for a linter wins;
-without one the workflow's default applies: ESLint's recommended rules with
-the browser globals, in an app (appinfo/info.xml present) also the globals of
-the Nextcloud server as @nextcloud/eslint-config declares them,
+without minified copies and without the output of a bundler: a JavaScript or
+CSS file with a .map or .LICENSE.txt of its name beside it, or with
+__webpack_require__ or a sourceMappingURL comment in it. A configuration of
+the repository for a linter wins; without one the workflow's default applies:
+ESLint's recommended rules with the browser globals, in an app
+(appinfo/info.xml present) also the globals of the Nextcloud server as
+@nextcloud/eslint-config declares them, the Node globals in test/ and tests/,
 stylelint-config-standard, html-validate's recommended preset. A repository
 with a package.json, or with its frontend in js/ and js/package.json there,
 lints through its own scripts and passes here, as it passes the workflow.
