@@ -25,8 +25,8 @@
     "32": "https://github.com/nextcloud-deps/ocp/tree/ddf8c9e2bc6913d5184e2c5d7ed1f29a6f9ae58b",
     "33": "https://github.com/nextcloud-deps/ocp/tree/c2f5f091018b78293908bb96debb15dc28a6d595",
     "34": "https://github.com/nextcloud-deps/ocp/tree/9236ad9dc414db72ba615c76965e6e12296e9c19",
-    "35": "https://github.com/nextcloud-deps/ocp/tree/5aac4e98e91de2142b7b689dbffb962c4ce026c0",
-    "36": "https://github.com/nextcloud-deps/ocp/tree/8bce0ffeec28eec05b179787d959a164dbf9fe21"
+    "35": "https://github.com/nextcloud-deps/ocp/tree/75c99c1535a2b79e7e1e8041a5353afe7d76c5ea",
+    "36": "https://github.com/nextcloud-deps/ocp/tree/c87faef086ff0e1cd5a35328bdb4a1d488898799"
   },
   "values": {
     "majors": [
@@ -15311,6 +15311,10 @@
           ],
           "MAX_ROW_DELETION": [
             24,
+            36
+          ],
+          "PARAM_BINARY": [
+            35,
             36
           ],
           "PARAM_BOOL": [
@@ -35664,6 +35668,10 @@
           ],
           "showBruteforceWarning": [
             27,
+            36
+          ],
+          "registerUniqueAttempt": [
+            36,
             36
           ]
         },
