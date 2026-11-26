@@ -39,6 +39,13 @@ curl -fLO https://raw.githubusercontent.com/ernolf/ncmake/main/bootstrap/GNUmake
 git add GNUmakefile
 ```
 
+The stub is under MIT. In an app set up for REUSE (`LICENSES/`, `REUSE.toml` or `.reuse/dep5`), `LICENSES/` then needs `MIT.txt`; `make reuse FIX=1` downloads it when it is missing, and it is committed with the stub:
+
+```sh
+make reuse FIX=1
+git add LICENSES
+```
+
 * That file is all the repository carries. The real Makefile lives in the per-machine cache (`~/.cache/ncmake/`) and refreshes itself; never copy it from there into the repository.
 * Do not edit the stub. The only line one may change is `NCMAKE_REF ?= main`, to pin a tag (`NCMAKE_REF ?= v1.0.0`); it has to be set in the stub, because `ncmake.mk` is read only after the Makefile is fetched.
 * Keep an existing build file of the app: as `GNUmakefile` the stub is read first, and the old file still runs with `make -f <name>`. Do not port its targets into ncmake; `make build` replaces a build step, and a genuine deviation goes into `ncmake.mk`.

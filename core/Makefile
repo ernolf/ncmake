@@ -2025,13 +2025,30 @@ npm: check-app
 # A repository with none of them never claimed compliance, so linting it would only
 # list every file; FORCE=1 lints it anyway. It reads nothing of appinfo/info.xml
 # and runs in any repository.
+# A file can name a license whose text LICENSES/ lacks, as the ncmake stub brings
+# MIT into an app under another license. FIX=1 downloads the text of every such
+# SPDX license before the lint. reuse download --all is not used: for a missing
+# LicenseRef- it creates an empty file, which the lint takes for the text, so
+# a LicenseRef- is named for its text to be written by hand.
 reuse:
 	@echo "==> reuse lint (RUNTIME=$(RUNTIME))"
 	@if [ -z "$(FORCE)" ] && [ ! -d LICENSES ] && [ ! -e REUSE.toml ] && [ ! -e .reuse/dep5 ]; then \
 		echo "Not set up for REUSE: no LICENSES/, REUSE.toml or .reuse/dep5. FORCE=1 lints it anyway."; \
 		exit 1; \
 	fi
-	@$(reuse_run) lint $(ARGS)
+ifneq ($(FIX),)
+	@missing=$$($(reuse_run) lint --json | python3 -c 'import json, sys; print(" ".join(json.load(sys.stdin)["non_compliant"]["missing_licenses"]))') \
+		|| { echo "ERROR: reuse lint --json gave no report to read the missing licenses from." >&2; exit 1; }; \
+	spdx=; refs=; \
+	for l in $$missing; do case $$l in LicenseRef-*) refs="$$refs $$l" ;; *) spdx="$$spdx $$l" ;; esac; done; \
+	if [ -n "$$spdx" ]; then $(reuse_run) download $$spdx || exit 1; else echo "No SPDX license text is missing."; fi; \
+	for l in $$refs; do echo "$$l is no SPDX license: write its text into LICENSES/$$l.txt by hand."; done
+endif
+	@out=$$($(reuse_run) lint $(ARGS)); rc=$$?; printf '%s\n' "$$out"; \
+	if [ "$$rc" != 0 ] && [ -z "$(FIX)" ] && printf '%s\n' "$$out" | grep '^\* Missing licenses: ' | grep -qvx '\* Missing licenses: 0'; then \
+		echo "FIX=1 downloads the missing license texts into LICENSES/." >&2; \
+	fi; \
+	exit $$rc
 
 # Abort (do not ship a broken file set) when a build output is missing. Only
 # gitignored outputs are demanded: a committed js/ or vendor/ ships as-is. A
@@ -2829,7 +2846,7 @@ Examples:
 endef
 
 define help_reuse
-make reuse [ARGS="<reuse lint arguments>"] [FORCE=1]
+make reuse [ARGS="<reuse lint arguments>"] [FORCE=1] [FIX=1]
 
 Runs the REUSE compliance check (reuse.software) in the fsfe/reuse container:
 every file must carry a license, via an SPDX header or a REUSE.toml annotation.
@@ -2839,9 +2856,18 @@ set up for REUSE in one line, without a lint; FORCE=1 lints it anyway. It needs
 no appinfo/info.xml and runs in any repository, also one that is no Nextcloud
 app; in an app below the top of its repository it lints the whole repository.
 
+A license a file names but whose text LICENSES/ lacks is a missing license, as
+MIT is once the ncmake stub (MIT) is committed to an app under another license.
+FIX=1 downloads the text of every missing SPDX license into LICENSES/ before
+the lint; commit those files with the change that brought the license in. A
+missing LicenseRef- has no text to download: it is named, and its text goes into
+LICENSES/<id>.txt by hand. Without FIX=1 a lint that reports missing licenses
+ends with a hint at FIX=1.
+
   make reuse                 check
   make reuse ARGS=--json     the report as JSON
   make reuse FORCE=1         lint a repository that is not set up for REUSE
+  make reuse FIX=1           download the missing license texts, then check
 endef
 
 define help_dist
